@@ -1,0 +1,8 @@
+/target
+tools/**/FodyWeavers.xsd
+docs/
+tools/**/bin/
+tools/**/target/
+tools/**/obj/
+.air/**
+.vscode

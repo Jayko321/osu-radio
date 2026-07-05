@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = ["apps/osu-radio-cli", "crates/radio-core", "crates/radio-scanner"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+tokio = { version = "1.52.3", features = ["full"] }
