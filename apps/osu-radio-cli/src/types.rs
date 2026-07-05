@@ -1,0 +1,101 @@
+use std::path::PathBuf;
+
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use radio_core::OsuKind;
+
+use crate::consts::{DEFAULT_IMPORT_LIMIT, PROJECT_HELP};
+
+#[derive(Debug, Parser)]
+#[command(
+    version,
+    about = "Development CLI for osu-radio.",
+    long_about = PROJECT_HELP,
+    disable_help_subcommand = true
+)]
+pub(crate) struct Cli {
+    #[command(subcommand)]
+    pub(crate) command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum Command {
+    #[command(
+        about = "Explain what osu-radio is and why this CLI exists.",
+        long_about = PROJECT_HELP
+    )]
+    Help,
+    #[command(about = "Find local osu! installations that osu-radio can inspect.")]
+    Scan(ScanArgs),
+    #[command(about = "Import beatmap metadata from a discovered or explicit osu! source.")]
+    Import(ImportArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ScanArgs {
+    #[command(flatten)]
+    pub(crate) filters: MarkerFilters,
+    #[arg(long, help = "Print machine-readable JSON instead of a table.")]
+    pub(crate) json: bool,
+    #[arg(short, long, help = "Print extra context for human-readable output.")]
+    pub(crate) verbose: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ImportArgs {
+    #[command(flatten)]
+    pub(crate) filters: MarkerFilters,
+    #[arg(
+        long,
+        value_name = "INDEX",
+        help = "Select a discovered installation by the 1-based index shown by `scan`."
+    )]
+    pub(crate) index: Option<usize>,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Import from an explicit marker file, such as client.realm or osu!.db."
+    )]
+    pub(crate) marker: Option<PathBuf>,
+    #[arg(
+        long,
+        default_value_t = DEFAULT_IMPORT_LIMIT,
+        value_name = "COUNT",
+        help = "Maximum number of beatmaps to print."
+    )]
+    pub(crate) limit: usize,
+    #[arg(long, help = "Print machine-readable JSON instead of a table.")]
+    pub(crate) json: bool,
+    #[arg(short, long, help = "Print extra context for human-readable output.")]
+    pub(crate) verbose: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct MarkerFilters {
+    #[arg(
+        long,
+        value_enum,
+        help = "Keep only discovered installations from this osu! source."
+    )]
+    pub(crate) source: Option<SourceArg>,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Filter discovered installations to marker or root paths under PATH."
+    )]
+    pub(crate) root: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum SourceArg {
+    Stable,
+    Lazer,
+}
+
+impl From<SourceArg> for OsuKind {
+    fn from(source: SourceArg) -> Self {
+        match source {
+            SourceArg::Stable => OsuKind::Stable,
+            SourceArg::Lazer => OsuKind::Lazer,
+        }
+    }
+}

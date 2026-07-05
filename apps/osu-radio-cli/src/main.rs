@@ -1,14 +1,35 @@
+pub(crate) mod commands;
+pub(crate) mod consts;
+pub(crate) mod types;
+
+use std::process::ExitCode;
+
+use clap::Parser;
+
+use crate::{
+    commands::{import::import, scan::scan},
+    consts::PROJECT_HELP,
+    types::{Cli, Command},
+};
+
 #[tokio::main]
-async fn main() {
-    let res = radio_scanner::helpers::find_osu_markers();
-    println!("{res:?}");
-    let Some(marker) = res.first() else {
-        eprintln!("no osu! installations found");
-        return;
+async fn main() -> ExitCode {
+    let cli = Cli::parse();
+
+    let result = match cli.command.unwrap_or(Command::Help) {
+        Command::Help => {
+            println!("{PROJECT_HELP}");
+            Ok(())
+        }
+        Command::Scan(args) => scan(args),
+        Command::Import(args) => import(args).await,
     };
 
-    match radio_scanner::get_beatmaps(marker.clone()).await {
-        Ok(beatmaps) => println!("{:?}", beatmaps.get(2)),
-        Err(error) => eprintln!("failed to import beatmaps: {error}"),
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("{message}");
+            ExitCode::FAILURE
+        }
     }
 }
