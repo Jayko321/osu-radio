@@ -23,6 +23,16 @@
 - Keep CLI-only argument handling, output, and command wiring in `apps/osu-radio-cli`.
 - Treat `crates/radio-scanner/vendor/realm-db-reader` as vendored third-party code. Do not edit it unless explicitly asked.
 
+## Code Organization
+
+- Prioritize the minimum amount of code that clearly solves the problem.
+- Prefer clear file layout over hiding important types or behavior in broad `mod.rs` files.
+- Use `mod.rs` mainly for module declarations, re-exports, and small glue code.
+- Put meaningful types and behavior in named files that describe the concept they contain, such as `beatmap.rs`, `beatmap_set.rs`, or `beatmap_metadata.rs`.
+- When several related types are introduced together, choose separate named files if those types are likely to grow or be searched for independently.
+- Avoid cramming new models, schemas, or feature-specific logic into one file just because the first version is small.
+- When fixing compiler or Clippy warnings, prefer the smallest clean design change over adding many local guards or scattered conditional branches.
+
 ## Architecture Direction
 
 - A future server app, likely `apps/osu-radio-server`, is expected to own backend/server behavior when that work becomes concrete.

@@ -1,0 +1,31 @@
+[package]
+name = "radio-db"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+diesel = { version = "2", default-features = false, optional = true }
+diesel-async = { version = "0.7", default-features = false, optional = true }
+libsqlite3-sys = { version = "0.37", features = ["bundled"], optional = true }
+
+[features]
+default = ["sqlite"]
+sqlite = [
+    "dep:diesel",
+    "dep:diesel-async",
+    "dep:libsqlite3-sys",
+    "diesel/sqlite",
+    "diesel-async/sqlite",
+]
+postgres = [
+    "dep:diesel",
+    "dep:diesel-async",
+    "diesel/postgres_backend",
+    "diesel-async/postgres",
+]
+
+[dev-dependencies]
+dotenvy.workspace = true
+tokio.workspace = true
