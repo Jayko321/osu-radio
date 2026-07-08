@@ -47,10 +47,10 @@
 
 ## Error Handling
 
-- Prefer custom error enums over `anyhow`.
-- Keep errors specific enough for callers to react to expected failure modes.
-- Avoid stringly typed errors when a small enum variant would be clearer.
-- Use broad boxed errors only at temporary boundaries or when explicitly asked.
+- Prefer `anyhow` for errors the application cannot realistically recover from.
+- Use custom error enums only when callers can make a meaningful recovery or control-flow decision from the error kind.
+- Avoid adding custom error types just to wrap and forward failures.
+- Add context to `anyhow` errors at I/O, parsing, database, process, and external boundary points.
 
 ## Async Policy
 

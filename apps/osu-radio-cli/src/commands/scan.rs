@@ -5,7 +5,7 @@ use crate::{
     types::ScanArgs,
 };
 
-pub(crate) fn scan(args: ScanArgs) -> Result<(), String> {
+pub(crate) fn scan(args: ScanArgs) -> anyhow::Result<()> {
     let markers = discover_markers(&args.filters)?;
 
     if args.json {

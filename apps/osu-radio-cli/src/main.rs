@@ -27,8 +27,8 @@ async fn main() -> ExitCode {
 
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(message) => {
-            eprintln!("{message}");
+        Err(error) => {
+            eprintln!("{error:#}");
             ExitCode::FAILURE
         }
     }

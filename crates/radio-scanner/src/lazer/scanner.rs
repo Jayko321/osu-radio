@@ -1,18 +1,18 @@
 use std::{
     env,
     ffi::OsStr,
-    io,
     path::{Path, PathBuf},
     process::Stdio,
 };
 
+use anyhow::{Context, Result, bail};
 use radio_core::import_types::ImportedBeatmap;
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     process::Command,
 };
 
-use crate::{BeatmapScanner, ScannerError, lazer::types::parse_lazer_beatmap_line};
+use crate::{BeatmapScanner, lazer::types::parse_lazer_beatmap_line};
 
 const HELPER_PATH_ENV: &str = "OSU_LAZER_REALM_PARSER_PATH";
 const BUILT_HELPER_PATH: &str = env!("OSU_LAZER_REALM_PARSER_BUILT_PATH");
@@ -20,7 +20,7 @@ const BUILT_HELPER_PATH: &str = env!("OSU_LAZER_REALM_PARSER_BUILT_PATH");
 /// Runs the bundled osu!lazer Realm extractor and maps its NDJSON output to core types.
 ///
 /// Set `OSU_LAZER_REALM_PARSER_PATH` at runtime to override the helper built by Cargo.
-pub async fn import_from_lazer_realm(realm_path: &Path) -> io::Result<Vec<ImportedBeatmap>> {
+pub async fn import_from_lazer_realm(realm_path: &Path) -> Result<Vec<ImportedBeatmap>> {
     let helper_path = env::var_os(HELPER_PATH_ENV)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(BUILT_HELPER_PATH));
@@ -32,29 +32,40 @@ pub async fn import_from_lazer_realm(realm_path: &Path) -> io::Result<Vec<Import
 pub async fn import_from_lazer_realm_with_helper(
     realm_path: &Path,
     helper_path: impl AsRef<OsStr>,
-) -> io::Result<Vec<ImportedBeatmap>> {
+) -> Result<Vec<ImportedBeatmap>> {
+    let helper_path = helper_path.as_ref();
     let mut child = Command::new(helper_path)
         .arg(realm_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
-        .spawn()?;
+        .spawn()
+        .with_context(|| {
+            format!(
+                "failed to start osu!lazer Realm helper `{}` for `{}`",
+                Path::new(helper_path).display(),
+                realm_path.display()
+            )
+        })?;
 
     let stdout = child
         .stdout
         .take()
-        .ok_or_else(|| io::Error::other("failed to capture Realm helper stdout"))?;
+        .context("failed to capture Realm helper stdout")?;
     let stderr = child
         .stderr
         .take()
-        .ok_or_else(|| io::Error::other("failed to capture Realm helper stderr"))?;
+        .context("failed to capture Realm helper stderr")?;
 
     // Drain stderr concurrently so a verbose failure cannot block the helper while stdout is read.
     // If helper stderr ever becomes noisy, cap this buffer and return a truncated diagnostic.
     let mut stderr_reader = tokio::spawn(async move {
         let mut message = String::new();
-        BufReader::new(stderr).read_to_string(&mut message).await?;
-        Ok::<_, io::Error>(message)
+        BufReader::new(stderr)
+            .read_to_string(&mut message)
+            .await
+            .context("failed to read Realm helper stderr")?;
+        Ok::<_, anyhow::Error>(message)
     });
 
     let mut lines = BufReader::new(stdout).lines();
@@ -69,7 +80,7 @@ pub async fn import_from_lazer_realm_with_helper(
             Ok(None) => break,
             Err(error) => {
                 terminate_child(&mut child, &mut stderr_reader).await;
-                return Err(error);
+                return Err(error).context("failed to read Realm helper stdout");
             }
         };
 
@@ -89,26 +100,32 @@ pub async fn import_from_lazer_realm_with_helper(
         Err(error) => {
             stderr_reader.abort();
             let _ = stderr_reader.await;
-            return Err(error);
+            return Err(error).context("failed to wait for Realm helper process");
         }
     };
     let stderr = stderr_reader
         .await
-        .map_err(|error| io::Error::other(format!("Realm helper stderr task failed: {error}")))??;
+        .context("Realm helper stderr task failed")??;
 
     if !status.success() {
         let detail = stderr.trim();
-        return Err(io::Error::other(if detail.is_empty() {
-            format!("osu!lazer Realm helper exited with {status}")
+        if detail.is_empty() {
+            bail!("osu!lazer Realm helper exited with {status}");
         } else {
-            format!("osu!lazer Realm helper exited with {status}: {detail}")
-        }));
+            bail!("osu!lazer Realm helper exited with {status}: {detail}");
+        }
     }
 
     if !stderr.is_empty() {
         let mut error_output = tokio::io::stderr();
-        error_output.write_all(stderr.as_bytes()).await?;
-        error_output.flush().await?;
+        error_output
+            .write_all(stderr.as_bytes())
+            .await
+            .context("failed to forward Realm helper stderr")?;
+        error_output
+            .flush()
+            .await
+            .context("failed to flush forwarded Realm helper stderr")?;
     }
 
     Ok(beatmaps)
@@ -116,7 +133,7 @@ pub async fn import_from_lazer_realm_with_helper(
 
 async fn terminate_child(
     child: &mut tokio::process::Child,
-    stderr_reader: &mut tokio::task::JoinHandle<io::Result<String>>,
+    stderr_reader: &mut tokio::task::JoinHandle<Result<String>>,
 ) {
     let _ = child.start_kill();
     let _ = child.wait().await;
@@ -138,7 +155,9 @@ impl LazerBeatmapScanner {
 
 #[async_trait::async_trait]
 impl BeatmapScanner for LazerBeatmapScanner {
-    async fn get_beatmaps(&self) -> Result<Vec<ImportedBeatmap>, ScannerError> {
-        Ok(import_from_lazer_realm(&self.db_path).await?)
+    async fn get_beatmaps(&self) -> Result<Vec<ImportedBeatmap>> {
+        import_from_lazer_realm(&self.db_path)
+            .await
+            .with_context(|| format!("failed to import lazer marker `{}`", self.db_path.display()))
     }
 }

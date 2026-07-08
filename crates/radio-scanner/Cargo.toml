@@ -6,6 +6,7 @@ license.workspace = true
 build = "build.rs"
 
 [dependencies]
+anyhow.workspace = true
 ignore = { version = "0.4.26" }
 radio-core = { path = "../radio-core" }
 serde = { version = "1.0.228", features = ["derive"] }

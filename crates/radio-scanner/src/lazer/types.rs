@@ -1,5 +1,6 @@
-use std::{io, path::PathBuf};
+use std::path::PathBuf;
 
+use anyhow::{Context, Result};
 use radio_core::{
     OsuKind,
     import_types::{
@@ -60,13 +61,9 @@ struct LazerRealmUser {
     country_code: Option<String>,
 }
 
-pub(crate) fn parse_lazer_beatmap_line(line: &str) -> io::Result<ImportedBeatmap> {
-    let record: LazerBeatmapRecord = serde_json::from_str(line).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("failed to parse osu!lazer beatmap JSON: {error}"),
-        )
-    })?;
+pub(crate) fn parse_lazer_beatmap_line(line: &str) -> Result<ImportedBeatmap> {
+    let record: LazerBeatmapRecord =
+        serde_json::from_str(line).context("failed to parse osu!lazer beatmap JSON")?;
 
     Ok(record.into())
 }

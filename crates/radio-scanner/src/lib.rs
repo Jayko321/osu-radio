@@ -1,4 +1,4 @@
-use std::{error::Error, fmt, io};
+use std::{error::Error, fmt};
 
 use radio_core::{OsuKind, OsuMarker, import_types::ImportedBeatmap};
 
@@ -9,44 +9,30 @@ pub use lazer::{import_from_lazer_realm, import_from_lazer_realm_with_helper};
 
 #[async_trait::async_trait]
 pub(crate) trait BeatmapScanner {
-    async fn get_beatmaps(&self) -> Result<Vec<ImportedBeatmap>, ScannerError>;
+    async fn get_beatmaps(&self) -> anyhow::Result<Vec<ImportedBeatmap>>;
 }
 
 #[derive(Debug)]
-pub enum ScannerError {
-    Import(io::Error),
-    UnsupportedSource(OsuKind),
+pub struct UnsupportedSourceError {
+    pub kind: OsuKind,
 }
 
-impl fmt::Display for ScannerError {
+impl fmt::Display for UnsupportedSourceError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ScannerError::Import(error) => write!(formatter, "{error}"),
-            ScannerError::UnsupportedSource(kind) => {
-                write!(formatter, "unsupported osu! source: {kind:?}")
-            }
-        }
+        write!(formatter, "unsupported osu! source: {:?}", self.kind)
     }
 }
 
-impl Error for ScannerError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            ScannerError::Import(error) => Some(error),
-            ScannerError::UnsupportedSource(_) => None,
-        }
-    }
-}
+impl Error for UnsupportedSourceError {}
 
-impl From<io::Error> for ScannerError {
-    fn from(error: io::Error) -> Self {
-        ScannerError::Import(error)
-    }
-}
-
-pub async fn get_beatmaps(marker: OsuMarker) -> Result<Vec<ImportedBeatmap>, ScannerError> {
+pub async fn get_beatmaps(marker: OsuMarker) -> anyhow::Result<Vec<ImportedBeatmap>> {
     let scanner: Box<dyn BeatmapScanner> = match marker.kind {
-        OsuKind::Stable => return Err(ScannerError::UnsupportedSource(OsuKind::Stable)),
+        OsuKind::Stable => {
+            return Err(UnsupportedSourceError {
+                kind: OsuKind::Stable,
+            }
+            .into());
+        }
         OsuKind::Lazer => Box::new(lazer::scanner::LazerBeatmapScanner::new(
             &marker.marker_path,
         )),
@@ -61,7 +47,7 @@ mod tests {
 
     use radio_core::{OsuKind, OsuMarker};
 
-    use super::{ScannerError, get_beatmaps};
+    use super::{UnsupportedSourceError, get_beatmaps};
 
     #[tokio::test]
     async fn reports_unsupported_scanner_sources() {
@@ -74,8 +60,10 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(
-            error,
-            ScannerError::UnsupportedSource(OsuKind::Stable)
+            error.downcast_ref::<UnsupportedSourceError>(),
+            Some(UnsupportedSourceError {
+                kind: OsuKind::Stable
+            })
         ));
     }
 }

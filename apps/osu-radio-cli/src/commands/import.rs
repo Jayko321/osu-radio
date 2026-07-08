@@ -1,7 +1,8 @@
 use std::path::Path;
 
+use anyhow::{Context, Result, bail};
 use radio_core::{OsuKind, OsuMarker, import_types::ImportedBeatmap};
-use radio_scanner::ScannerError;
+use radio_scanner::UnsupportedSourceError;
 use serde_json::{Value, json};
 
 use crate::{
@@ -13,25 +14,26 @@ use crate::{
     types::ImportArgs,
 };
 
-pub(crate) async fn import(args: ImportArgs) -> Result<(), String> {
+pub(crate) async fn import(args: ImportArgs) -> Result<()> {
     let marker = select_marker(&args)?;
 
-    match radio_scanner::get_beatmaps(marker.clone()).await {
-        Ok(beatmaps) => {
-            if args.json {
-                print_import_json(&marker, &beatmaps, args.limit)?;
-            } else {
-                print_import_table(&marker, &beatmaps, args.limit, args.verbose);
-            }
-            Ok(())
-        }
-        Err(error) => Err(import_error_message(&marker, error)),
+    let beatmaps = match radio_scanner::get_beatmaps(marker.clone()).await {
+        Ok(beatmaps) => beatmaps,
+        Err(error) => return Err(import_error(&marker, error)),
+    };
+
+    if args.json {
+        print_import_json(&marker, &beatmaps, args.limit)?;
+    } else {
+        print_import_table(&marker, &beatmaps, args.limit, args.verbose);
     }
+
+    Ok(())
 }
 
-fn select_marker(args: &ImportArgs) -> Result<OsuMarker, String> {
+fn select_marker(args: &ImportArgs) -> Result<OsuMarker> {
     if args.index.is_some() && args.marker.is_some() {
-        return Err("Use either `--index` or `--marker`, not both.".to_string());
+        bail!("Use either `--index` or `--marker`, not both.");
     }
 
     if let Some(marker_path) = &args.marker {
@@ -42,12 +44,10 @@ fn select_marker(args: &ImportArgs) -> Result<OsuMarker, String> {
 
     if let Some(index) = args.index {
         if index == 0 {
-            return Err(
-                "`--index` is 1-based. Use an index from `osu-radio-cli scan`.".to_string(),
-            );
+            bail!("`--index` is 1-based. Use an index from `osu-radio-cli scan`.");
         }
 
-        return markers.get(index - 1).cloned().ok_or_else(|| {
+        return markers.get(index - 1).cloned().with_context(|| {
             format!(
                 "No discovered osu! installation has index {index}. Run `osu-radio-cli scan` to see available indexes."
             )
@@ -55,31 +55,36 @@ fn select_marker(args: &ImportArgs) -> Result<OsuMarker, String> {
     }
 
     match markers.as_slice() {
-        [] => Err(
+        [] => bail!(
             "No osu! installations found. Run `osu-radio-cli scan` to inspect discovery results."
-                .to_string(),
         ),
         [marker] => Ok(marker.clone()),
         _ => {
             print_markers_table(&markers);
-            Err("Multiple osu! installations found. Choose one with `osu-radio-cli import --index <INDEX>`.".to_string())
+            bail!(
+                "Multiple osu! installations found. Choose one with `osu-radio-cli import --index <INDEX>`."
+            )
         }
     }
 }
 
-fn import_error_message(marker: &OsuMarker, error: ScannerError) -> String {
-    match error {
-        ScannerError::UnsupportedSource(OsuKind::Stable) => {
-            "Stable osu! installations are detected, but stable importing is not supported yet. Try a lazer source or run `osu-radio-cli scan --source lazer`.".to_string()
+fn import_error(marker: &OsuMarker, error: anyhow::Error) -> anyhow::Error {
+    match error.downcast_ref::<UnsupportedSourceError>() {
+        Some(UnsupportedSourceError {
+            kind: OsuKind::Stable,
+        }) => {
+            anyhow::anyhow!(
+                "Stable osu! installations are detected, but stable importing is not supported yet. Try a lazer source or run `osu-radio-cli scan --source lazer`."
+            )
         }
-        ScannerError::UnsupportedSource(kind) => {
-            format!("The selected osu! source is not supported yet: {kind:?}.")
+        Some(UnsupportedSourceError { kind }) => {
+            anyhow::anyhow!("The selected osu! source is not supported yet: {kind:?}.")
         }
-        ScannerError::Import(error) => format!(
-            "Failed to import beatmaps from {} marker `{}`: {error}",
+        None => error.context(format!(
+            "Failed to import beatmaps from {} marker `{}`",
             source_name(marker.kind),
             marker.marker_path.display()
-        ),
+        )),
     }
 }
 
@@ -148,11 +153,7 @@ fn print_import_table(
     }
 }
 
-fn print_import_json(
-    marker: &OsuMarker,
-    beatmaps: &[ImportedBeatmap],
-    limit: usize,
-) -> Result<(), String> {
+fn print_import_json(marker: &OsuMarker, beatmaps: &[ImportedBeatmap], limit: usize) -> Result<()> {
     let shown = beatmaps.iter().take(limit).collect::<Vec<_>>();
     print_json(&json!({
         "marker": marker_to_json(0, marker),

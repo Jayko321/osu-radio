@@ -1,8 +1,6 @@
-use std::{
-    io,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
+use anyhow::{Context, Result, bail};
 use radio_core::{OsuKind, OsuMarker};
 use serde_json::{Value, json};
 
@@ -11,7 +9,7 @@ use crate::{
     types::{MarkerFilters, SourceArg},
 };
 
-pub(crate) fn discover_markers(filters: &MarkerFilters) -> Result<Vec<OsuMarker>, String> {
+pub(crate) fn discover_markers(filters: &MarkerFilters) -> Result<Vec<OsuMarker>> {
     let root = filters
         .root
         .as_deref()
@@ -30,13 +28,10 @@ pub(crate) fn discover_markers(filters: &MarkerFilters) -> Result<Vec<OsuMarker>
         .collect())
 }
 
-pub(crate) fn marker_from_path(
-    path: &Path,
-    source: Option<SourceArg>,
-) -> Result<OsuMarker, String> {
+pub(crate) fn marker_from_path(path: &Path, source: Option<SourceArg>) -> Result<OsuMarker> {
     let kind = match source {
         Some(source) => source.into(),
-        None => infer_source_from_marker(path).ok_or_else(|| {
+        None => infer_source_from_marker(path).with_context(|| {
             format!(
                 "Could not infer osu! source from `{}`. Pass `--source lazer` or `--source stable`.",
                 path.display()
@@ -44,12 +39,12 @@ pub(crate) fn marker_from_path(
         })?,
     };
 
-    let root_path = path.parent().map(Path::to_path_buf).ok_or_else(|| {
-        format!(
+    let Some(root_path) = path.parent().map(Path::to_path_buf) else {
+        bail!(
             "Marker path `{}` does not have a parent directory.",
             path.display()
-        )
-    })?;
+        );
+    };
 
     Ok(OsuMarker {
         kind,
@@ -58,9 +53,9 @@ pub(crate) fn marker_from_path(
     })
 }
 
-pub(crate) fn print_json(value: &Value) -> Result<(), String> {
-    serde_json::to_writer_pretty(io::stdout(), value)
-        .map_err(|error| format!("Failed to write JSON output: {error}"))?;
+pub(crate) fn print_json(value: &Value) -> Result<()> {
+    serde_json::to_writer_pretty(std::io::stdout(), value)
+        .context("Failed to write JSON output")?;
     println!();
     Ok(())
 }
@@ -144,19 +139,14 @@ pub(crate) fn source_name(kind: OsuKind) -> &'static str {
     }
 }
 
-fn normalize_root_filter(root: &Path) -> Result<PathBuf, String> {
+fn normalize_root_filter(root: &Path) -> Result<PathBuf> {
     if root.is_absolute() {
         return Ok(root.to_path_buf());
     }
 
     std::env::current_dir()
         .map(|cwd| cwd.join(root))
-        .map_err(|error| {
-            format!(
-                "Failed to resolve --root path `{}`: {error}",
-                root.display()
-            )
-        })
+        .with_context(|| format!("Failed to resolve --root path `{}`", root.display()))
 }
 
 fn infer_source_from_marker(path: &Path) -> Option<OsuKind> {
