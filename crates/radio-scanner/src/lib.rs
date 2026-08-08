@@ -2,7 +2,7 @@ use std::{error::Error, fmt};
 
 use radio_core::{OsuKind, OsuMarker, import_types::ImportedBeatmap};
 
-pub mod helpers;
+pub mod discovery;
 pub mod lazer;
 
 pub use lazer::{import_from_lazer_realm, import_from_lazer_realm_with_helper};

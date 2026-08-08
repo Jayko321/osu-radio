@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use radio_core::OsuKind;
+use radio_scanner::discovery::DiscoveryDepth;
 
 use crate::consts::{DEFAULT_IMPORT_LIMIT, PROJECT_HELP};
 
@@ -34,10 +35,47 @@ pub(crate) enum Command {
 pub(crate) struct ScanArgs {
     #[command(flatten)]
     pub(crate) filters: MarkerFilters,
+    #[arg(
+        long,
+        short = '1',
+        conflicts_with = "limit",
+        help = "Stop as soon as the first installation is found."
+    )]
+    pub(crate) first: bool,
+    #[arg(
+        long,
+        value_name = "COUNT",
+        help = "Stop after finding COUNT installations."
+    )]
+    pub(crate) limit: Option<usize>,
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = DepthArg::Full,
+        help = "How far discovery may search the filesystem."
+    )]
+    pub(crate) depth: DepthArg,
     #[arg(long, help = "Print machine-readable JSON instead of a table.")]
     pub(crate) json: bool,
     #[arg(short, long, help = "Print extra context for human-readable output.")]
     pub(crate) verbose: bool,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum DepthArg {
+    Known,
+    Shallow,
+    Full,
+}
+
+impl From<DepthArg> for DiscoveryDepth {
+    fn from(depth: DepthArg) -> Self {
+        match depth {
+            DepthArg::Known => DiscoveryDepth::Known,
+            DepthArg::Shallow => DiscoveryDepth::Shallow,
+            DepthArg::Full => DiscoveryDepth::Full,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -80,7 +118,7 @@ pub(crate) struct MarkerFilters {
     #[arg(
         long,
         value_name = "PATH",
-        help = "Filter discovered installations to marker or root paths under PATH."
+        help = "Constrain discovery to PATH instead of searching every mounted drive."
     )]
     pub(crate) root: Option<PathBuf>,
 }

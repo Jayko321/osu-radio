@@ -21,7 +21,7 @@ async fn main() -> ExitCode {
             println!("{PROJECT_HELP}");
             Ok(())
         }
-        Command::Scan(args) => scan(args),
+        Command::Scan(args) => scan(args).await,
         Command::Import(args) => import(args).await,
     };
 

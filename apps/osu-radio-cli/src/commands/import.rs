@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use radio_core::{OsuKind, OsuMarker, import_types::ImportedBeatmap};
-use radio_scanner::UnsupportedSourceError;
+use radio_scanner::{UnsupportedSourceError, discovery::DiscoveryDepth};
 use serde_json::{Value, json};
 
 use crate::{
@@ -15,7 +15,7 @@ use crate::{
 };
 
 pub(crate) async fn import(args: ImportArgs) -> Result<()> {
-    let marker = select_marker(&args)?;
+    let marker = select_marker(&args).await?;
 
     let beatmaps = match radio_scanner::get_beatmaps(marker.clone()).await {
         Ok(beatmaps) => beatmaps,
@@ -31,7 +31,7 @@ pub(crate) async fn import(args: ImportArgs) -> Result<()> {
     Ok(())
 }
 
-fn select_marker(args: &ImportArgs) -> Result<OsuMarker> {
+async fn select_marker(args: &ImportArgs) -> Result<OsuMarker> {
     if args.index.is_some() && args.marker.is_some() {
         bail!("Use either `--index` or `--marker`, not both.");
     }
@@ -40,7 +40,8 @@ fn select_marker(args: &ImportArgs) -> Result<OsuMarker> {
         return marker_from_path(marker_path, args.filters.source);
     }
 
-    let markers = discover_markers(&args.filters)?;
+    let limit = args.index.is_none().then_some(2);
+    let markers = discover_markers(&args.filters, DiscoveryDepth::Full, limit).await?;
 
     if let Some(index) = args.index {
         if index == 0 {

@@ -1,7 +1,11 @@
-use std::path::{Path, PathBuf};
+use std::{
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail};
 use radio_core::{OsuKind, OsuMarker};
+use radio_scanner::discovery::{DiscoveryDepth, DiscoveryOptions, discover};
 use serde_json::{Value, json};
 
 use crate::{
@@ -9,23 +13,42 @@ use crate::{
     types::{MarkerFilters, SourceArg},
 };
 
-pub(crate) fn discover_markers(filters: &MarkerFilters) -> Result<Vec<OsuMarker>> {
-    let root = filters
+pub(crate) const MARKER_TABLE_HEADERS: &[&str] = &["Index", "Source", "Root", "Marker"];
+
+pub(crate) fn discovery_options(
+    filters: &MarkerFilters,
+    depth: DiscoveryDepth,
+    limit: Option<usize>,
+) -> Result<DiscoveryOptions> {
+    if limit == Some(0) {
+        bail!("`--limit` must be at least 1.");
+    }
+
+    let roots = filters
         .root
         .as_deref()
         .map(normalize_root_filter)
-        .transpose()?;
-    let source = filters.source.map(OsuKind::from);
-
-    Ok(radio_scanner::helpers::find_osu_markers()
+        .transpose()?
         .into_iter()
-        .filter(|marker| source.is_none_or(|source| marker.kind == source))
-        .filter(|marker| {
-            root.as_ref().is_none_or(|root| {
-                marker.root_path.starts_with(root) || marker.marker_path.starts_with(root)
-            })
-        })
-        .collect())
+        .collect();
+
+    Ok(DiscoveryOptions {
+        roots,
+        kind: filters.source.map(OsuKind::from),
+        limit: limit.and_then(NonZeroUsize::new),
+        depth,
+        ..DiscoveryOptions::default()
+    })
+}
+
+pub(crate) async fn discover_markers(
+    filters: &MarkerFilters,
+    depth: DiscoveryDepth,
+    limit: Option<usize>,
+) -> Result<Vec<OsuMarker>> {
+    Ok(discover(discovery_options(filters, depth, limit)?)
+        .collect()
+        .await)
 }
 
 pub(crate) fn marker_from_path(path: &Path, source: Option<SourceArg>) -> Result<OsuMarker> {
@@ -81,21 +104,30 @@ pub(crate) fn print_markers_table(markers: &[OsuMarker]) {
     let rows = markers
         .iter()
         .enumerate()
-        .map(|(index, marker)| {
-            vec![
-                (index + 1).to_string(),
-                source_name(marker.kind).to_string(),
-                marker.root_path.display().to_string(),
-                marker.marker_path.display().to_string(),
-            ]
-        })
+        .map(|(index, marker)| marker_row(index + 1, marker))
         .collect::<Vec<_>>();
 
-    print_table(
-        &["Index", "Source", "Root", "Marker"],
-        &rows,
-        MARKER_TABLE_WIDTHS,
+    print_table(MARKER_TABLE_HEADERS, &rows, MARKER_TABLE_WIDTHS);
+}
+
+pub(crate) fn marker_row(index: usize, marker: &OsuMarker) -> Vec<String> {
+    vec![
+        index.to_string(),
+        source_name(marker.kind).to_string(),
+        marker.root_path.display().to_string(),
+        marker.marker_path.display().to_string(),
+    ]
+}
+
+pub(crate) fn print_table_header(headers: &[&str], widths: &[usize]) {
+    print_table_row(
+        &headers
+            .iter()
+            .map(|header| header.to_string())
+            .collect::<Vec<_>>(),
+        widths,
     );
+    print_table_separator(widths);
 }
 
 pub(crate) fn print_table(headers: &[&str], rows: &[Vec<String>], max_widths: &[usize]) {
@@ -118,14 +150,7 @@ pub(crate) fn print_table(headers: &[&str], rows: &[Vec<String>], max_widths: &[
         })
         .collect::<Vec<_>>();
 
-    print_table_row(
-        &headers
-            .iter()
-            .map(|header| header.to_string())
-            .collect::<Vec<_>>(),
-        &widths,
-    );
-    print_table_separator(&widths);
+    print_table_header(headers, &widths);
 
     for row in rows {
         print_table_row(row, &widths);
@@ -157,14 +182,20 @@ fn infer_source_from_marker(path: &Path) -> Option<OsuKind> {
     }
 }
 
-fn print_table_row(row: &[String], widths: &[usize]) {
+pub(crate) fn print_table_row(row: &[String], widths: &[usize]) {
+    let last = widths.len().saturating_sub(1);
+
     for (column, width) in widths.iter().enumerate() {
         if column > 0 {
             print!("  ");
         }
 
-        let value = row.get(column).map(String::as_str).unwrap_or("");
-        print!("{:<width$}", truncate(value, *width), width = width);
+        let value = truncate(row.get(column).map(String::as_str).unwrap_or(""), *width);
+        if column == last {
+            print!("{value}");
+        } else {
+            print!("{value:<width$}", width = width);
+        }
     }
     println!();
 }
