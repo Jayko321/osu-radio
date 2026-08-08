@@ -1,0 +1,4 @@
+interface:
+  display_name: "CR"
+  short_description: "Strict Rust pre-commit code review"
+  default_prompt: "Use $cr to review staged and unstaged Rust changes before commit."

@@ -7,7 +7,9 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap = { version = "4", features = ["derive"] }
+dotenvy.workspace = true
 radio-core = { path = "../../crates/radio-core/" }
+radio-db = { path = "../../crates/radio-db/" }
 radio-scanner = { path = "../../crates/radio-scanner/" }
 serde_json = { version = "1.0.145" }
 tokio.workspace = true

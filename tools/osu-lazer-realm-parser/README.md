@@ -17,8 +17,8 @@ dotnet run --project tools/osu-lazer-realm-parser -- /path/to/client.realm
 ```
 
 `--schema` emits one JSON object per Realm object type, including its persisted
-fields. The default mode emits one `radio-core`-shaped beatmap object per line.
-Each record uses snake_case field names matching `ImportedBeatmap` and nested
-types. Lazer content-addressed file paths are emitted under
-`beatmap_set.files[].file.resolved_path`; `metadata.audio_file` remains the
-beatmap metadata filename.
+fields. The default mode emits one `radio-core`-shaped beatmap-set object per
+line. Each record uses snake_case field names matching `ImportedBeatmapSet` and
+its nested types. Lazer content-addressed file paths are emitted under
+`files[].file.resolved_path`; each child beatmap's `metadata.audio_file` remains
+the beatmap metadata filename.

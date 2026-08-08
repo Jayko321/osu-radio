@@ -9,6 +9,7 @@ anyhow.workspace = true
 diesel = { version = "2", default-features = false, optional = true }
 diesel-async = { version = "0.7", default-features = false, optional = true }
 libsqlite3-sys = { version = "0.37", features = ["bundled"], optional = true }
+radio-core = { path = "../radio-core/" }
 
 [features]
 default = ["sqlite"]
@@ -17,6 +18,7 @@ sqlite = [
     "dep:diesel-async",
     "dep:libsqlite3-sys",
     "diesel/sqlite",
+    "diesel/returning_clauses_for_sqlite_3_35",
     "diesel-async/sqlite",
 ]
 postgres = [

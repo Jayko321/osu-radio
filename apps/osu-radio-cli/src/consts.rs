@@ -5,7 +5,8 @@ The long-term app will use a backend server to discover beatmaps, resolve audio
 references, and expose them to a frontend UI. This CLI exists as a small testing
 harness while that backend takes shape.
 
-Right now, the CLI helps validate local osu! discovery and scanner behavior.
+Right now, the CLI helps validate local osu! discovery, scanner behavior, and
+database connectivity.
 More focused commands will be added as those workflows become concrete.";
 
 pub(crate) const DEFAULT_IMPORT_LIMIT: usize = 20;

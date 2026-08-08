@@ -29,6 +29,10 @@ pub(crate) enum Command {
     Scan(ScanArgs),
     #[command(about = "Import beatmap metadata from a discovered or explicit osu! source.")]
     Import(ImportArgs),
+    #[command(about = "Import beatmaps from an osu! source into the configured database.")]
+    Store(StoreArgs),
+    #[command(about = "Connect to the SQLite database configured in .env and verify it responds.")]
+    Database,
 }
 
 #[derive(Debug, Args)]
@@ -102,6 +106,39 @@ pub(crate) struct ImportArgs {
     )]
     pub(crate) limit: usize,
     #[arg(long, help = "Print machine-readable JSON instead of a table.")]
+    pub(crate) json: bool,
+    #[arg(short, long, help = "Print extra context for human-readable output.")]
+    pub(crate) verbose: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct StoreArgs {
+    #[command(flatten)]
+    pub(crate) filters: MarkerFilters,
+    #[arg(
+        long,
+        value_name = "INDEX",
+        help = "Select a discovered installation by the 1-based index shown by `scan`."
+    )]
+    pub(crate) index: Option<usize>,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Import from an explicit marker file, such as client.realm or osu!.db."
+    )]
+    pub(crate) marker: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "COUNT",
+        help = "Store at most COUNT beatmap sets. Defaults to storing every discovered set."
+    )]
+    pub(crate) count: Option<usize>,
+    #[arg(
+        long,
+        help = "Drop and recreate every table before importing, discarding stored beatmaps."
+    )]
+    pub(crate) clear: bool,
+    #[arg(long, help = "Print machine-readable JSON instead of a summary.")]
     pub(crate) json: bool,
     #[arg(short, long, help = "Print extra context for human-readable output.")]
     pub(crate) verbose: bool,

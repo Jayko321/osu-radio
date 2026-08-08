@@ -48,7 +48,7 @@ static int ProgramMain(string[] args)
         if (printSchema)
             PrintSchema(realm);
         else
-            ExportBeatmaps(realm, Path.GetDirectoryName(configuration.DatabasePath)!);
+            ExportBeatmapSets(realm, Path.GetDirectoryName(configuration.DatabasePath)!);
 
         return 0;
     }
@@ -101,48 +101,48 @@ static string? GetCollectionType(PropertyType propertyType)
     return null;
 }
 
-static void ExportBeatmaps(Realm realm, string lazerRoot)
+static void ExportBeatmapSets(Realm realm, string lazerRoot)
 {
-    if (!realm.Schema.Any(schema => schema.Name == "Beatmap"))
-        throw new InvalidDataException("Realm schema does not contain the expected 'Beatmap' object type");
+    if (!realm.Schema.Any(schema => schema.Name == "BeatmapSet"))
+        throw new InvalidDataException("Realm schema does not contain the expected 'BeatmapSet' object type");
 
-    foreach (var beatmap in realm.DynamicApi.All("Beatmap"))
+    foreach (var beatmapSet in realm.DynamicApi.All("BeatmapSet"))
     {
-        var metadata = GetObject(beatmap, "Metadata");
-        var audioName = metadata is null ? null : GetString(metadata, "AudioFile");
-        var beatmapSet = GetObject(beatmap, "BeatmapSet");
-
-        // This emits per-beatmap JSON and expands tags/files into arrays for each difficulty.
-        // If large libraries make this too expensive, emit shared beatmap-set data once or defer
-        // full file-list expansion until the caller needs to resolve an audio path.
         WriteJson(new
         {
             source = "Lazer",
-            difficulty_name = GetString(beatmap, "DifficultyName"),
-            bpm = GetDouble(beatmap, "BPM"),
-            hash = GetString(beatmap, "Hash"),
-            metadata = metadata is null ? null : new
-            {
-                title = GetString(metadata, "Title"),
-                title_unicode = GetString(metadata, "TitleUnicode"),
-                artist = GetString(metadata, "Artist"),
-                artist_unicode = GetString(metadata, "ArtistUnicode"),
-                author = ToUser(GetObject(metadata, "Author")),
-                source = GetString(metadata, "Source"),
-                tags = GetString(metadata, "Tags"),
-                user_tags = GetStringList(metadata, "UserTags").ToArray(),
-                preview_time = GetInteger(metadata, "PreviewTime"),
-                audio_file = audioName,
-                background_file = GetString(metadata, "BackgroundFile"),
-            },
-            beatmap_set = beatmapSet is null ? null : new
-            {
-                online_id = GetInteger(beatmapSet, "OnlineID"),
-                hash = GetString(beatmapSet, "Hash"),
-                files = GetNamedFileUsages(beatmapSet, lazerRoot).ToArray(),
-            },
+            online_id = GetInteger(beatmapSet, "OnlineID"),
+            hash = GetString(beatmapSet, "Hash"),
+            files = GetNamedFileUsages(beatmapSet, lazerRoot).ToArray(),
+            beatmaps = GetObjectList(beatmapSet, "Beatmaps").Select(ToBeatmap).ToArray(),
         });
     }
+}
+
+static object ToBeatmap(IRealmObjectBase beatmap)
+{
+    var metadata = GetObject(beatmap, "Metadata");
+
+    return new
+    {
+        difficulty_name = GetString(beatmap, "DifficultyName"),
+        bpm = GetDouble(beatmap, "BPM"),
+        hash = GetString(beatmap, "Hash"),
+        metadata = metadata is null ? null : new
+        {
+            title = GetString(metadata, "Title"),
+            title_unicode = GetString(metadata, "TitleUnicode"),
+            artist = GetString(metadata, "Artist"),
+            artist_unicode = GetString(metadata, "ArtistUnicode"),
+            author = ToUser(GetObject(metadata, "Author")),
+            source = GetString(metadata, "Source"),
+            tags = GetString(metadata, "Tags"),
+            user_tags = GetStringList(metadata, "UserTags").ToArray(),
+            preview_time = GetInteger(metadata, "PreviewTime"),
+            audio_file = GetString(metadata, "AudioFile"),
+            background_file = GetString(metadata, "BackgroundFile"),
+        },
+    };
 }
 
 static object? ToUser(IRealmObjectBase? user)

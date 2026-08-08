@@ -4,8 +4,11 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use radio_core::{OsuKind, OsuMarker};
-use radio_scanner::discovery::{DiscoveryDepth, DiscoveryOptions, discover};
+use radio_core::{OsuKind, OsuMarker, import_types::ImportedBeatmapSet};
+use radio_scanner::{
+    UnsupportedSourceError,
+    discovery::{DiscoveryDepth, DiscoveryOptions, discover},
+};
 use serde_json::{Value, json};
 
 use crate::{
@@ -49,6 +52,73 @@ pub(crate) async fn discover_markers(
     Ok(discover(discovery_options(filters, depth, limit)?)
         .collect()
         .await)
+}
+
+pub(crate) async fn select_marker(
+    filters: &MarkerFilters,
+    index: Option<usize>,
+    marker: Option<&Path>,
+) -> Result<OsuMarker> {
+    if index.is_some() && marker.is_some() {
+        bail!("Use either `--index` or `--marker`, not both.");
+    }
+
+    if let Some(marker_path) = marker {
+        return marker_from_path(marker_path, filters.source);
+    }
+
+    let limit = index.is_none().then_some(2);
+    let markers = discover_markers(filters, DiscoveryDepth::Full, limit).await?;
+
+    if let Some(index) = index {
+        if index == 0 {
+            bail!("`--index` is 1-based. Use an index from `osu-radio-cli scan`.");
+        }
+
+        return markers.get(index - 1).cloned().with_context(|| {
+            format!(
+                "No discovered osu! installation has index {index}. Run `osu-radio-cli scan` to see available indexes."
+            )
+        });
+    }
+
+    match markers.as_slice() {
+        [] => bail!(
+            "No osu! installations found. Run `osu-radio-cli scan` to inspect discovery results."
+        ),
+        [marker] => Ok(marker.clone()),
+        _ => {
+            print_markers_table(&markers);
+            bail!("Multiple osu! installations found. Choose one with `--index <INDEX>`.")
+        }
+    }
+}
+
+pub(crate) fn import_error(marker: &OsuMarker, error: anyhow::Error) -> anyhow::Error {
+    match error.downcast_ref::<UnsupportedSourceError>() {
+        Some(UnsupportedSourceError {
+            kind: OsuKind::Stable,
+        }) => {
+            anyhow::anyhow!(
+                "Stable osu! installations are detected, but stable importing is not supported yet. Try a lazer source or run `osu-radio-cli scan --source lazer`."
+            )
+        }
+        Some(UnsupportedSourceError { kind }) => {
+            anyhow::anyhow!("The selected osu! source is not supported yet: {kind:?}.")
+        }
+        None => error.context(format!(
+            "Failed to import beatmaps from {} marker `{}`",
+            source_name(marker.kind),
+            marker.marker_path.display()
+        )),
+    }
+}
+
+pub(crate) fn beatmap_count(beatmap_sets: &[ImportedBeatmapSet]) -> usize {
+    beatmap_sets
+        .iter()
+        .map(|beatmap_set| beatmap_set.beatmaps.len())
+        .sum()
 }
 
 pub(crate) fn marker_from_path(path: &Path, source: Option<SourceArg>) -> Result<OsuMarker> {
@@ -158,10 +228,7 @@ pub(crate) fn print_table(headers: &[&str], rows: &[Vec<String>], max_widths: &[
 }
 
 pub(crate) fn source_name(kind: OsuKind) -> &'static str {
-    match kind {
-        OsuKind::Stable => "stable",
-        OsuKind::Lazer => "lazer",
-    }
+    kind.as_str()
 }
 
 fn normalize_root_filter(root: &Path) -> Result<PathBuf> {

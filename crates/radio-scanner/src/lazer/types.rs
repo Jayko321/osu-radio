@@ -4,10 +4,27 @@ use anyhow::{Context, Result};
 use radio_core::{
     OsuKind,
     import_types::{
-        BeatmapMetadata, BeatmapSet, ImportedBeatmap, RealmFile, RealmNamedFileUsage, RealmUser,
+        BeatmapMetadata, ImportedBeatmap, ImportedBeatmapSet, RealmFile, RealmNamedFileUsage,
+        RealmUser,
     },
 };
 use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+enum LazerSource {
+    Lazer,
+}
+
+#[derive(Debug, Deserialize)]
+struct LazerBeatmapSetRecord {
+    source: LazerSource,
+    online_id: Option<i32>,
+    hash: Option<String>,
+    #[serde(default)]
+    files: Vec<LazerRealmNamedFileUsage>,
+    beatmaps: Vec<LazerBeatmapRecord>,
+}
 
 #[derive(Debug, Deserialize)]
 struct LazerBeatmapRecord {
@@ -15,7 +32,6 @@ struct LazerBeatmapRecord {
     bpm: Option<f64>,
     hash: Option<String>,
     metadata: Option<LazerBeatmapMetadata>,
-    beatmap_set: Option<LazerBeatmapSet>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,14 +48,6 @@ struct LazerBeatmapMetadata {
     preview_time: Option<i32>,
     audio_file: Option<String>,
     background_file: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LazerBeatmapSet {
-    online_id: Option<i32>,
-    hash: Option<String>,
-    #[serde(default)]
-    files: Vec<LazerRealmNamedFileUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -61,22 +69,42 @@ struct LazerRealmUser {
     country_code: Option<String>,
 }
 
-pub(crate) fn parse_lazer_beatmap_line(line: &str) -> Result<ImportedBeatmap> {
-    let record: LazerBeatmapRecord =
-        serde_json::from_str(line).context("failed to parse osu!lazer beatmap JSON")?;
+pub(crate) fn parse_lazer_beatmap_set_line(line: &str) -> Result<ImportedBeatmapSet> {
+    let record: LazerBeatmapSetRecord =
+        serde_json::from_str(line).context("failed to parse osu!lazer beatmap set JSON")?;
 
     Ok(record.into())
+}
+
+impl From<LazerBeatmapSetRecord> for ImportedBeatmapSet {
+    fn from(record: LazerBeatmapSetRecord) -> Self {
+        let LazerBeatmapSetRecord {
+            source,
+            online_id,
+            hash,
+            files,
+            beatmaps,
+        } = record;
+
+        ImportedBeatmapSet {
+            source: match source {
+                LazerSource::Lazer => OsuKind::Lazer,
+            },
+            online_id,
+            hash,
+            files: files.into_iter().map(Into::into).collect(),
+            beatmaps: beatmaps.into_iter().map(Into::into).collect(),
+        }
+    }
 }
 
 impl From<LazerBeatmapRecord> for ImportedBeatmap {
     fn from(record: LazerBeatmapRecord) -> Self {
         ImportedBeatmap {
-            source: OsuKind::Lazer,
             difficulty_name: record.difficulty_name,
             bpm: record.bpm,
             hash: record.hash,
             metadata: record.metadata.map(Into::into),
-            beatmap_set: record.beatmap_set.map(Into::into),
         }
     }
 }
@@ -95,16 +123,6 @@ impl From<LazerBeatmapMetadata> for BeatmapMetadata {
             preview_time: metadata.preview_time,
             audio_file: metadata.audio_file,
             background_file: metadata.background_file,
-        }
-    }
-}
-
-impl From<LazerBeatmapSet> for BeatmapSet {
-    fn from(beatmap_set: LazerBeatmapSet) -> Self {
-        BeatmapSet {
-            online_id: beatmap_set.online_id,
-            hash: beatmap_set.hash,
-            files: beatmap_set.files.into_iter().map(Into::into).collect(),
         }
     }
 }

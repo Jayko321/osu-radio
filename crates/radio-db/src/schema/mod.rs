@@ -1,43 +1,24 @@
-diesel::table! {
-    beatmap_sets (id) {
-        id -> Integer,
-        online_id -> Nullable<Integer>,
-        hash -> Nullable<Text>,
-    }
-}
+#[path = "audio_sources.rs"]
+mod audio_sources_schema;
+#[path = "beatmap_metadata.rs"]
+mod beatmap_metadata_schema;
+#[path = "beatmap_sets.rs"]
+mod beatmap_sets_schema;
+#[path = "beatmaps.rs"]
+mod beatmaps_schema;
 
-diesel::table! {
-    beatmap_metadata (id) {
-        id -> Integer,
-        title -> Nullable<Text>,
-        title_unicode -> Nullable<Text>,
-        artist -> Nullable<Text>,
-        artist_unicode -> Nullable<Text>,
-        author_online_id -> Nullable<Integer>,
-        author_username -> Nullable<Text>,
-        author_country_code -> Nullable<Text>,
-        source -> Nullable<Text>,
-        tags -> Nullable<Text>,
-        user_tags -> Nullable<Text>,
-        preview_time -> Nullable<Integer>,
-        audio_file -> Nullable<Text>,
-        background_file -> Nullable<Text>,
-    }
-}
+pub use audio_sources_schema::audio_sources;
+pub use beatmap_metadata_schema::beatmap_metadata;
+pub use beatmap_sets_schema::beatmap_sets;
+pub use beatmaps_schema::beatmaps;
 
-diesel::table! {
-    beatmaps (id) {
-        id -> Integer,
-        source -> Text,
-        difficulty_name -> Nullable<Text>,
-        bpm -> Nullable<Double>,
-        hash -> Nullable<Text>,
-        beatmap_set_id -> Nullable<Integer>,
-        metadata_id -> Nullable<Integer>,
-    }
-}
-
+diesel::joinable!(beatmap_metadata -> audio_sources (audio_source_id));
 diesel::joinable!(beatmaps -> beatmap_metadata (metadata_id));
 diesel::joinable!(beatmaps -> beatmap_sets (beatmap_set_id));
 
-diesel::allow_tables_to_appear_in_same_query!(beatmap_metadata, beatmap_sets, beatmaps,);
+diesel::allow_tables_to_appear_in_same_query!(
+    audio_sources,
+    beatmap_metadata,
+    beatmap_sets,
+    beatmaps,
+);

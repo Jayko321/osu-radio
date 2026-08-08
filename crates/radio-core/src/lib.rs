@@ -8,6 +8,15 @@ pub enum OsuKind {
     Lazer,
 }
 
+impl OsuKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Lazer => "lazer",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct OsuMarker {
     pub kind: OsuKind,
