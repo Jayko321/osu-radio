@@ -8,3 +8,7 @@ tools/**/obj/
 .vscode
 .claude
 osu-radio.db
+
+osu-radio.db-shm
+
+osu-radio.db-wal

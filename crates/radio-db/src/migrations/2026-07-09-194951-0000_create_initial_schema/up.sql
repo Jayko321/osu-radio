@@ -1,7 +1,30 @@
+CREATE TABLE IF NOT EXISTS user_data (
+    id INTEGER PRIMARY KEY
+);
+
+INSERT INTO user_data (id)
+SELECT 1
+WHERE NOT EXISTS (SELECT 1 FROM user_data WHERE id = 1);
+
+CREATE TABLE IF NOT EXISTS osu_installations (
+    id INTEGER PRIMARY KEY,
+    user_data_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    root_path TEXT NOT NULL,
+    marker_path TEXT NOT NULL,
+    label TEXT,
+    enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    last_scanned_at TEXT,
+    UNIQUE (marker_path),
+    FOREIGN KEY (user_data_id) REFERENCES user_data(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS beatmap_sets (
     id INTEGER PRIMARY KEY,
     online_id INTEGER,
-    hash TEXT
+    hash TEXT,
+    installation_id INTEGER,
+    FOREIGN KEY (installation_id) REFERENCES osu_installations(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS audio_sources (

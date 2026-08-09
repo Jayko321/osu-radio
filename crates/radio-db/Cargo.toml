@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
 diesel = { version = "2", default-features = false, optional = true }
 diesel-async = { version = "0.7", default-features = false, optional = true }
 libsqlite3-sys = { version = "0.37", features = ["bundled"], optional = true }

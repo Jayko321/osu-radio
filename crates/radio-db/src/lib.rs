@@ -7,14 +7,16 @@ compile_error!("radio-db requires at least one database backend feature: sqlite 
 use anyhow::Result;
 
 use diesel_async::{AsyncConnection, SimpleAsyncConnection};
-use radio_core::import_types::ImportedBeatmapSet;
+use radio_core::{OsuMarker, import_types::ImportedBeatmapSet};
 
 mod connection;
 pub mod model;
 pub mod repositories;
 pub mod schema;
 use connection::DatabaseConnection;
+use model::{AudioSource, BeatmapSet, OsuInstallation, OsuInstallationChanges, UserData};
 pub use repositories::beatmap::ImportSummary;
+pub use repositories::user_data::RegisteredInstallation;
 
 const CREATE_SCHEMA: &str =
     include_str!("migrations/2026-07-09-194951-0000_create_initial_schema/up.sql");
@@ -47,17 +49,61 @@ impl Database {
         self.apply_schema().await
     }
 
+    pub async fn beatmap_sets_with_audio_sources(
+        &mut self,
+    ) -> Result<Vec<(BeatmapSet, Vec<AudioSource>)>> {
+        repositories::beatmap::all_beatmap_sets_with_audio_sources(&mut self.connection).await
+    }
+
     pub async fn import_beatmap_sets(
         &mut self,
         beatmap_sets: &[ImportedBeatmapSet],
         beatmap_set_limit: Option<usize>,
+        installation_id: Option<i32>,
     ) -> Result<ImportSummary> {
         repositories::beatmap::insert_beatmap_sets(
             &mut self.connection,
             beatmap_sets,
             beatmap_set_limit,
+            installation_id,
         )
         .await
+    }
+
+    pub async fn user_data(&mut self) -> Result<UserData> {
+        repositories::user_data::ensure_user_data(&mut self.connection).await
+    }
+
+    pub async fn osu_installations(&mut self) -> Result<Vec<OsuInstallation>> {
+        repositories::user_data::all_installations(&mut self.connection).await
+    }
+
+    pub async fn osu_installation(&mut self, id: i32) -> Result<Option<OsuInstallation>> {
+        repositories::user_data::installation(&mut self.connection, id).await
+    }
+
+    pub async fn register_osu_installation(
+        &mut self,
+        marker: &OsuMarker,
+        label: Option<&str>,
+    ) -> Result<RegisteredInstallation> {
+        repositories::user_data::register_installation(&mut self.connection, marker, label).await
+    }
+
+    pub async fn update_osu_installation(
+        &mut self,
+        id: i32,
+        changes: OsuInstallationChanges<'_>,
+    ) -> Result<Option<OsuInstallation>> {
+        repositories::user_data::update_installation(&mut self.connection, id, changes).await
+    }
+
+    pub async fn delete_osu_installation(&mut self, id: i32) -> Result<bool> {
+        repositories::user_data::delete_installation(&mut self.connection, id).await
+    }
+
+    pub async fn mark_osu_installation_scanned(&mut self, id: i32) -> Result<()> {
+        repositories::user_data::mark_scanned(&mut self.connection, id).await
     }
 }
 

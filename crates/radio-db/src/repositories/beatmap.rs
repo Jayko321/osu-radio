@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, QueryResult};
+use diesel::{ExpressionMethods, OptionalExtension, QueryDsl, QueryResult, SelectableHelper};
 use diesel_async::{AsyncConnection, RunQueryDsl, scoped_futures::ScopedFutureExt};
 use radio_core::import_types::{
     BeatmapMetadata as ImportedMetadata, ImportedBeatmap, ImportedBeatmapSet,
@@ -10,7 +10,10 @@ use radio_core::import_types::{
 
 use crate::{
     connection::DatabaseConnection,
-    model::{NewAudioSource, NewBeatmap, NewBeatmapMetadata, NewBeatmapSet, SourceType},
+    model::{
+        AudioSource, BeatmapSet, NewAudioSource, NewBeatmap, NewBeatmapMetadata, NewBeatmapSet,
+        SourceType,
+    },
     schema::{audio_sources, beatmap_metadata, beatmap_sets, beatmaps},
 };
 
@@ -22,10 +25,50 @@ pub struct ImportSummary {
     pub skipped_beatmap_sets: usize,
 }
 
+pub async fn all_beatmap_sets_with_audio_sources(
+    connection: &mut DatabaseConnection,
+) -> Result<Vec<(BeatmapSet, Vec<AudioSource>)>> {
+    let beatmap_sets: Vec<BeatmapSet> = beatmap_sets::table
+        .order(beatmap_sets::id.asc())
+        .load(connection)
+        .await?;
+
+    let linked: Vec<(Option<i32>, AudioSource)> = beatmaps::table
+        .inner_join(beatmap_metadata::table.inner_join(audio_sources::table))
+        .select((beatmaps::beatmap_set_id, AudioSource::as_select()))
+        .order((beatmaps::beatmap_set_id.asc(), audio_sources::id.asc()))
+        .load(connection)
+        .await?;
+
+    let mut grouped: HashMap<i32, Vec<AudioSource>> = HashMap::new();
+    for (beatmap_set_id, audio_source) in linked {
+        let Some(beatmap_set_id) = beatmap_set_id else {
+            continue;
+        };
+
+        let audio_sources = grouped.entry(beatmap_set_id).or_default();
+        if !audio_sources
+            .iter()
+            .any(|stored| stored.id == audio_source.id)
+        {
+            audio_sources.push(audio_source);
+        }
+    }
+
+    Ok(beatmap_sets
+        .into_iter()
+        .map(|beatmap_set| {
+            let audio_sources = grouped.remove(&beatmap_set.id).unwrap_or_default();
+            (beatmap_set, audio_sources)
+        })
+        .collect())
+}
+
 pub async fn insert_beatmap_sets(
     connection: &mut DatabaseConnection,
     imported: &[ImportedBeatmapSet],
     beatmap_set_limit: Option<usize>,
+    installation_id: Option<i32>,
 ) -> Result<ImportSummary> {
     let storable = beatmap_set_limit.unwrap_or(usize::MAX).min(imported.len());
 
@@ -39,7 +82,8 @@ pub async fn insert_beatmap_sets(
                 let mut audio_source_ids = HashMap::new();
 
                 for beatmap_set in &imported[..storable] {
-                    let beatmap_set_id = insert_beatmap_set(connection, beatmap_set).await?;
+                    let beatmap_set_id =
+                        insert_beatmap_set(connection, beatmap_set, installation_id).await?;
                     summary.beatmap_sets += 1;
 
                     for beatmap in &beatmap_set.beatmaps {
@@ -76,11 +120,13 @@ pub async fn insert_beatmap_sets(
 async fn insert_beatmap_set(
     connection: &mut DatabaseConnection,
     beatmap_set: &ImportedBeatmapSet,
+    installation_id: Option<i32>,
 ) -> QueryResult<i32> {
     diesel::insert_into(beatmap_sets::table)
         .values(NewBeatmapSet {
             online_id: beatmap_set.online_id,
             hash: beatmap_set.hash.as_deref(),
+            installation_id,
         })
         .returning(beatmap_sets::id)
         .get_result(connection)
@@ -208,6 +254,10 @@ mod tests {
             .await
             .expect("database connection should open");
         connection
+            .batch_execute("PRAGMA foreign_keys = ON;")
+            .await
+            .expect("foreign keys should be enforced");
+        connection
             .batch_execute(crate::CREATE_SCHEMA)
             .await
             .expect("initial schema migration should apply");
@@ -260,7 +310,7 @@ mod tests {
             vec![beatmap("Easy", "audio.mp3"), beatmap("Hard", "audio.mp3")],
         )];
 
-        let summary = insert_beatmap_sets(&mut connection, &sets, None)
+        let summary = insert_beatmap_sets(&mut connection, &sets, None, None)
             .await
             .expect("beatmap sets should store");
 
@@ -293,7 +343,7 @@ mod tests {
             beatmap_set("other.mp3", vec![beatmap("Insane", "other.mp3")]),
         ];
 
-        let summary = insert_beatmap_sets(&mut connection, &sets, Some(1))
+        let summary = insert_beatmap_sets(&mut connection, &sets, Some(1), None)
             .await
             .expect("beatmap sets should store");
 
@@ -316,6 +366,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn loads_every_beatmap_set_with_the_audio_sources_its_beatmaps_reference() {
+        let mut connection = connection().await;
+        let sets = vec![
+            beatmap_set(
+                "audio.mp3",
+                vec![beatmap("Easy", "audio.mp3"), beatmap("Hard", "audio.mp3")],
+            ),
+            beatmap_set("other.mp3", vec![beatmap("Insane", "other.mp3")]),
+        ];
+        insert_beatmap_sets(&mut connection, &sets, None, None)
+            .await
+            .expect("beatmap sets should store");
+
+        let loaded = all_beatmap_sets_with_audio_sources(&mut connection)
+            .await
+            .expect("beatmap sets should load");
+
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded[0].0.id < loaded[1].0.id);
+        assert_eq!(loaded[0].0.hash.as_deref(), Some("set-hash"));
+        assert_eq!(
+            loaded[0].1,
+            vec![AudioSource {
+                id: 1,
+                s_type: SourceType::Local("/osu/files/a/ab/abc".to_owned()),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn loads_a_beatmap_set_whose_beatmaps_reference_no_audio() {
+        let mut connection = connection().await;
+        let sets = vec![beatmap_set(
+            "audio.mp3",
+            vec![beatmap("Easy", "missing.mp3")],
+        )];
+        insert_beatmap_sets(&mut connection, &sets, None, None)
+            .await
+            .expect("beatmap sets should store");
+
+        let loaded = all_beatmap_sets_with_audio_sources(&mut connection)
+            .await
+            .expect("beatmap sets should load");
+
+        assert_eq!(loaded.len(), 1);
+        assert!(loaded[0].1.is_empty());
+    }
+
+    #[tokio::test]
+    async fn deleting_an_installation_removes_the_beatmap_sets_imported_from_it() {
+        use crate::repositories::user_data::{delete_installation, register_installation};
+        use radio_core::OsuMarker;
+
+        let mut connection = connection().await;
+        let installation = register_installation(
+            &mut connection,
+            &OsuMarker {
+                kind: OsuKind::Lazer,
+                marker_path: PathBuf::from("/osu/client.realm"),
+                root_path: PathBuf::from("/osu"),
+            },
+            None,
+        )
+        .await
+        .expect("installation should register")
+        .into_installation();
+
+        let sets = vec![beatmap_set("audio.mp3", vec![beatmap("Easy", "audio.mp3")])];
+        insert_beatmap_sets(&mut connection, &sets, None, Some(installation.id))
+            .await
+            .expect("beatmap sets should store");
+
+        assert!(
+            delete_installation(&mut connection, installation.id)
+                .await
+                .expect("installation should delete")
+        );
+
+        let remaining_sets: i64 = beatmap_sets::table
+            .count()
+            .get_result(&mut connection)
+            .await
+            .expect("beatmap sets should count");
+        let remaining_beatmaps: i64 = beatmaps::table
+            .count()
+            .get_result(&mut connection)
+            .await
+            .expect("beatmaps should count");
+
+        assert_eq!(remaining_sets, 0);
+        assert_eq!(remaining_beatmaps, 0);
+    }
+
+    #[tokio::test]
     async fn stores_metadata_that_has_no_resolvable_audio_file() {
         let mut connection = connection().await;
         let sets = vec![beatmap_set(
@@ -323,7 +467,7 @@ mod tests {
             vec![beatmap("Easy", "missing.mp3")],
         )];
 
-        let summary = insert_beatmap_sets(&mut connection, &sets, None)
+        let summary = insert_beatmap_sets(&mut connection, &sets, None, None)
             .await
             .expect("beatmap sets should store");
 

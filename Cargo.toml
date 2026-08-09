@@ -2,6 +2,9 @@
 resolver = "2"
 members = [
     "apps/osu-radio-cli",
+    "apps/osu-radio-gui-vizia",
+    "apps/osu-radio-server",
+    "crates/osu-radio-client",
     "crates/radio-core",
     "crates/radio-db",
     "crates/radio-scanner",

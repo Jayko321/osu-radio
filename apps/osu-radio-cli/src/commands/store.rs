@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use radio_core::{OsuMarker, import_types::ImportedBeatmapSet};
-use radio_db::{Database, ImportSummary};
+use radio_db::{Database, ImportSummary, model::OsuInstallation};
 use serde_json::json;
 
 use crate::{
@@ -28,14 +28,28 @@ pub(crate) async fn store(args: StoreArgs) -> Result<()> {
     let mut database = open_database().await?;
     prepare_schema(&mut database, args.clear).await?;
 
+    let registered = database.register_osu_installation(&marker, None).await?;
+    let newly_registered = registered.was_created();
+    let installation = registered.into_installation();
+
     let summary = database
-        .import_beatmap_sets(&beatmap_sets, args.count)
+        .import_beatmap_sets(&beatmap_sets, args.count, Some(installation.id))
+        .await?;
+    database
+        .mark_osu_installation_scanned(installation.id)
         .await?;
 
     if args.json {
-        print_store_json(&marker, &beatmap_sets, &summary, &args)?;
+        print_store_json(&marker, &installation, &beatmap_sets, &summary, &args)?;
     } else {
-        print_store_summary(&marker, &beatmap_sets, &summary, &args);
+        print_store_summary(
+            &marker,
+            &installation,
+            newly_registered,
+            &beatmap_sets,
+            &summary,
+            &args,
+        );
     }
 
     Ok(())
@@ -51,12 +65,26 @@ async fn prepare_schema(database: &mut Database, clear: bool) -> Result<()> {
 
 fn print_store_summary(
     marker: &OsuMarker,
+    installation: &OsuInstallation,
+    newly_registered: bool,
     beatmap_sets: &[ImportedBeatmapSet],
     summary: &ImportSummary,
     args: &StoreArgs,
 ) {
     if args.clear {
-        println!("Cleared every previously stored beatmap before importing.");
+        println!("Cleared every previously stored beatmap and registered osu! folder.");
+    }
+
+    if newly_registered {
+        println!(
+            "Registered osu! folder #{} at `{}`.",
+            installation.id, installation.root_path
+        );
+    } else {
+        println!(
+            "Importing into already registered osu! folder #{}.",
+            installation.id
+        );
     }
 
     println!(
@@ -86,12 +114,14 @@ fn print_store_summary(
 
 fn print_store_json(
     marker: &OsuMarker,
+    installation: &OsuInstallation,
     beatmap_sets: &[ImportedBeatmapSet],
     summary: &ImportSummary,
     args: &StoreArgs,
 ) -> Result<()> {
     print_json(&json!({
         "marker": marker_to_json(0, marker),
+        "installation_id": installation.id,
         "cleared": args.clear,
         "count": args.count,
         "discovered_beatmap_sets": beatmap_sets.len(),

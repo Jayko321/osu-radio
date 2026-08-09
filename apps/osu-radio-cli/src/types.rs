@@ -135,7 +135,7 @@ pub(crate) struct StoreArgs {
     pub(crate) count: Option<usize>,
     #[arg(
         long,
-        help = "Drop and recreate every table before importing, discarding stored beatmaps."
+        help = "Drop and recreate every table before importing, discarding stored beatmaps and registered osu! folders."
     )]
     pub(crate) clear: bool,
     #[arg(long, help = "Print machine-readable JSON instead of a summary.")]
