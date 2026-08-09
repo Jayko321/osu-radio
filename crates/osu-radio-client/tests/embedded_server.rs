@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 use std::{env, path::PathBuf};
 
 use osu_radio_client::{ServerOptions, Session};

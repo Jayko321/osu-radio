@@ -1,3 +1,13 @@
+#![cfg_attr(
+    test,
+    allow(
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        clippy::unwrap_used
+    )
+)]
+
 #[cfg(all(feature = "sqlite", feature = "postgres"))]
 compile_error!("choose one db backend only");
 

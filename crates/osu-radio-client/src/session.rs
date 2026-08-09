@@ -22,7 +22,8 @@ impl Session {
         Ok(Self { server, api })
     }
 
-    pub fn api(&self) -> &ApiClient {
+    #[must_use]
+    pub const fn api(&self) -> &ApiClient {
         &self.api
     }
 

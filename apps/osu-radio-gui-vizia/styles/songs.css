@@ -1,0 +1,78 @@
+.track-list {
+    width: 1s;
+    height: 1s;
+}
+
+.track-list scroll-content {
+    gap: 16px;
+}
+
+/* A hoverable child becomes the press target and swallows the parent's
+   `on_press`, so anything clickable keeps its contents inert. */
+.track-card > * {
+    pointer-events: none;
+}
+
+.track-card {
+    width: 1s;
+    height: 90px;
+    corner-radius: 8px;
+    background-size: cover;
+    opacity: 0.62;
+}
+
+.track-card:hover {
+    opacity: 0.82;
+}
+
+.track-card.playing {
+    opacity: 1;
+    border: 1px solid #79d9d9;
+}
+
+.track-card-tint {
+    size: 1s;
+    corner-radius: 8px;
+}
+
+.track-card-text {
+    layout-type: column;
+    size: 1s;
+    alignment: left;
+    gap: 2px;
+    padding-left: 20px;
+    padding-right: 20px;
+}
+
+.track-card-title {
+    width: auto;
+    height: auto;
+    font-size: 22px;
+    font-variation-settings: "wght" 800;
+    color: #ffffff;
+    text-overflow: ellipsis;
+}
+
+.track-card-meta {
+    width: auto;
+    height: auto;
+    font-size: 16px;
+    font-variation-settings: "wght" 500;
+    color: #ffffff;
+}
+
+.tint-navy {
+    background-image: linear-gradient(to right, rgba(4, 6, 26, 0.75) 41.5%, rgba(4, 6, 26, 0) 100%);
+}
+
+.tint-olive {
+    background-image: linear-gradient(to right, rgba(26, 24, 4, 0.75) 41.5%, rgba(26, 24, 4, 0) 100%);
+}
+
+.tint-plum {
+    background-image: linear-gradient(to right, rgba(26, 4, 21, 0.75) 41.5%, rgba(26, 4, 21, 0) 100%);
+}
+
+.tint-maroon {
+    background-image: linear-gradient(to right, rgba(26, 4, 4, 0.82) 0%, rgba(26, 4, 4, 0.06) 100%);
+}

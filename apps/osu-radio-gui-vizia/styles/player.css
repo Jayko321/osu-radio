@@ -1,0 +1,106 @@
+.player {
+    layout-type: column;
+    width: 1s;
+    height: 1s;
+    padding-left: 138px;
+    padding-right: 172px;
+    padding-top: 169px;
+    padding-bottom: 52px;
+}
+
+.cover {
+    width: 340px;
+    height: 340px;
+    left: 1s;
+    right: 1s;
+    corner-radius: 12px;
+    background-size: cover;
+    shadow: 0px 0px 12px rgba(0, 0, 0, 0.32);
+}
+
+.now-title {
+    width: 1s;
+    height: auto;
+    font-size: 28px;
+    font-variation-settings: "wght" 800;
+    color: #ffffff;
+    text-overflow: ellipsis;
+}
+
+.now-artist {
+    width: 1s;
+    height: auto;
+    font-size: 20px;
+    font-variation-settings: "wght" 600;
+    color: #ffffff;
+}
+
+.progress-row {
+    width: 1s;
+    height: 16px;
+}
+
+.progress-track {
+    width: 1s;
+    height: 4px;
+    top: 6px;
+    corner-radius: 4px;
+    background-color: #828282;
+}
+
+.progress-fill {
+    width: 81.5%;
+    height: 6px;
+    top: 5px;
+    corner-radius: 4px;
+    background-color: #9a2729;
+}
+
+.progress-knob {
+    left: 80.3%;
+    width: 16px;
+    height: 16px;
+    corner-radius: 50%;
+    background-color: #9a2729;
+}
+
+.time-row {
+    layout-type: row;
+    width: 1s;
+    height: 16px;
+}
+
+.time-row label {
+    width: auto;
+    height: auto;
+    font-size: 12px;
+    font-variation-settings: "wght" 400;
+    color: rgba(255, 255, 255, 0.82);
+}
+
+.controls-row {
+    layout-type: row;
+    width: 1s;
+    height: 48px;
+    alignment: center;
+}
+
+.transport {
+    layout-type: row;
+    width: auto;
+    height: 48px;
+    alignment: center;
+    gap: 28px;
+}
+
+.play-button {
+    width: 48px;
+    height: 48px;
+    alignment: center;
+    corner-radius: 50%;
+    background-color: #9a2729;
+}
+
+.play-button:hover {
+    background-color: #b02e30;
+}

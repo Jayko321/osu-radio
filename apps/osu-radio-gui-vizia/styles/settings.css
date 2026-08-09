@@ -1,0 +1,77 @@
+.settings-list {
+    width: 1s;
+    height: 1s;
+}
+
+.settings-list scroll-content {
+    gap: 40px;
+}
+
+.settings-section {
+    layout-type: column;
+    width: 1s;
+    height: auto;
+    gap: 24px;
+}
+
+.section-header {
+    layout-type: row;
+    width: 1s;
+    height: 24px;
+    alignment: left;
+    gap: 12px;
+}
+
+.section-header label {
+    width: auto;
+    height: auto;
+    font-size: 16px;
+    font-variation-settings: "wght" 800;
+    color: #ffffff;
+}
+
+/* A hoverable child becomes the press target and swallows the parent's
+   `on_press`, so anything clickable keeps its contents inert. */
+.field-box > * {
+    pointer-events: none;
+}
+
+.field {
+    layout-type: column;
+    width: 1s;
+    height: auto;
+    gap: 8px;
+}
+
+.field-label {
+    width: 1s;
+    height: auto;
+    font-size: 14px;
+    font-variation-settings: "wght" 700;
+    color: rgba(255, 255, 255, 0.82);
+}
+
+.field-box {
+    layout-type: row;
+    width: 1s;
+    height: auto;
+    alignment: center;
+    padding-left: 16px;
+    padding-right: 16px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    corner-radius: 8px;
+    background-color: #292929;
+}
+
+.field-box label {
+    width: 1s;
+    height: auto;
+    font-size: 16px;
+    font-variation-settings: "wght" 400;
+    color: #ffffff;
+}
+
+.field-box.pickable:hover {
+    background-color: #333333;
+}

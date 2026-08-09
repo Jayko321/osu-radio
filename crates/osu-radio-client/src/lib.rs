@@ -1,7 +1,10 @@
+#![cfg_attr(test, allow(clippy::expect_used, clippy::panic, clippy::unwrap_used))]
+
 pub mod api;
 pub mod models;
 pub mod server;
 pub mod session;
+pub mod view_models;
 
 pub use api::{ApiClient, ApiError};
 pub use models::{
@@ -10,6 +13,7 @@ pub use models::{
 };
 pub use server::{EmbeddedServer, ServerError, ServerOptions};
 pub use session::{Session, StartError};
+pub use view_models::Track;
 
 /// The state of one thing a UI is showing. Frontends differ in how they render it, not in the
 /// states themselves, so the enum lives here rather than in any one of them.
@@ -23,11 +27,11 @@ pub enum Loading<T> {
 }
 
 impl<T> Loading<T> {
-    pub fn is_pending(&self) -> bool {
+    pub const fn is_pending(&self) -> bool {
         matches!(self, Self::Pending)
     }
 
-    pub fn value(&self) -> Option<&T> {
+    pub const fn value(&self) -> Option<&T> {
         match self {
             Self::Ready(value) => Some(value),
             _ => None,

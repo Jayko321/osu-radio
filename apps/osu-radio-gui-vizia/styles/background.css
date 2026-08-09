@@ -1,0 +1,44 @@
+.body {
+    width: 1s;
+    height: 1s;
+}
+
+.backdrop {
+    size: 1s;
+    background-size: cover;
+    filter: blur(20px);
+    opacity: 0.22;
+}
+
+.glow-warm {
+    left: 30%;
+    top: -10%;
+    width: 1000px;
+    height: 1000px;
+    background-image: radial-gradient(
+        rgba(154, 39, 41, 0.5) 0%,
+        rgba(154, 39, 41, 0.34) 24%,
+        rgba(154, 39, 41, 0.16) 45%,
+        rgba(154, 39, 41, 0.05) 64%,
+        rgba(154, 39, 41, 0) 78%
+    );
+}
+
+.glow-cool {
+    left: -18%;
+    top: 40%;
+    width: 1200px;
+    height: 900px;
+    background-image: radial-gradient(
+        rgba(75, 15, 48, 0.52) 0%,
+        rgba(75, 15, 48, 0.35) 24%,
+        rgba(75, 15, 48, 0.17) 45%,
+        rgba(75, 15, 48, 0.05) 64%,
+        rgba(75, 15, 48, 0) 78%
+    );
+}
+
+.panes {
+    layout-type: row;
+    size: 1s;
+}

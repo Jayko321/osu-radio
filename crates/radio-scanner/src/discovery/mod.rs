@@ -131,6 +131,7 @@ where
 }
 
 /// Runs discovery synchronously and collects every marker it finds.
+#[must_use]
 pub fn find_osu_markers(options: &DiscoveryOptions) -> Vec<OsuMarker> {
     let mut markers = Vec::new();
     find_osu_markers_with(options, |marker| {
@@ -167,6 +168,7 @@ impl Discovery {
 }
 
 /// Starts a discovery run on a blocking thread and streams the markers it finds.
+#[must_use]
 pub fn discover(options: DiscoveryOptions) -> Discovery {
     let (sender, receiver) = mpsc::channel(DISCOVERY_CHANNEL_CAPACITY);
 
@@ -228,7 +230,10 @@ where
         // Only a dedup key, so the emitted marker keeps the readable path.
         let key = std::fs::canonicalize(&marker_path).unwrap_or_else(|_| marker_path.clone());
 
-        let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !state.seen.insert(key) {
             return ControlFlow::Continue(());
         }
@@ -239,12 +244,15 @@ where
             root_path,
         });
 
-        if let Some(remaining) = state.remaining.as_mut() {
+        let exhausted = state.remaining.as_mut().is_some_and(|remaining| {
             *remaining = remaining.saturating_sub(1);
-            if *remaining == 0 {
-                self.stop.store(true, Ordering::Relaxed);
-                return ControlFlow::Break(());
-            }
+            *remaining == 0
+        });
+        drop(state);
+
+        if exhausted {
+            self.stop.store(true, Ordering::Relaxed);
+            return ControlFlow::Break(());
         }
 
         if flow.is_break() {

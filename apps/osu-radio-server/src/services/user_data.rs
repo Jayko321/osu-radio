@@ -30,6 +30,7 @@ pub(crate) enum RegisterFolderError {
 
 #[derive(Debug, Default)]
 pub(crate) struct FolderChanges {
+    #[allow(clippy::option_option)]
     pub(crate) label: Option<Option<String>>,
     pub(crate) enabled: Option<bool>,
 }
@@ -39,7 +40,7 @@ pub(crate) struct UserDataService<'a> {
 }
 
 impl<'a> UserDataService<'a> {
-    pub(crate) fn new(state: &'a AppState) -> Self {
+    pub(crate) const fn new(state: &'a AppState) -> Self {
         Self { state }
     }
 
@@ -54,6 +55,7 @@ impl<'a> UserDataService<'a> {
             .osu_installations()
             .await
             .context("Failed to load the registered osu! folders")?;
+        drop(database);
 
         Ok(UserDataOverview {
             id: user_data.id,

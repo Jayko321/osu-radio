@@ -29,14 +29,37 @@ const COVERS: [(&str, &[u8]); 4] = [
     ("cover-alice", include_bytes!("../assets/covers/alice.jpg")),
 ];
 
+const COVER_IMAGES: [&str; 4] = [
+    "url(\"cover-karakara\")",
+    "url(\"cover-bbbb\")",
+    "url(\"cover-rabbit\")",
+    "url(\"cover-alice\")",
+];
+
+const TINTS: [&str; 4] = ["tint-navy", "tint-olive", "tint-plum", "tint-maroon"];
+
+/// Artwork is keyed on a track's position until beatmap sets carry covers of their own, so the
+/// bundled four repeat down the list rather than living on the track itself.
+pub fn cover_image(index: usize) -> &'static str {
+    pick(&COVER_IMAGES, index)
+}
+
+pub fn tint(index: usize) -> &'static str {
+    pick(&TINTS, index)
+}
+
+fn pick(options: &[&'static str], index: usize) -> &'static str {
+    index
+        .checked_rem(options.len())
+        .and_then(|position| options.get(position))
+        .copied()
+        .unwrap_or_default()
+}
+
 pub fn register(cx: &mut Context) {
     cx.add_font_mem(NUNITO);
 
     for (name, data) in COVERS {
         cx.load_image(name, data, ImageRetentionPolicy::Forever);
     }
-}
-
-pub fn icon<'a>(cx: &'a mut Context, glyph: &'static [u8]) -> Handle<'a, Svg> {
-    Svg::new(cx, glyph).class("icon")
 }

@@ -1,3 +1,10 @@
+#![allow(
+    clippy::expect_used,
+    clippy::manual_assert,
+    clippy::panic,
+    clippy::unwrap_used
+)]
+
 use std::{
     env,
     path::{Path, PathBuf},
@@ -28,9 +35,10 @@ fn main() {
     );
 
     let output_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap()).join("dotnet-helper");
-    let dotnet_home = env::var_os("DOTNET_CLI_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| manifest_dir.join("../../target/dotnet-home"));
+    let dotnet_home = env::var_os("DOTNET_CLI_HOME").map_or_else(
+        || manifest_dir.join("../../target/dotnet-home"),
+        PathBuf::from,
+    );
     let status = Command::new("dotnet")
         .args(["build", "--configuration", "Release", "--nologo", "--output"])
         .arg(&output_dir)

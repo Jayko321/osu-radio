@@ -20,7 +20,8 @@ pub enum SourceType {
 }
 
 impl SourceType {
-    pub fn kind(&self) -> &'static str {
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
         match self {
             Self::Local(_) => LOCAL,
             Self::Copied(_) => COPIED,
@@ -28,6 +29,7 @@ impl SourceType {
         }
     }
 
+    #[must_use]
     pub fn location(&self) -> &str {
         match self {
             Self::Local(location) | Self::Copied(location) | Self::Online(location) => location,

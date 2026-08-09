@@ -1,3 +1,5 @@
+#![allow(clippy::ref_option_ref)]
+
 use diesel::backend::Backend;
 use diesel::deserialize::{self, FromStaticSqlRow, Queryable};
 use diesel::expression::Selectable;
@@ -112,7 +114,8 @@ pub struct OsuInstallationChanges<'a> {
 }
 
 impl OsuInstallationChanges<'_> {
-    pub fn is_empty(&self) -> bool {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
         self.label.is_none() && self.enabled.is_none()
     }
 }

@@ -75,9 +75,9 @@ pub(crate) enum DepthArg {
 impl From<DepthArg> for DiscoveryDepth {
     fn from(depth: DepthArg) -> Self {
         match depth {
-            DepthArg::Known => DiscoveryDepth::Known,
-            DepthArg::Shallow => DiscoveryDepth::Shallow,
-            DepthArg::Full => DiscoveryDepth::Full,
+            DepthArg::Known => Self::Known,
+            DepthArg::Shallow => Self::Shallow,
+            DepthArg::Full => Self::Full,
         }
     }
 }
@@ -169,8 +169,8 @@ pub(crate) enum SourceArg {
 impl From<SourceArg> for OsuKind {
     fn from(source: SourceArg) -> Self {
         match source {
-            SourceArg::Stable => OsuKind::Stable,
-            SourceArg::Lazer => OsuKind::Lazer,
+            SourceArg::Stable => Self::Stable,
+            SourceArg::Lazer => Self::Lazer,
         }
     }
 }

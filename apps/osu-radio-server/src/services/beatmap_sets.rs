@@ -14,7 +14,7 @@ pub(crate) struct BeatmapSetService<'a> {
 }
 
 impl<'a> BeatmapSetService<'a> {
-    pub(crate) fn new(state: &'a AppState) -> Self {
+    pub(crate) const fn new(state: &'a AppState) -> Self {
         Self { state }
     }
 

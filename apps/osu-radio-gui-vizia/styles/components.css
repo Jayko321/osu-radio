@@ -1,0 +1,93 @@
+.sidebar {
+    layout-type: column;
+    width: 480px;
+    height: 1s;
+    padding-left: 20px;
+    padding-right: 20px;
+    padding-top: 32px;
+    padding-bottom: 20px;
+    background-color: rgba(24, 24, 27, 0.72);
+    border-right: 1px solid #27272a;
+}
+
+.search-row {
+    layout-type: row;
+    width: 1s;
+    height: 24px;
+    alignment: center;
+    gap: 8px;
+}
+
+.search-field {
+    width: 1s;
+    height: 24px;
+}
+
+.search-placeholder {
+    width: 1s;
+    height: 24px;
+    font-size: 16px;
+    font-variation-settings: "wght" 500;
+    color: rgba(255, 255, 255, 0.62);
+    pointer-events: none;
+}
+
+.search-field textbox {
+    width: 1s;
+    height: 24px;
+    padding: 0px;
+    border-width: 0px;
+    corner-radius: 0px;
+    background-color: rgba(0, 0, 0, 0);
+    font-size: 16px;
+    font-variation-settings: "wght" 500;
+    color: #ffffff;
+    caret-color: #ffffff;
+    selection-color: rgba(154, 39, 41, 0.62);
+}
+
+/* A hoverable child becomes the press target and swallows the parent's
+   `on_press`, so anything clickable keeps its contents inert. */
+.chip > * {
+    pointer-events: none;
+}
+
+.chip-row {
+    layout-type: row;
+    width: 1s;
+    height: 32px;
+    gap: 10px;
+}
+
+.chip {
+    layout-type: row;
+    width: auto;
+    height: 32px;
+    alignment: center;
+    gap: 12px;
+    padding-left: 12px;
+    padding-right: 16px;
+    corner-radius: 31px;
+    border: 1px solid #27272a;
+    background-color: rgba(0, 0, 0, 0);
+}
+
+.chip:hover {
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+.chip label {
+    width: auto;
+    height: auto;
+    font-size: 16px;
+    font-variation-settings: "wght" 500;
+    color: #ffffff;
+}
+
+.icon-button {
+    size: 24px;
+}
+
+.icon-button:hover {
+    opacity: 0.72;
+}

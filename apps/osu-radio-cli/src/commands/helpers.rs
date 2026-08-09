@@ -75,7 +75,10 @@ pub(crate) async fn select_marker(
             bail!("`--index` is 1-based. Use an index from `osu-radio-cli scan`.");
         }
 
-        return markers.get(index - 1).cloned().with_context(|| {
+        return markers
+            .get(index.saturating_sub(1))
+            .cloned()
+            .with_context(|| {
             format!(
                 "No discovered osu! installation has index {index}. Run `osu-radio-cli scan` to see available indexes."
             )
@@ -157,7 +160,7 @@ pub(crate) fn markers_to_json(markers: &[OsuMarker]) -> Vec<Value> {
     markers
         .iter()
         .enumerate()
-        .map(|(index, marker)| marker_to_json(index + 1, marker))
+        .map(|(index, marker)| marker_to_json(index.saturating_add(1), marker))
         .collect()
 }
 
@@ -174,7 +177,7 @@ pub(crate) fn print_markers_table(markers: &[OsuMarker]) {
     let rows = markers
         .iter()
         .enumerate()
-        .map(|(index, marker)| marker_row(index + 1, marker))
+        .map(|(index, marker)| marker_row(index.saturating_add(1), marker))
         .collect::<Vec<_>>();
 
     print_table(MARKER_TABLE_HEADERS, &rows, MARKER_TABLE_WIDTHS);
@@ -191,10 +194,7 @@ pub(crate) fn marker_row(index: usize, marker: &OsuMarker) -> Vec<String> {
 
 pub(crate) fn print_table_header(headers: &[&str], widths: &[usize]) {
     print_table_row(
-        &headers
-            .iter()
-            .map(|header| header.to_string())
-            .collect::<Vec<_>>(),
+        &headers.iter().map(ToString::to_string).collect::<Vec<_>>(),
         widths,
     );
     print_table_separator(widths);
@@ -212,11 +212,9 @@ pub(crate) fn print_table(headers: &[&str], rows: &[Vec<String>], max_widths: &[
                 .max()
                 .unwrap_or(0);
 
-            header
-                .chars()
-                .count()
-                .max(content_width)
-                .min(max_widths[column])
+            let max_width = max_widths.get(column).copied().unwrap_or(usize::MAX);
+
+            header.chars().count().max(content_width).min(max_width)
         })
         .collect::<Vec<_>>();
 
@@ -227,7 +225,7 @@ pub(crate) fn print_table(headers: &[&str], rows: &[Vec<String>], max_widths: &[
     }
 }
 
-pub(crate) fn source_name(kind: OsuKind) -> &'static str {
+pub(crate) const fn source_name(kind: OsuKind) -> &'static str {
     kind.as_str()
 }
 
@@ -257,11 +255,11 @@ pub(crate) fn print_table_row(row: &[String], widths: &[usize]) {
             print!("  ");
         }
 
-        let value = truncate(row.get(column).map(String::as_str).unwrap_or(""), *width);
+        let value = truncate(row.get(column).map_or("", String::as_str), *width);
         if column == last {
             print!("{value}");
         } else {
-            print!("{value:<width$}", width = width);
+            print!("{value:<width$}");
         }
     }
     println!();
@@ -287,7 +285,10 @@ fn truncate(value: &str, width: usize) -> String {
         return ".".to_string();
     }
 
-    let mut truncated = value.chars().take(width - 1).collect::<String>();
+    let mut truncated = value
+        .chars()
+        .take(width.saturating_sub(1))
+        .collect::<String>();
     truncated.push('.');
     truncated
 }

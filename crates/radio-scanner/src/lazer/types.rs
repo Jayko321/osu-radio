@@ -86,7 +86,7 @@ impl From<LazerBeatmapSetRecord> for ImportedBeatmapSet {
             beatmaps,
         } = record;
 
-        ImportedBeatmapSet {
+        Self {
             source: match source {
                 LazerSource::Lazer => OsuKind::Lazer,
             },
@@ -100,7 +100,7 @@ impl From<LazerBeatmapSetRecord> for ImportedBeatmapSet {
 
 impl From<LazerBeatmapRecord> for ImportedBeatmap {
     fn from(record: LazerBeatmapRecord) -> Self {
-        ImportedBeatmap {
+        Self {
             difficulty_name: record.difficulty_name,
             bpm: record.bpm,
             hash: record.hash,
@@ -111,7 +111,7 @@ impl From<LazerBeatmapRecord> for ImportedBeatmap {
 
 impl From<LazerBeatmapMetadata> for BeatmapMetadata {
     fn from(metadata: LazerBeatmapMetadata) -> Self {
-        BeatmapMetadata {
+        Self {
             title: metadata.title,
             title_unicode: metadata.title_unicode,
             artist: metadata.artist,
@@ -129,7 +129,7 @@ impl From<LazerBeatmapMetadata> for BeatmapMetadata {
 
 impl From<LazerRealmNamedFileUsage> for RealmNamedFileUsage {
     fn from(usage: LazerRealmNamedFileUsage) -> Self {
-        RealmNamedFileUsage {
+        Self {
             filename: usage.filename,
             file: usage.file.map(Into::into),
         }
@@ -138,7 +138,7 @@ impl From<LazerRealmNamedFileUsage> for RealmNamedFileUsage {
 
 impl From<LazerRealmFile> for RealmFile {
     fn from(file: LazerRealmFile) -> Self {
-        RealmFile {
+        Self {
             hash: file.hash,
             resolved_path: file.resolved_path,
         }
@@ -147,7 +147,7 @@ impl From<LazerRealmFile> for RealmFile {
 
 impl From<LazerRealmUser> for RealmUser {
     fn from(user: LazerRealmUser) -> Self {
-        RealmUser {
+        Self {
             online_id: user.online_id,
             username: user.username,
             country_code: user.country_code,

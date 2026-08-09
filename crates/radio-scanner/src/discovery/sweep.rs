@@ -41,6 +41,7 @@ const UNIX_IGNORED_ROOT_DIRS: &[&str] = &[
     "/lost+found",
 ];
 
+#[must_use]
 pub fn system_scan_roots() -> Vec<PathBuf> {
     #[cfg(windows)]
     {

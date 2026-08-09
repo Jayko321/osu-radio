@@ -9,14 +9,13 @@ use crate::{assets, sample, views};
 pub fn run(runtime: Handle) -> Result<(), ApplicationError> {
     Application::new(move |cx| {
         assets::register(cx);
-        cx.add_stylesheet(include_style!("theme.css"))
-            .expect("the bundled stylesheet should load");
+        views::styles(cx);
 
         let state = UiState::new();
 
         AppData {
             session: None,
-            runtime: runtime.clone(),
+            runtime,
             state,
         }
         .build(cx);
@@ -93,7 +92,7 @@ impl Model for AppData {
 }
 
 impl AppData {
-    fn connect(&mut self, cx: &mut EventContext) {
+    fn connect(&self, cx: &EventContext) {
         let mut proxy = cx.get_proxy();
 
         self.runtime.spawn(async move {

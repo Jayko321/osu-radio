@@ -17,19 +17,22 @@ pub enum RegisteredInstallation {
 }
 
 impl RegisteredInstallation {
-    pub fn installation(&self) -> &OsuInstallation {
+    #[must_use]
+    pub const fn installation(&self) -> &OsuInstallation {
         match self {
             Self::Created(installation) | Self::AlreadyRegistered(installation) => installation,
         }
     }
 
+    #[must_use]
     pub fn into_installation(self) -> OsuInstallation {
         match self {
             Self::Created(installation) | Self::AlreadyRegistered(installation) => installation,
         }
     }
 
-    pub fn was_created(&self) -> bool {
+    #[must_use]
+    pub const fn was_created(&self) -> bool {
         matches!(self, Self::Created(_))
     }
 }

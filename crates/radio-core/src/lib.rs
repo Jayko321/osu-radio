@@ -12,7 +12,8 @@ pub enum OsuKind {
 }
 
 impl OsuKind {
-    pub fn as_str(self) -> &'static str {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::Stable => STABLE,
             Self::Lazer => LAZER,

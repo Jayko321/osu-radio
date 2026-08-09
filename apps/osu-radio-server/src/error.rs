@@ -33,7 +33,7 @@ impl ApiError {
     }
 
     #[cfg(test)]
-    pub(crate) fn status(&self) -> StatusCode {
+    pub(crate) const fn status(&self) -> StatusCode {
         self.status
     }
 

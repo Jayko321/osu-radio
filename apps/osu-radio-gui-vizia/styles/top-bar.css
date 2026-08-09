@@ -1,0 +1,64 @@
+.top-bar {
+    layout-type: row;
+    width: 1s;
+    height: 50px;
+    alignment: left;
+    gap: 4px;
+    padding-left: 22px;
+    padding-right: 20px;
+    background-color: #000000;
+}
+
+/* A hoverable child becomes the press target and swallows the parent's
+   `on_press`, so anything clickable keeps its contents inert. */
+.nav-tab > * {
+    pointer-events: none;
+}
+
+.nav-tab {
+    layout-type: row;
+    width: auto;
+    height: 32px;
+    alignment: center;
+    gap: 16px;
+    padding-left: 16px;
+    padding-right: 16px;
+    corner-radius: 4px;
+    background-color: rgba(0, 0, 0, 0);
+}
+
+.nav-tab .nav-label {
+    width: auto;
+    height: auto;
+    font-size: 16px;
+    font-variation-settings: "wght" 800;
+    color: rgba(255, 255, 255, 0.62);
+}
+
+.nav-tab svg {
+    opacity: 0.62;
+}
+
+.nav-tab:hover .nav-label {
+    color: rgba(255, 255, 255, 0.82);
+}
+
+.nav-tab.active {
+    background-color: #1b181c;
+}
+
+.nav-tab.active .nav-label {
+    color: #ffffff;
+}
+
+.nav-tab.active svg {
+    opacity: 1;
+}
+
+.server-status {
+    width: auto;
+    height: auto;
+    font-size: 12px;
+    font-variation-settings: "wght" 500;
+    color: rgba(255, 255, 255, 0.62);
+}

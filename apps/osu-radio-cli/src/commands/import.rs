@@ -61,7 +61,7 @@ fn print_import_table(
         .enumerate()
         .map(|(index, (beatmap_set, beatmap))| {
             vec![
-                (index + 1).to_string(),
+                index.saturating_add(1).to_string(),
                 source_name(beatmap_set.source).to_string(),
                 beatmap_artist(beatmap),
                 beatmap_title(beatmap),
@@ -113,7 +113,7 @@ fn print_import_json(
         .iter()
         .filter_map(|beatmap_set| {
             let take = remaining.min(beatmap_set.beatmaps.len());
-            remaining -= take;
+            remaining = remaining.saturating_sub(take);
             (take > 0).then(|| beatmap_set_to_json(beatmap_set, take))
         })
         .collect::<Vec<_>>();
@@ -195,8 +195,7 @@ fn beatmap_title(beatmap: &ImportedBeatmap) -> String {
 fn beatmap_bpm(beatmap: &ImportedBeatmap) -> String {
     beatmap
         .bpm
-        .map(|bpm| format!("{bpm:.1}"))
-        .unwrap_or_else(|| "-".to_string())
+        .map_or_else(|| "-".to_string(), |bpm| format!("{bpm:.1}"))
 }
 
 fn audio_status(beatmap_set: &ImportedBeatmapSet, beatmap: &ImportedBeatmap) -> &'static str {

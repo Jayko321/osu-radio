@@ -66,14 +66,16 @@ pub struct OsuFolderChanges {
 }
 
 impl OsuFolderChanges {
-    pub fn label(label: Option<String>) -> Self {
+    #[must_use]
+    pub const fn label(label: Option<String>) -> Self {
         Self {
             label: Some(label),
             enabled: None,
         }
     }
 
-    pub fn enabled(enabled: bool) -> Self {
+    #[must_use]
+    pub const fn enabled(enabled: bool) -> Self {
         Self {
             label: None,
             enabled: Some(enabled),
@@ -90,16 +92,19 @@ pub enum RegisteredFolder {
 }
 
 impl RegisteredFolder {
-    pub fn was_created(&self) -> bool {
+    #[must_use]
+    pub const fn was_created(&self) -> bool {
         matches!(self, Self::Created(_))
     }
 
-    pub fn folder(&self) -> &OsuFolder {
+    #[must_use]
+    pub const fn folder(&self) -> &OsuFolder {
         match self {
             Self::Created(folder) | Self::AlreadyRegistered(folder) => folder,
         }
     }
 
+    #[must_use]
     pub fn into_folder(self) -> OsuFolder {
         match self {
             Self::Created(folder) | Self::AlreadyRegistered(folder) => folder,

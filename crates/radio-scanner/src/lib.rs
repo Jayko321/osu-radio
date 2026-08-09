@@ -1,3 +1,13 @@
+#![cfg_attr(
+    test,
+    allow(
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        clippy::unwrap_used
+    )
+)]
+
 use std::{error::Error, fmt};
 
 use radio_core::{OsuKind, OsuMarker, import_types::ImportedBeatmapSet};
@@ -26,7 +36,7 @@ impl fmt::Display for UnsupportedSourceError {
 impl Error for UnsupportedSourceError {}
 
 pub async fn get_beatmap_sets(marker: OsuMarker) -> anyhow::Result<Vec<ImportedBeatmapSet>> {
-    let scanner: Box<dyn BeatmapSetScanner> = match marker.kind {
+    let scanner: Box<dyn BeatmapSetScanner + Send> = match marker.kind {
         OsuKind::Stable => {
             return Err(UnsupportedSourceError {
                 kind: OsuKind::Stable,

@@ -23,6 +23,7 @@ impl ApiClient {
         })
     }
 
+    #[must_use]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
@@ -130,8 +131,7 @@ impl ApiClient {
         let message = response
             .json::<ErrorBody>()
             .await
-            .map(|body| body.message)
-            .unwrap_or_else(|_| status.to_string());
+            .map_or_else(|_| status.to_string(), |body| body.message);
 
         ApiError::Status {
             path: path.to_owned(),

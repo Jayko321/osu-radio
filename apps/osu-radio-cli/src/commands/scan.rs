@@ -27,7 +27,7 @@ pub(crate) async fn scan(args: ScanArgs) -> Result<()> {
     let mut discovery = discover(options);
     let mut found = 0usize;
     while let Some(marker) = discovery.next().await {
-        found += 1;
+        found = found.saturating_add(1);
         if found == 1 {
             print_table_header(MARKER_TABLE_HEADERS, MARKER_TABLE_WIDTHS);
         }
@@ -53,7 +53,7 @@ pub(crate) async fn scan(args: ScanArgs) -> Result<()> {
     Ok(())
 }
 
-fn scan_limit(args: &ScanArgs) -> Option<usize> {
+const fn scan_limit(args: &ScanArgs) -> Option<usize> {
     if args.first {
         return Some(1);
     }

@@ -49,6 +49,7 @@ pub(crate) struct RegisterOsuFolderRequest {
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
 pub(crate) struct UpdateOsuFolderRequest {
     /// Absent leaves the label alone; an explicit `null` clears it.
+    #[allow(clippy::option_option)]
     #[serde(default, deserialize_with = "deserialize_present_field")]
     #[cfg_attr(feature = "docs", schema(value_type = Option<String>, nullable = true))]
     pub(crate) label: Option<Option<String>>,
@@ -86,20 +87,20 @@ impl From<UserDataOverview> for UserDataResponse {
 impl From<RegisterFolderError> for ApiError {
     fn from(error: RegisterFolderError) -> Self {
         match error {
-            RegisterFolderError::RelativePath(path) => ApiError::bad_request(format!(
+            RegisterFolderError::RelativePath(path) => Self::bad_request(format!(
                 "`{}` is not an absolute path. Register an osu! folder by its full path.",
                 path.display()
             )),
-            RegisterFolderError::NotAnOsuFolder(path) => ApiError::bad_request(format!(
+            RegisterFolderError::NotAnOsuFolder(path) => Self::bad_request(format!(
                 "No osu! installation was found in `{}`. Expected a client.realm or osu!.db there.",
                 path.display()
             )),
-            RegisterFolderError::Ambiguous { path, found } => ApiError::bad_request(format!(
+            RegisterFolderError::Ambiguous { path, found } => Self::bad_request(format!(
                 "`{}` holds {} osu! installations. Register each one by its own folder.",
                 path.display(),
                 found.len()
             )),
-            RegisterFolderError::Failed(error) => ApiError::from(error),
+            RegisterFolderError::Failed(error) => Self::from(error),
         }
     }
 }
@@ -223,10 +224,10 @@ pub(crate) async fn update_osu_folder(
         )
         .await?;
 
-    match updated {
-        Some(folder) => Ok(Json(OsuFolderResponse::from(folder))),
-        None => Err(unknown_folder(id)),
-    }
+    updated.map_or_else(
+        || Err(unknown_folder(id)),
+        |folder| Ok(Json(OsuFolderResponse::from(folder))),
+    )
 }
 
 #[cfg_attr(

@@ -76,15 +76,15 @@ pub async fn insert_beatmap_sets(
         .transaction::<_, diesel::result::Error, _>(|connection| {
             async move {
                 let mut summary = ImportSummary {
-                    skipped_beatmap_sets: imported.len() - storable,
+                    skipped_beatmap_sets: imported.len().saturating_sub(storable),
                     ..ImportSummary::default()
                 };
                 let mut audio_source_ids = HashMap::new();
 
-                for beatmap_set in &imported[..storable] {
+                for beatmap_set in imported.iter().take(storable) {
                     let beatmap_set_id =
                         insert_beatmap_set(connection, beatmap_set, installation_id).await?;
-                    summary.beatmap_sets += 1;
+                    summary.beatmap_sets = summary.beatmap_sets.saturating_add(1);
 
                     for beatmap in &beatmap_set.beatmaps {
                         let metadata_id = insert_metadata(
@@ -103,7 +103,7 @@ pub async fn insert_beatmap_sets(
                             metadata_id,
                         )
                         .await?;
-                        summary.beatmaps += 1;
+                        summary.beatmaps = summary.beatmaps.saturating_add(1);
                     }
                 }
 

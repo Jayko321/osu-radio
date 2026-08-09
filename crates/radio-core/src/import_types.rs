@@ -12,6 +12,7 @@ pub struct ImportedBeatmapSet {
 }
 
 impl ImportedBeatmapSet {
+    #[must_use]
     pub fn resolved_audio_path(&self, beatmap: &ImportedBeatmap) -> Option<&Path> {
         let audio_file = beatmap.metadata.as_ref()?.audio_file.as_ref()?;
 

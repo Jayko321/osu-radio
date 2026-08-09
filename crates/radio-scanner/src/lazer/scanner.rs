@@ -22,8 +22,7 @@ const BUILT_HELPER_PATH: &str = env!("OSU_LAZER_REALM_PARSER_BUILT_PATH");
 /// Set `OSU_LAZER_REALM_PARSER_PATH` at runtime to override the helper built by Cargo.
 pub async fn import_from_lazer_realm(realm_path: &Path) -> Result<Vec<ImportedBeatmapSet>> {
     let helper_path = env::var_os(HELPER_PATH_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(BUILT_HELPER_PATH));
+        .map_or_else(|| PathBuf::from(BUILT_HELPER_PATH), PathBuf::from);
 
     import_from_lazer_realm_with_helper(realm_path, helper_path).await
 }
@@ -111,9 +110,9 @@ pub async fn import_from_lazer_realm_with_helper(
         let detail = stderr.trim();
         if detail.is_empty() {
             bail!("osu!lazer Realm helper exited with {status}");
-        } else {
-            bail!("osu!lazer Realm helper exited with {status}: {detail}");
         }
+
+        bail!("osu!lazer Realm helper exited with {status}: {detail}");
     }
 
     if !stderr.is_empty() {
@@ -147,7 +146,7 @@ pub struct LazerBeatmapScanner {
 
 impl LazerBeatmapScanner {
     pub fn new(path: &Path) -> Self {
-        LazerBeatmapScanner {
+        Self {
             db_path: path.to_path_buf(),
         }
     }

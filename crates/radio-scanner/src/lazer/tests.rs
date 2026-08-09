@@ -28,7 +28,7 @@ fn parses_lazer_beatmap_set_json_into_core_type() {
             .file
             .as_ref()
             .and_then(|file| file.resolved_path.as_deref()),
-        Some(Path::new(r#"C:\osu\files\a\ab\abc"#))
+        Some(Path::new(r"C:\osu\files\a\ab\abc"))
     );
 
     assert_eq!(beatmap_set.beatmaps.len(), 1);
