@@ -4,6 +4,8 @@ use crate::app::{AppEvent, Tab, UiState};
 use crate::assets;
 use crate::views::components::{hspacer, icon, icon_button};
 
+/// The window is undecorated, so this row is the title bar: the empty space in it drags the
+/// window and the trailing group replaces the system minimize/maximize/close buttons.
 pub(crate) fn top_bar(cx: &mut Context, state: UiState) {
     HStack::new(cx, move |cx| {
         nav_tab(cx, state, Tab::Songs, assets::MUSIC, "Songs");
@@ -13,8 +15,21 @@ pub(crate) fn top_bar(cx: &mut Context, state: UiState) {
         server_status(cx, state);
 
         icon_button(cx, assets::STACK);
+        window_controls(cx, state);
     })
-    .class("top-bar");
+    .class("top-bar")
+    // `MouseDown` bubbles, so a press on a child arrives here too; only a press that landed on
+    // the bar itself may start a drag.
+    .on_mouse_down(|cx, button| {
+        if button == MouseButton::Left && cx.hovered() == cx.current() {
+            cx.emit(AppEvent::DragWindow);
+        }
+    })
+    .on_double_click(|cx, button| {
+        if button == MouseButton::Left {
+            cx.emit(AppEvent::ToggleMaximizeWindow);
+        }
+    });
 }
 
 fn nav_tab(cx: &mut Context, state: UiState, tab: Tab, glyph: &'static [u8], text: &'static str) {
@@ -31,6 +46,48 @@ fn server_status(cx: &mut Context, state: UiState) {
     Label::new(cx, state.status)
         .class("server-status")
         .display(state.status.map(|status| !status.is_empty()));
+}
+
+fn window_controls(cx: &mut Context, state: UiState) {
+    HStack::new(cx, move |cx| {
+        window_button(
+            cx,
+            |cx| {
+                icon(cx, assets::MINIMIZE);
+            },
+            |cx| cx.emit(AppEvent::MinimizeWindow),
+        );
+
+        window_button(
+            cx,
+            move |cx| {
+                icon(cx, assets::MAXIMIZE).display(state.maximized.map(|maximized| !*maximized));
+                icon(cx, assets::RESTORE).display(state.maximized);
+            },
+            |cx| cx.emit(AppEvent::ToggleMaximizeWindow),
+        );
+
+        window_button(
+            cx,
+            |cx| {
+                icon(cx, assets::CLOSE);
+            },
+            |cx| cx.emit(AppEvent::CloseWindow),
+        )
+        .class("close");
+    })
+    .class("window-controls");
+}
+
+fn window_button(
+    cx: &mut Context,
+    content: impl Fn(&mut Context) + 'static,
+    action: impl Fn(&mut EventContext) + Send + Sync + 'static,
+) -> Handle<'_, HStack> {
+    HStack::new(cx, content)
+        .class("window-button")
+        .focusable(false)
+        .on_press(action)
 }
 
 pub(crate) fn style() -> CSS {

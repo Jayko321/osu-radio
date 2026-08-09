@@ -13,6 +13,10 @@ pub const STACK: &[u8] = include_bytes!("../assets/icons/stack-line.svg");
 pub const MUSIC: &[u8] = include_bytes!("../assets/icons/music-fill.svg");
 pub const SETTINGS: &[u8] = include_bytes!("../assets/icons/settings-4-line.svg");
 pub const PENCIL: &[u8] = include_bytes!("../assets/icons/pencil-line.svg");
+pub const MINIMIZE: &[u8] = include_bytes!("../assets/icons/subtract-line.svg");
+pub const MAXIMIZE: &[u8] = include_bytes!("../assets/icons/checkbox-blank-line.svg");
+pub const RESTORE: &[u8] = include_bytes!("../assets/icons/file-copy-line.svg");
+pub const CLOSE: &[u8] = include_bytes!("../assets/icons/close-line.svg");
 
 const NUNITO: &[u8] = include_bytes!("../assets/fonts/Nunito-Variable.ttf");
 

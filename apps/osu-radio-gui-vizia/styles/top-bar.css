@@ -5,8 +5,14 @@
     alignment: left;
     gap: 4px;
     padding-left: 22px;
-    padding-right: 20px;
     background-color: #000000;
+}
+
+/* The bar doubles as the title bar, so anything that is not a control has to let the press
+   through to it or that region stops dragging the window. */
+.top-bar > .hspacer,
+.top-bar .server-status {
+    pointer-events: none;
 }
 
 /* A hoverable child becomes the press target and swallows the parent's
@@ -61,4 +67,41 @@
     font-size: 12px;
     font-variation-settings: "wght" 500;
     color: rgba(255, 255, 255, 0.62);
+}
+
+.window-controls {
+    layout-type: row;
+    width: auto;
+    height: 1s;
+    alignment: center;
+    padding-left: 16px;
+}
+
+.window-button > * {
+    pointer-events: none;
+}
+
+.window-button {
+    layout-type: row;
+    width: 46px;
+    height: 1s;
+    alignment: center;
+    background-color: rgba(0, 0, 0, 0);
+}
+
+.window-button svg {
+    size: 16px;
+    opacity: 0.62;
+}
+
+.window-button:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.window-button:hover svg {
+    opacity: 1;
+}
+
+.window-button.close:hover {
+    background-color: #c42b1c;
 }

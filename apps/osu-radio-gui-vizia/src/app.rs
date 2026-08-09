@@ -26,6 +26,7 @@ pub fn run(runtime: Handle) -> Result<(), ApplicationError> {
     })
     .title("osu! radio")
     .inner_size((1440u32, 952u32))
+    .decorations(false)
     .run()
 }
 
@@ -42,6 +43,10 @@ pub struct UiState {
     pub song_query: Signal<String>,
     pub settings_query: Signal<String>,
     pub status: Signal<String>,
+    /// The window is undecorated, so the maximize button toggles this rather than reading the
+    /// real window state, which vizia does not expose. An OS-side maximize (aero snap, Win+Up)
+    /// therefore desyncs it until the button is pressed once more.
+    pub maximized: Signal<bool>,
 }
 
 impl UiState {
@@ -52,6 +57,7 @@ impl UiState {
             song_query: Signal::new(String::new()),
             settings_query: Signal::new(String::new()),
             status: Signal::new("starting the embedded server...".to_owned()),
+            maximized: Signal::new(false),
         }
     }
 }
@@ -68,6 +74,10 @@ pub enum AppEvent {
     Failed(String),
     SelectTab(Tab),
     SelectTrack(usize),
+    DragWindow,
+    MinimizeWindow,
+    ToggleMaximizeWindow,
+    CloseWindow,
 }
 
 impl Model for AppData {
@@ -81,6 +91,14 @@ impl Model for AppData {
             AppEvent::Failed(reason) => self.state.status.set(reason.clone()),
             AppEvent::SelectTab(tab) => self.state.tab.set(*tab),
             AppEvent::SelectTrack(index) => self.state.playing.set(*index),
+            AppEvent::DragWindow => cx.emit(WindowEvent::DragWindow),
+            AppEvent::MinimizeWindow => cx.emit(WindowEvent::SetMinimized(true)),
+            AppEvent::ToggleMaximizeWindow => {
+                let maximized = !self.state.maximized.get();
+                self.state.maximized.set(maximized);
+                cx.emit(WindowEvent::SetMaximized(maximized));
+            }
+            AppEvent::CloseWindow => cx.emit(WindowEvent::WindowClose),
         });
 
         event.map(|window_event, _| {

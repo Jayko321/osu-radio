@@ -3,6 +3,16 @@
     height: 1s;
 }
 
+/* The backdrop and both glows are decoration drawn under everything. They are laid out large
+   and offset enough to reach outside the body, and the hit test picks the last matching view in
+   draw order, so leaving them interactive lets the warm glow steal presses from the title bar
+   above it. */
+.backdrop,
+.glow-warm,
+.glow-cool {
+    pointer-events: none;
+}
+
 .backdrop {
     size: 1s;
     background-size: cover;
