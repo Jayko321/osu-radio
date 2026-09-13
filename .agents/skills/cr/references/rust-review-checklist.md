@@ -1,4 +1,4 @@
-﻿# Rust Review Checklist
+# Rust Review Checklist
 
 Apply this checklist only to changed code, affected surrounding code, and compile-relevant untracked files.
 
@@ -35,7 +35,7 @@ Apply this checklist only to changed code, affected surrounding code, and compil
 ## Unsafe, FFI, and vendored code
 
 - Flag any new `unsafe` unless the safety invariants are local, necessary, and documented.
-- Do not recommend edits under `crates/radio-scanner/vendor/realm-db-reader` unless the user explicitly asked to change vendored code.
+- The current Realm boundary is the repository-owned [C# helper](../../../../tools/osu-lazer-realm-parser/Program.cs) and [Rust reader](../../../../crates/radio-scanner/src/lazer/scanner.rs); review their affected protocol together using the [scanner guide](../../../../docs/agent/scanner.md). Do not assume the obsolete vendored Realm reader still exists.
 
 ## CLI and UX regressions
 

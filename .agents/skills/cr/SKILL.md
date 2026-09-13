@@ -1,4 +1,4 @@
-﻿---
+---
 name: cr
 description: Strict Rust pre-commit code review for repo-local /cr or $cr requests. Use when the user asks Codex to review staged and unstaged changes before commit, produce a timestamped Markdown findings report under docs, check staged and unstaged diffs plus compile-relevant untracked files, and look for panics, resource leaks, async problems, error handling, data loss, race conditions, unsafe code, CLI UX regressions, test gaps, performance pitfalls, and security or privacy issues.
 ---
@@ -11,15 +11,15 @@ Run a strict Rust pre-commit review of this repository's changed code and write 
 
 - Review both staged and unstaged changes.
 - Inspect untracked files when they look needed for compilation, tests, generated modules, Cargo configuration, fixtures, or docs referenced by changed code.
-- Do not modify reviewed source, manifests, lockfiles, generated files, or formatting. The only allowed repository write is the final review report in `docs/`.
+- Do not modify reviewed source, manifests, lockfiles, generated source, or formatting. The only authored repository write is the final review report in `docs/`; ignored build artifacts from the checks below are allowed.
 - Do not run commands that rewrite files, such as `cargo fmt`, `cargo fix`, `cargo clippy --fix`, or code generators.
-- Prefer read-only checks. Commands may write build artifacts under `target/`, but must not update source or `Cargo.lock`; use `--locked` for cargo checks that resolve dependencies.
+- Prefer read-only checks. Commands may write ignored build artifacts under `target/` and the Realm helper's `bin/` and `obj/` directories, but must not update source or `Cargo.lock`; use `--locked` for Cargo checks that resolve dependencies.
 - Treat failed validation commands as review findings when the failure is caused by the changes or by missing compile-relevant untracked files.
 - Output findings only in the report. Do not include a commit-readiness verdict, praise, broad summary, or unrelated cleanup suggestions.
 
 ## Workflow
 
-1. Read `AGENTS.md` before reviewing.
+1. Read [AGENTS.md](../../../AGENTS.md) before reviewing.
 2. Gather repository state:
    - `git status --short`
    - `git diff --cached --name-status`
@@ -30,14 +30,8 @@ Run a strict Rust pre-commit review of this repository's changed code and write 
    - unstaged: `git diff --`
    - if staged and unstaged edit the same file, consider the combined final file state as well as the staged commit content.
 4. Inspect changed files and any relevant surrounding code. Use `rg` and targeted file reads instead of broad exploration.
-5. For Rust changes, read `references/rust-review-checklist.md` and apply it to the diffs.
-6. Run targeted read-only checks when useful, choosing the smallest check that can validate the changed surface:
-   - `cargo fmt --check`
-   - `cargo test -p radio-core --locked`
-   - `cargo test -p radio-scanner --locked`
-   - `cargo test -p osu-radio-cli --locked`
-   - `cargo test --locked` when the change crosses crates or public APIs
-   - `cargo clippy --workspace --all-targets --all-features --locked` for broad Rust risk, especially async, error handling, or public API changes
+5. For Rust changes, read [the Rust review checklist](references/rust-review-checklist.md) and apply it to the diffs.
+6. Run targeted read-only checks when useful, selecting the smallest check from the shared [development verification matrix](../../../docs/agent/development.md#verification-matrix). Use `--locked` for Cargo checks that resolve dependencies. Do not use `--all-features`; the workspace contains incompatible backend features. Compile both server documentation feature states for affected server changes. Do not run broad discovery, real-source imports, or database workflows as routine review checks. Read the affected [component guide](../../../docs/agent/index.md) for source-specific constraints; database contracts are deferred during the rewrite.
 7. Create a report path using local date and time: `docs/code-review-YYYY-MM-DD-HHMMSS.md`.
 8. Write the report as Markdown findings only.
 

@@ -17,9 +17,6 @@ use crate::{BeatmapSetScanner, lazer::types::parse_lazer_beatmap_set_line};
 const HELPER_PATH_ENV: &str = "OSU_LAZER_REALM_PARSER_PATH";
 const BUILT_HELPER_PATH: &str = env!("OSU_LAZER_REALM_PARSER_BUILT_PATH");
 
-/// Runs the bundled osu!lazer Realm extractor and maps its NDJSON output to core types.
-///
-/// Set `OSU_LAZER_REALM_PARSER_PATH` at runtime to override the helper built by Cargo.
 pub async fn import_from_lazer_realm(realm_path: &Path) -> Result<Vec<ImportedBeatmapSet>> {
     let helper_path = env::var_os(HELPER_PATH_ENV)
         .map_or_else(|| PathBuf::from(BUILT_HELPER_PATH), PathBuf::from);
@@ -27,7 +24,6 @@ pub async fn import_from_lazer_realm(realm_path: &Path) -> Result<Vec<ImportedBe
     import_from_lazer_realm_with_helper(realm_path, helper_path).await
 }
 
-/// Runs an explicitly selected osu!lazer Realm extractor and maps its NDJSON output.
 pub async fn import_from_lazer_realm_with_helper(
     realm_path: &Path,
     helper_path: impl AsRef<OsStr>,
@@ -56,8 +52,6 @@ pub async fn import_from_lazer_realm_with_helper(
         .take()
         .context("failed to capture Realm helper stderr")?;
 
-    // Drain stderr concurrently so a verbose failure cannot block the helper while stdout is read.
-    // If helper stderr ever becomes noisy, cap this buffer and return a truncated diagnostic.
     let mut stderr_reader = tokio::spawn(async move {
         let mut message = String::new();
         BufReader::new(stderr)
@@ -68,9 +62,6 @@ pub async fn import_from_lazer_realm_with_helper(
     });
 
     let mut lines = BufReader::new(stdout).lines();
-    // This importer currently materializes the full lazer library for its callers. If large
-    // libraries make this too expensive, change this boundary to stream records to a callback or
-    // async stream instead of returning one Vec.
     let mut beatmap_sets = Vec::new();
 
     loop {
