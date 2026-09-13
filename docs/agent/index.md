@@ -45,7 +45,6 @@ arrows show intended future capabilities; they are not implemented paths.
 ```mermaid
 flowchart LR
     GUI["Vizia GUI: views, signals, events"] --> Client["Toolkit-free client: session, HTTP, view models"]
-    Sample["GUI sample data"] --> GUI
     Client -->|"HTTP; supervises child today"| Server["Backend: routes and services"]
     Server --> Services["radio-services: model services and transactions"]
     Services -->|"folder discovery"| Scanner["Scanner: discovery and source readers"]
@@ -80,11 +79,11 @@ Tests and their limits are linked in the component guides.
 | Local audio file resolution | Implemented as references | [Helper](../../tools/osu-lazer-realm-parser/Program.cs); resolving a path is not playback or serving audio. |
 | Client session, child supervision, HTTP wrappers | Implemented | [Frontend](frontend.md), [backend](backend.md); readiness output is a protocol, see backend API contracts. |
 | Optional OpenAPI/Scalar build | Implemented | [Backend](backend.md); both documentation feature states need verification. |
-| Songs/settings tabs, sample selection, window actions | Implemented UI bindings | [Frontend interaction table](frontend.md#implemented-interactions-and-placeholders). Source binding is not cross-platform interaction validation. |
+| Songs/settings tabs, library selection, window actions | Implemented UI bindings | [Frontend interaction table](frontend.md#implemented-interactions-and-placeholders). Source binding is not cross-platform interaction validation. |
 | Search inputs | Partial | Text/query state and separate placeholders work in source; no filtering is wired. |
-| Library, settings and now-playing content | Placeholder | [sample.rs](../../apps/osu-radio-gui-vizia/src/sample.rs); fetched data does not populate the views. |
-| Transport, seeking, volume, settings pickers | Placeholder | [Frontend](frontend.md); visual controls, no playback engine or device selection wired. |
-| End-to-end local music playback | Product goal | Not implemented by selecting a sample track. |
+| Library and folder settings | Implemented | [Frontend](frontend.md); server rows, bounded artwork loading, optional durations, folder dropdown and native chooser registration. Selection is presentation only. |
+| Transport, seeking, volume, output-device settings | Placeholder | [Frontend](frontend.md); visual controls, no playback engine or device selection wired. |
+| End-to-end local music playback | Product goal | Not implemented by selecting a track. |
 | Hosted sources | Future direction | Provider, protocol and hosting remain undecided. |
 | Database repositories and complete snapshot replacement | Implemented | [Database](database.md); SQLite default, PostgreSQL alternative, explicit reset for legacy databases. |
 

@@ -250,6 +250,7 @@ async fn repository_transaction_contracts(database: &Database) {
             &imported[0].beatmaps[0],
             Some(metadata.hash.clone()),
             Some(audio.id),
+            None,
         )
         .await
         .unwrap();
@@ -304,4 +305,31 @@ async fn repository_transaction_contracts(database: &Database) {
     database.beatmap_metadata().cleanup().await.unwrap();
     database.audio_sources().cleanup().await.unwrap();
     assert_counts(database, [0, 0, 0, 0]).await;
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn background_migration_preserves_existing_rows() {
+    use sea_orm_migration::MigratorTrait;
+    let database = Database::connect(":memory:").await.unwrap();
+    crate::migrations::Migrator::up(&database.connection, Some(1))
+        .await
+        .unwrap();
+    sql(&database, "INSERT INTO osu_installations (kind, root_path, marker_path, enabled, user_data_id) VALUES ('lazer', '/osu', '/osu/client.realm', 1, 1)").await;
+    sql(
+        &database,
+        "INSERT INTO beatmap_sets (installation_id) VALUES (1)",
+    )
+    .await;
+    sql(
+        &database,
+        "INSERT INTO beatmaps (beatmap_set_id, difficulty_name) VALUES (1, 'Easy')",
+    )
+    .await;
+    database.migrate().await.unwrap();
+    let map = database.beatmaps().get(1).await.unwrap().unwrap();
+    assert_eq!(map.difficulty_name.as_deref(), Some("Easy"));
+    assert_eq!(map.background_path, None);
+    database.migrate().await.unwrap();
+    assert_eq!(database.beatmaps().get(1).await.unwrap(), Some(map));
 }

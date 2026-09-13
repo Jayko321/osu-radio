@@ -8,6 +8,8 @@ pub struct BeatmapSet {
     pub online_id: Option<i32>,
     pub hash: Option<String>,
     pub audio_sources: Vec<AudioSource>,
+    #[serde(default)]
+    pub beatmaps: Vec<BeatmapDetails>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -124,4 +126,20 @@ mod tests {
         assert_eq!(untouched, r#"{"enabled":false}"#);
         assert_eq!(cleared, r#"{"label":null}"#);
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+pub struct BeatmapDetails {
+    pub id: i32,
+    pub audio_source_id: Option<i32>,
+    pub difficulty_name: Option<String>,
+    pub title: Option<String>,
+    pub title_unicode: Option<String>,
+    pub artist: Option<String>,
+    pub artist_unicode: Option<String>,
+    pub has_cover: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct AudioDuration {
+    pub duration_ms: Option<u64>,
 }

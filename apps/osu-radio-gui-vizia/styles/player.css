@@ -2,26 +2,31 @@
     layout-type: column;
     width: 1s;
     height: 1s;
-    padding-left: 138px;
-    padding-right: 172px;
-    padding-top: 169px;
     padding-bottom: 52px;
 }
 
+.artwork-region {
+    width: 1s;
+    height: 1s;
+    alignment: center;
+}
+
 .cover {
-    width: 340px;
-    height: 340px;
-    left: 1s;
-    right: 1s;
     corner-radius: 12px;
-    background-size: cover;
     shadow: 0px 0px 12px rgba(0, 0, 0, 0.32);
+}
+
+.player-info {
+    width: 1s;
+    height: 173px;
 }
 
 .now-title {
     width: 1s;
-    height: auto;
+    height: 38px;
+    text-wrap: false;
     font-size: 28px;
+    font-weight: 800;
     font-variation-settings: "wght" 800;
     color: #ffffff;
     text-overflow: ellipsis;
@@ -29,8 +34,11 @@
 
 .now-artist {
     width: 1s;
-    height: auto;
+    height: 27px;
+    text-wrap: false;
+    text-overflow: ellipsis;
     font-size: 20px;
+    font-weight: 600;
     font-variation-settings: "wght" 600;
     color: #ffffff;
 }
@@ -57,7 +65,9 @@
 }
 
 .progress-knob {
-    left: 80.3%;
+    left: 100%;
+    top: -5px;
+    translate: -8px 0px;
     width: 16px;
     height: 16px;
     corner-radius: 50%;
@@ -74,6 +84,7 @@
     width: auto;
     height: auto;
     font-size: 12px;
+    font-weight: 400;
     font-variation-settings: "wght" 400;
     color: rgba(255, 255, 255, 0.82);
 }

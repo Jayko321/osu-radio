@@ -168,8 +168,17 @@ impl OsuInstallationService<'_> {
                     }
                     None => None,
                 };
-                maps.add(set.id, imported_beatmap, metadata_hash, audio_id)
-                    .await?;
+                let background_path = imported_set
+                    .resolved_background_path(imported_beatmap)
+                    .map(|path| path.to_string_lossy().into_owned());
+                maps.add(
+                    set.id,
+                    imported_beatmap,
+                    metadata_hash,
+                    audio_id,
+                    background_path,
+                )
+                .await?;
             }
             summary.beatmaps = summary.beatmaps.saturating_add(imported_set.beatmaps.len());
         }

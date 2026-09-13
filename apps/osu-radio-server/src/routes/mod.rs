@@ -1,4 +1,5 @@
 pub(crate) mod beatmap_sets;
+pub(crate) mod media;
 pub(crate) mod user_data;
 
 use axum::Router;
@@ -11,6 +12,8 @@ pub(crate) fn router(state: AppState) -> Router {
     use axum::routing::{get, patch};
 
     Router::new()
+        .route("/api/beatmaps/{id}/cover", get(media::cover))
+        .route("/api/audio-sources/{id}/duration", get(media::duration))
         .route("/api/beatmap-sets", get(beatmap_sets::list_beatmap_sets))
         .route("/api/user-data", get(user_data::get_user_data))
         .route(
@@ -34,6 +37,8 @@ pub(crate) fn router(state: AppState) -> Router {
 
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(beatmap_sets::list_beatmap_sets))
+        .routes(routes!(media::cover))
+        .routes(routes!(media::duration))
         .routes(routes!(user_data::get_user_data))
         .routes(routes!(
             user_data::list_osu_folders,

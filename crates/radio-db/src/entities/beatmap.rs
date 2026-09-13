@@ -10,6 +10,7 @@ pub struct Model {
     pub hash: Option<String>,
     pub beatmap_set_id: i32,
     pub metadata_hash: Option<String>,
+    pub background_path: Option<String>,
     pub audio_source_id: Option<i32>,
 }
 

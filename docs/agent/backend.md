@@ -129,12 +129,27 @@ continues to use its own [API DTOs](../../crates/osu-radio-client/src/api.rs).
 
 | Route | Response and behavior |
 | --- | --- |
-| `GET /api/beatmap-sets` | Array of `{id, online_id, hash, audio_sources}`. Each audio source has `{id, kind, location}`; distinct sources per set, empty arrays allowed. |
+| `GET /api/beatmap-sets` | Array of `{id, online_id, hash, audio_sources, beatmaps}`. Each audio source has `{id, kind, location}`; distinct sources per set, empty arrays allowed. |
+| `GET /api/beatmaps/{id}/cover` | Stored background reference bytes, at most 16 MiB; absent/unreadable/oversized cover is 404. No path parameter or caller-supplied filesystem location. |
+| `GET /api/audio-sources/{id}/duration` | `{duration_ms}` with nullable duration; absent audio ID is 404, missing/corrupt/unsupported media is null. Local/copied sources only. |
 | `GET /api/user-data` | `{id, osu_folders}` with singleton `id = 1`. |
 | `GET /api/user-data/osu-folders` | Folder array, including disabled entries. |
 | `POST /api/user-data/osu-folders` | Body `{path, label?}`. Discovery validates an absolute path. New folder: 201; duplicate marker: 409 with the existing folder body, leaving its label unchanged. Invalid/ambiguous folder: 400. |
 | `PATCH /api/user-data/osu-folders/{id}` | Optional `label` and `enabled`; 200 with folder, or 404. Omitted fields remain unchanged; explicit null clears label. Supplied non-null labels are trimmed by the service. |
 | `DELETE /api/user-data/osu-folders/{id}` | 204 when removed, 404 when absent. Transactional cascade and shared cleanup; no file deletion. |
+
+Each `beatmaps` entry adds `id`, `audio_source_id`, `difficulty_name`, `title`,
+`title_unicode`, `artist`, `artist_unicode`, and `has_cover`. Cover availability
+means a stored reference exists, not that the file is currently readable. The
+single repository aggregate joins difficulties and metadata while retaining a
+distinct, ID-ordered audio-source list per set. Existing fields remain unchanged.
+
+[Media handlers](../../apps/osu-radio-server/src/routes/media.rs) resolve IDs through
+services, then use `spawn_blocking` for filesystem reads and Lofty probing. Lofty
+sniffs contents rather than extensions and disables tag reading, supporting lazer
+hash filenames. Files stay in place. Expected media failures yield neutral UI
+states; unexpected database/task failures retain the safe 500 boundary. Both
+router/documentation feature variants register both endpoints.
 
 Folder JSON fields remain `id`, `kind`, `root_path`, `marker_path`, `label`,
 `enabled`, and `last_scanned_at`. Unexpected failures retain the safe 500 error

@@ -26,13 +26,18 @@
     width: auto;
     height: auto;
     font-size: 16px;
+    font-weight: 800;
     font-variation-settings: "wght" 800;
     color: #ffffff;
 }
 
 /* A hoverable child becomes the press target and swallows the parent's
    `on_press`, so anything clickable keeps its contents inert. */
-.field-box > * {
+.folder-trigger-content,
+.folder-trigger-content *,
+.folder-option > *,
+.folder-add > *,
+.settings-retry > * {
     pointer-events: none;
 }
 
@@ -47,14 +52,29 @@
     width: 1s;
     height: auto;
     font-size: 14px;
+    font-weight: 700;
     font-variation-settings: "wght" 700;
     color: rgba(255, 255, 255, 0.82);
 }
 
-.field-box {
+.folder-picker-row {
+    width: 1s;
+    height: 44px;
+    gap: 8px;
+    alignment: center;
+}
+
+.folder-dropdown {
+    width: 1s;
+    min-width: 0px;
+    height: 44px;
+}
+
+.folder-trigger {
     layout-type: row;
     width: 1s;
-    height: auto;
+    min-width: 0px;
+    height: 44px;
     alignment: center;
     padding-left: 16px;
     padding-right: 16px;
@@ -62,16 +82,117 @@
     padding-bottom: 10px;
     corner-radius: 8px;
     background-color: #292929;
+    border-width: 0px;
 }
 
-.field-box label {
+.folder-trigger-content {
     width: 1s;
+    min-width: 0px;
+    height: 24px;
+    gap: 8px;
+    alignment: center;
+}
+
+.folder-name,
+.folder-option-text {
+    width: 1s;
+    min-width: 0px;
     height: auto;
     font-size: 16px;
+    font-weight: 400;
     font-variation-settings: "wght" 400;
     color: #ffffff;
 }
 
-.field-box.pickable:hover {
+.folder-name {
+    height: 24px;
+    text-wrap: false;
+    text-overflow: ellipsis;
+}
+
+.folder-trigger:hover,
+.folder-option:hover {
     background-color: #333333;
 }
+
+.section-header .icon,
+.folder-trigger .icon {
+    size: 24px;
+}
+
+.folder-add {
+    width: 40px;
+    height: 40px;
+    padding: 0px;
+    alignment: center;
+    corner-radius: 8px;
+    border: 1px solid rgba(242, 244, 252, 0.1);
+    background-color: transparent;
+}
+
+.folder-add .icon {
+    size: 20px;
+}
+
+.folder-add:hover {
+    background-color: rgba(255, 255, 255, 0.04);
+}
+
+.folder-trigger:disabled,
+.folder-add:disabled {
+    opacity: 0.5;
+}
+
+.folder-dropdown popup {
+    width: 100%;
+    height: auto;
+    padding: 4px;
+    corner-radius: 8px;
+    background-color: #292929;
+}
+
+.folder-popup {
+    width: 1s;
+    height: auto;
+    max-height: 320px;
+}
+
+.folder-options {
+    width: 1s;
+    height: auto;
+    gap: 4px;
+    padding: 0px;
+}
+
+.folder-option {
+    width: 1s;
+    height: auto;
+    min-height: 44px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    padding-left: 12px;
+    padding-right: 12px;
+    border-width: 0px;
+    corner-radius: 4px;
+    background-color: transparent;
+}
+
+.folder-option:checked {
+    background-color: #393939;
+}
+
+.folder-option-text,
+.folder-tooltip-text {
+    text-wrap: true;
+}
+
+.folder-tooltip-text {
+    width: 360px;
+    height: auto;
+}
+
+.settings-retry {
+    width: auto;
+}
+
+.load-message { width: 1s; height: auto; text-wrap: true; font-size: 14px; }

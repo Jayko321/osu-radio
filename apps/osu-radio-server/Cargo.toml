@@ -17,6 +17,7 @@ docs = ["dep:utoipa", "dep:utoipa-axum", "dep:utoipa-scalar"]
 anyhow.workspace = true
 axum = { version = "0.8" }
 dotenvy.workspace = true
+lofty = "0.25.1"
 radio-core = { path = "../../crates/radio-core/" }
 radio-services = { path = "../../crates/radio-services/", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }

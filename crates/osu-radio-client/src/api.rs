@@ -15,7 +15,10 @@ pub struct ApiClient {
 
 impl ApiClient {
     pub fn new(base_url: impl Into<String>) -> Result<Self, ApiError> {
-        let http = Client::builder().build().map_err(ApiError::Transport)?;
+        let http = Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(ApiError::Transport)?;
 
         Ok(Self {
             base_url: base_url.into().trim_end_matches('/').to_owned(),
@@ -30,6 +33,41 @@ impl ApiClient {
 
     pub async fn beatmap_sets(&self) -> Result<Vec<BeatmapSet>, ApiError> {
         self.get("/api/beatmap-sets").await
+    }
+
+    pub async fn audio_duration(&self, id: i32) -> Result<crate::models::AudioDuration, ApiError> {
+        self.get(&format!("/api/audio-sources/{id}/duration")).await
+    }
+
+    pub async fn cover(&self, id: i32) -> Result<Option<Vec<u8>>, ApiError> {
+        const LIMIT: usize = 16 * 1024 * 1024;
+        let path = format!("/api/beatmaps/{id}/cover");
+        let mut response = self
+            .http
+            .get(self.url(&path))
+            .send()
+            .await
+            .map_err(ApiError::Transport)?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(Self::failure(&path, response).await);
+        }
+        if response
+            .content_length()
+            .is_some_and(|size| size > 16 * 1024 * 1024)
+        {
+            return Ok(None);
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(ApiError::Transport)? {
+            if bytes.len().saturating_add(chunk.len()) > LIMIT {
+                return Ok(None);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(Some(bytes))
     }
 
     pub async fn user_data(&self) -> Result<UserData, ApiError> {

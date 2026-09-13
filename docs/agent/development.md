@@ -176,7 +176,7 @@ validation. Check the affected interactions using the [GUI skill](../../.agents/
 
 The ignored [embedded-server test](../../crates/osu-radio-client/tests/embedded_server.rs)
 also launches a real server and exercises database-backed requests. It is not a
-replacement for the isolated readiness parser tests; it requires its own isolated runtime environment.
+replacement for the isolated readiness parser tests; it creates its own temporary SQLite database and `.env`, and requires a built SQLite server. Run with `env -u SQLITE_DATABASE_URL -u POSTGRES_DATABASE_URL cargo test -p osu-radio-client --test embedded_server --locked -- --ignored`. It covers registration, duplicates, label clearing, enabled edits, deletion, media route registration and restart persistence.
 
 ## Troubleshooting and limits
 

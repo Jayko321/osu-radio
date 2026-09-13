@@ -17,6 +17,7 @@ impl BeatmapRepository<'_> {
         imported: &ImportedBeatmap,
         metadata_hash: Option<String>,
         audio_source_id: Option<i32>,
+        background_path: Option<String>,
     ) -> Result<Beatmap> {
         insert(
             &self.connection,
@@ -24,6 +25,7 @@ impl BeatmapRepository<'_> {
             imported,
             metadata_hash,
             audio_source_id,
+            background_path,
         )
         .await
     }
@@ -53,6 +55,7 @@ async fn insert(
     imported: &ImportedBeatmap,
     metadata_hash: Option<String>,
     audio_source_id: Option<i32>,
+    background_path: Option<String>,
 ) -> Result<Beatmap> {
     Ok(into_model(
         beatmap::ActiveModel {
@@ -62,6 +65,7 @@ async fn insert(
             beatmap_set_id: Set(set_id),
             metadata_hash: Set(metadata_hash),
             audio_source_id: Set(audio_source_id),
+            background_path: Set(background_path),
             ..Default::default()
         }
         .insert(connection)
@@ -78,5 +82,6 @@ fn into_model(value: beatmap::Model) -> Beatmap {
         beatmap_set_id: value.beatmap_set_id,
         metadata_hash: value.metadata_hash,
         audio_source_id: value.audio_source_id,
+        background_path: value.background_path,
     }
 }

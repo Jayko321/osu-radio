@@ -1,0 +1,32 @@
+use sea_orm_migration::prelude::*;
+
+#[derive(DeriveMigrationName)]
+pub struct Migration;
+
+#[async_trait::async_trait]
+impl MigrationTrait for Migration {
+    fn use_transaction(&self) -> Option<bool> {
+        Some(true)
+    }
+    async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .alter_table(
+                Table::alter()
+                    .table(Alias::new("beatmaps"))
+                    .add_column(ColumnDef::new(Alias::new("background_path")).text().null())
+                    .to_owned(),
+            )
+            .await
+    }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .alter_table(
+                Table::alter()
+                    .table(Alias::new("beatmaps"))
+                    .drop_column(Alias::new("background_path"))
+                    .to_owned(),
+            )
+            .await
+    }
+}

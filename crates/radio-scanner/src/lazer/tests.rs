@@ -55,6 +55,21 @@ fn parses_lazer_beatmap_set_json_into_core_type() {
 }
 
 #[test]
+fn resolves_audio_and_background_by_exact_named_file_usage() {
+    let set = parse_lazer_beatmap_set_line(r#"{"source":"Lazer","files":[{"filename":"audio.mp3","file":{"resolved_path":"/files/audio-hash"}},{"filename":"bg.jpg","file":{"resolved_path":"/files/background-hash"}},{"filename":"bg.jpg","file":{"resolved_path":"/files/later-match"}}],"beatmaps":[{"metadata":{"audio_file":"audio.mp3","background_file":"bg.jpg"}},{"metadata":{"background_file":"BG.jpg"}},{"metadata":null}]}"#).unwrap();
+    assert_eq!(
+        set.resolved_audio_path(&set.beatmaps[0]),
+        Some(Path::new("/files/audio-hash"))
+    );
+    assert_eq!(
+        set.resolved_background_path(&set.beatmaps[0]),
+        Some(Path::new("/files/background-hash"))
+    );
+    assert_eq!(set.resolved_background_path(&set.beatmaps[1]), None);
+    assert_eq!(set.resolved_background_path(&set.beatmaps[2]), None);
+}
+
+#[test]
 fn rejects_beatmap_first_json() {
     let error = parse_lazer_beatmap_set_line(
         r#"{"source":"Lazer","difficulty_name":"Hard","beatmap_set":{"online_id":123}}"#,

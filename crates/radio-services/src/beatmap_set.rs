@@ -1,13 +1,8 @@
-use crate::model::{AudioSource, BeatmapSet};
+use crate::model::BeatmapSet;
+pub use crate::model::BeatmapSetWithAudio;
 use anyhow::{Context, Result};
 use radio_core::import_types::ImportedBeatmapSet;
 use radio_db::repositories::BeatmapSetRepository;
-
-#[derive(Debug)]
-pub struct BeatmapSetWithAudio {
-    pub beatmap_set: BeatmapSet,
-    pub audio_sources: Vec<AudioSource>,
-}
 
 pub struct BeatmapSetService<'a> {
     pub(crate) repository: BeatmapSetRepository<'a>,
@@ -20,17 +15,10 @@ impl BeatmapSetService<'_> {
         self.repository.for_installation(id).await
     }
     pub async fn all_with_audio_sources(&self) -> Result<Vec<BeatmapSetWithAudio>> {
-        Ok(self
-            .repository
+        self.repository
             .all_with_audio_sources()
             .await
-            .context("Failed to load beatmap sets with their audio sources")?
-            .into_iter()
-            .map(|(beatmap_set, audio_sources)| BeatmapSetWithAudio {
-                beatmap_set,
-                audio_sources,
-            })
-            .collect())
+            .context("Failed to load beatmap sets with their audio sources")
     }
     pub(crate) async fn add(
         &self,

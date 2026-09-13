@@ -21,7 +21,7 @@ The confirmed product direction is desktop music playback from local osu! instal
 | Helper build integration | [`build.rs`](../../crates/radio-scanner/build.rs), [helper project](../../tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj) | Build-time executable selection; helper targets .NET 8. |
 | CLI presentation and selection | [`scan.rs`](../../apps/osu-radio-cli/src/commands/scan.rs), [`import.rs`](../../apps/osu-radio-cli/src/commands/import.rs), [`helpers.rs`](../../apps/osu-radio-cli/src/commands/helpers.rs), [`types.rs`](../../apps/osu-radio-cli/src/types.rs) | Keep reusable discovery and import logic in the crates. |
 
-Discovery is also used for backend folder inspection in [`services/user_data.rs`](../../apps/osu-radio-server/src/services/user_data.rs). Changes to candidate selection can affect that caller even without importing anything. Its database-dependent behavior is outside this guide.
+Discovery is also used for backend folder inspection in [installation service](../../crates/radio-services/src/osu_installation.rs). Changes to candidate selection can affect that caller even without importing anything. Its database-dependent behavior is outside this guide.
 
 ## Domain and audio references
 
@@ -31,7 +31,7 @@ Discovery is also used for backend folder inspection in [`services/user_data.rs`
 
 The C# helper constructs each file reference as `<realm-parent>/files/<first hash character>/<first two hash characters>/<hash>`. A missing or shorter-than-two-character hash gives no resolved path. This is path construction, not an existence or readability check.
 
-`ImportedBeatmapSet::resolved_audio_path` matches `metadata.audio_file` against a named file usage's `filename` and returns its `file.resolved_path`. The match is exact and the first matching usage wins; absent metadata, audio filename, file, or path yields `None`. This pure lookup does not inspect the disk. The CLI's `resolved` audio status therefore means a reference was supplied, not that playback succeeded. Preserve references to the original source files; copying audio is not scanner work.
+`ImportedBeatmapSet::resolved_audio_path` matches `metadata.audio_file` against a named file usage's `filename` and returns its `file.resolved_path`. The match is exact and the first matching usage wins; absent metadata, audio filename, file, or path yields `None`. `resolved_background_path` performs the same exact first-match lookup for `metadata.background_file`. Both reuse a private named-file resolver. These pure lookups do not inspect the disk. The CLI's `resolved` audio status therefore means a reference was supplied, not that playback succeeded. Preserve references to the original source files; copying audio is not scanner work.
 
 ## Discovery tiers and constraints
 

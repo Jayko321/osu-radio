@@ -13,12 +13,9 @@
 
 .icon {
     size: 24px;
+    fill: transparent;
 }
 
 .hspacer {
     width: 1s;
-}
-
-.vspacer {
-    height: 1s;
 }

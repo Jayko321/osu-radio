@@ -19,9 +19,16 @@ impl BeatmapService<'_> {
         imported: &ImportedBeatmap,
         metadata_hash: Option<String>,
         audio_source_id: Option<i32>,
+        background_path: Option<String>,
     ) -> Result<Beatmap> {
         self.repository
-            .insert(set_id, imported, metadata_hash, audio_source_id)
+            .insert(
+                set_id,
+                imported,
+                metadata_hash,
+                audio_source_id,
+                background_path,
+            )
             .await
     }
 }

@@ -3,9 +3,8 @@
     height: 1s;
 }
 
-.track-list scroll-content {
-    gap: 16px;
-}
+.track-row { width: 1s; padding-bottom: 16px; }
+.track-list list-item { padding: 0px; }
 
 /* A hoverable child becomes the press target and swallows the parent's
    `on_press`, so anything clickable keeps its contents inert. */
@@ -17,19 +16,18 @@
     width: 1s;
     height: 90px;
     corner-radius: 8px;
-    background-size: cover;
-    opacity: 0.62;
 }
 
 .track-card:hover {
-    opacity: 0.82;
+    outline: 1px solid rgba(255, 255, 255, 0.25);
 }
 
-.track-card.playing {
-    opacity: 1;
+.track-card.playing .track-card-border {
     border: 1px solid #79d9d9;
 }
 
+.track-card-border,
+.track-card-artwork,
 .track-card-tint {
     size: 1s;
     corner-radius: 8px;
@@ -45,34 +43,39 @@
 }
 
 .track-card-title {
-    width: auto;
-    height: auto;
+    width: 1s;
+    height: 30px;
+    text-wrap: false;
     font-size: 22px;
+    font-weight: 800;
     font-variation-settings: "wght" 800;
     color: #ffffff;
     text-overflow: ellipsis;
 }
 
 .track-card-meta {
-    width: auto;
-    height: auto;
+    width: 1s;
+    height: 22px;
+    text-wrap: false;
+    text-overflow: ellipsis;
     font-size: 16px;
+    font-weight: 500;
     font-variation-settings: "wght" 500;
     color: #ffffff;
 }
 
 .tint-navy {
-    background-image: linear-gradient(to right, rgba(4, 6, 26, 0.75) 41.5%, rgba(4, 6, 26, 0) 100%);
+    background-image: linear-gradient(to right, rgba(4, 6, 26, 0.92) 41.5%, rgba(4, 6, 26, 0) 100%);
 }
 
 .tint-olive {
-    background-image: linear-gradient(to right, rgba(26, 24, 4, 0.75) 41.5%, rgba(26, 24, 4, 0) 100%);
+    background-image: linear-gradient(to right, rgba(26, 24, 4, 0.92) 41.5%, rgba(26, 24, 4, 0) 100%);
 }
 
 .tint-plum {
-    background-image: linear-gradient(to right, rgba(26, 4, 21, 0.75) 41.5%, rgba(26, 4, 21, 0) 100%);
+    background-image: linear-gradient(to right, rgba(26, 4, 21, 0.82) 0%, rgba(26, 4, 21, 0) 100%);
 }
 
 .tint-maroon {
-    background-image: linear-gradient(to right, rgba(26, 4, 4, 0.82) 0%, rgba(26, 4, 4, 0.06) 100%);
+    background-image: linear-gradient(to right, rgba(26, 4, 4, 0.92) 41.5%, rgba(26, 4, 4, 0) 100%);
 }

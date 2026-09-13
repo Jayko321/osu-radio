@@ -1,6 +1,5 @@
 pub(crate) mod app;
 pub(crate) mod assets;
-pub(crate) mod sample;
 pub(crate) mod views;
 
 use std::process::ExitCode;

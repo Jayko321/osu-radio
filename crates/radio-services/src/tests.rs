@@ -149,13 +149,22 @@ fn snapshot(title: &str, path: &str) -> Vec<ImportedBeatmapSet> {
         source: OsuKind::Lazer,
         online_id: Some(23),
         hash: Some(format!("set-{title}")),
-        files: vec![RealmNamedFileUsage {
-            filename: Some("audio.mp3".to_owned()),
-            file: Some(RealmFile {
-                hash: Some("file-hash".to_owned()),
-                resolved_path: Some(path.into()),
-            }),
-        }],
+        files: vec![
+            RealmNamedFileUsage {
+                filename: Some("audio.mp3".to_owned()),
+                file: Some(RealmFile {
+                    hash: Some("file-hash".to_owned()),
+                    resolved_path: Some(path.into()),
+                }),
+            },
+            RealmNamedFileUsage {
+                filename: Some("bg.jpg".to_owned()),
+                file: Some(RealmFile {
+                    hash: None,
+                    resolved_path: Some(format!("{path}.jpg").into()),
+                }),
+            },
+        ],
         beatmaps: ["Easy", "Hard"]
             .into_iter()
             .map(|difficulty| ImportedBeatmap {
@@ -523,6 +532,7 @@ async fn snapshots_and_cleanup(database: &TestDatabase, other_pool: &TestDatabas
     database.osu_installations().delete(no_audio).await.unwrap();
 }
 
+#[allow(clippy::too_many_lines)] // Check the complete rollback contract together.
 async fn rollback_preserves_snapshot(database: &TestDatabase) {
     let installation = register(database, "rollback").await;
     database
@@ -551,6 +561,10 @@ async fn rollback_preserves_snapshot(database: &TestDatabase) {
         .get(old_maps[0].audio_source_id.unwrap())
         .await
         .unwrap();
+    assert_eq!(
+        old_maps[0].background_path.as_deref(),
+        Some("/audio/old.mp3.jpg")
+    );
     install_failure_trigger(database).await;
     let mut replacement = snapshot("Failed", "/audio/failed.mp3");
     replacement[0].beatmaps[1].difficulty_name = Some("FAIL_IMPORT".to_owned());

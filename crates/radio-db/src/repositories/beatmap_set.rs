@@ -9,8 +9,8 @@ use sea_orm::{
 };
 
 use crate::{
-    entities::{audio_source, beatmap, beatmap_set},
-    model::{AudioSource, BeatmapSet, SourceType},
+    entities::{audio_source, beatmap, beatmap_metadata, beatmap_set},
+    model::{AudioSource, BeatmapDetails, BeatmapSet, BeatmapSetWithAudio, SourceType},
 };
 
 pub struct BeatmapSetRepository<'a> {
@@ -47,14 +47,15 @@ impl BeatmapSetRepository<'_> {
             .collect())
     }
 
-    pub async fn all_with_audio_sources(&self) -> Result<Vec<(BeatmapSet, Vec<AudioSource>)>> {
+    #[allow(clippy::too_many_lines)] // Keep the snapshot-consistent aggregate query together.
+    pub async fn all_with_audio_sources(&self) -> Result<Vec<BeatmapSetWithAudio>> {
         use audio_source::Column as Audio;
         use beatmap::Column as Map;
+        use beatmap_metadata::Column as Meta;
         use beatmap_set::Column as SetColumn;
 
         // One query gives the entire aggregate a consistent database snapshot.
         let query = Query::select()
-            .distinct()
             .columns([
                 (beatmap_set::Entity, SetColumn::Id),
                 (beatmap_set::Entity, SetColumn::OnlineId),
@@ -73,6 +74,21 @@ impl BeatmapSetRepository<'_> {
                 Expr::col((audio_source::Entity, Audio::Location)),
                 Alias::new("audio_location"),
             )
+            .expr_as(Expr::col((beatmap::Entity, Map::Id)), Alias::new("map_id"))
+            .expr_as(
+                Expr::col((beatmap::Entity, Map::DifficultyName)),
+                Alias::new("difficulty_name"),
+            )
+            .expr_as(
+                Expr::col((beatmap::Entity, Map::BackgroundPath)),
+                Alias::new("background_path"),
+            )
+            .columns([
+                (beatmap_metadata::Entity, Meta::Title),
+                (beatmap_metadata::Entity, Meta::TitleUnicode),
+                (beatmap_metadata::Entity, Meta::Artist),
+                (beatmap_metadata::Entity, Meta::ArtistUnicode),
+            ])
             .from(beatmap_set::Entity)
             .left_join(
                 beatmap::Entity,
@@ -84,34 +100,53 @@ impl BeatmapSetRepository<'_> {
                 Expr::col((beatmap::Entity, Map::AudioSourceId))
                     .equals((audio_source::Entity, Audio::Id)),
             )
+            .left_join(
+                beatmap_metadata::Entity,
+                Expr::col((beatmap::Entity, Map::MetadataHash))
+                    .equals((beatmap_metadata::Entity, Meta::Hash)),
+            )
             .order_by((beatmap_set::Entity, SetColumn::Id), Order::Asc)
             .order_by((audio_source::Entity, Audio::Id), Order::Asc)
+            .order_by((beatmap::Entity, Map::Id), Order::Asc)
             .to_owned();
         let rows =
             SetWithAudio::find_by_statement(self.connection.get_database_backend().build(&query))
                 .all(&self.connection)
                 .await?;
-        let mut sets = BTreeMap::<i32, (BeatmapSet, Vec<AudioSource>)>::new();
+        let mut sets = BTreeMap::<i32, BeatmapSetWithAudio>::new();
         for row in rows {
-            let (_, audio_sources) = sets.entry(row.id).or_insert_with(|| {
-                (
-                    BeatmapSet {
-                        id: row.id,
-                        online_id: row.online_id,
-                        hash: row.hash,
-                        installation_id: row.installation_id,
-                    },
-                    Vec::new(),
-                )
+            let set = sets.entry(row.id).or_insert_with(|| BeatmapSetWithAudio {
+                beatmap_set: BeatmapSet {
+                    id: row.id,
+                    online_id: row.online_id,
+                    hash: row.hash,
+                    installation_id: row.installation_id,
+                },
+                audio_sources: Vec::new(),
+                beatmaps: Vec::new(),
             });
-            if let Some(id) = row.audio_id {
-                audio_sources.push(AudioSource {
+            if let Some(id) = row.audio_id
+                && set.audio_sources.last().is_none_or(|audio| audio.id != id)
+            {
+                set.audio_sources.push(AudioSource {
                     id,
                     s_type: SourceType::from_parts(
                         &row.audio_kind.context("joined audio source has no kind")?,
                         row.audio_location
                             .context("joined audio source has no location")?,
                     )?,
+                });
+            }
+            if let Some(id) = row.map_id {
+                set.beatmaps.push(BeatmapDetails {
+                    id,
+                    audio_source_id: row.audio_id,
+                    difficulty_name: row.difficulty_name,
+                    title: row.title,
+                    title_unicode: row.title_unicode,
+                    artist: row.artist,
+                    artist_unicode: row.artist_unicode,
+                    has_cover: row.background_path.is_some(),
                 });
             }
         }
@@ -128,6 +163,13 @@ struct SetWithAudio {
     audio_id: Option<i32>,
     audio_kind: Option<String>,
     audio_location: Option<String>,
+    map_id: Option<i32>,
+    difficulty_name: Option<String>,
+    background_path: Option<String>,
+    title: Option<String>,
+    title_unicode: Option<String>,
+    artist: Option<String>,
+    artist_unicode: Option<String>,
 }
 
 async fn insert(

@@ -33,6 +33,14 @@ restrictive foreign keys. Repository cleanup deletes only unreferenced metadata
 and audio rows. Join/cleanup foreign keys are indexed. Persistence does not copy
 or delete files, including sources marked `copied`.
 
+The additive [background migration](../../crates/radio-db/src/migrations/m20260913_000002_background.rs)
+adds nullable `beatmaps.background_path`. Resolved background locations are separate
+from immutable metadata hashes. Snapshot replacement resolves `background_file`
+through the same named-file map as audio and stores the reference in its existing
+transaction. Existing rows remain null until CLI reimport without `--clear`; startup
+never scans, backfills, or resets them. Migration and rollback tests cover this
+reference alongside the previous snapshot.
+
 ## Metadata identity
 
 The pure [metadata_hash](../../crates/radio-db/src/repositories/beatmap_metadata.rs)
@@ -48,7 +56,7 @@ author = [online_id, username, country_code]
 Nulls, empty strings, author presence, tag order and original filenames are
 significant. There is no normalization. The database stores author as a nullable
 JSON object with those three fields and user tags as a JSON array. Resolved audio
-locations are separate beatmap references and never enter the hash. Insertions
+locations and background paths are separate beatmap references and never enter the hash. Insertions
 compute the hash themselves, reuse an existing row without changing it, and
 reject a matching key whose stored content differs.
 

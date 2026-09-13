@@ -4,7 +4,7 @@
     height: 50px;
     alignment: left;
     gap: 4px;
-    padding-left: 22px;
+    padding-left: 20px;
     background-color: #000000;
 }
 
@@ -37,13 +37,11 @@
     width: auto;
     height: auto;
     font-size: 16px;
-    font-variation-settings: "wght" 800;
+    font-weight: 700;
+    font-variation-settings: "wght" 700;
     color: rgba(255, 255, 255, 0.62);
 }
 
-.nav-tab svg {
-    opacity: 0.62;
-}
 
 .nav-tab:hover .nav-label {
     color: rgba(255, 255, 255, 0.82);
@@ -57,14 +55,15 @@
     color: #ffffff;
 }
 
-.nav-tab.active svg {
-    opacity: 1;
-}
 
 .server-status {
     width: auto;
+    max-width: 30%;
+    text-wrap: false;
+    text-overflow: ellipsis;
     height: auto;
     font-size: 12px;
+    font-weight: 500;
     font-variation-settings: "wght" 500;
     color: rgba(255, 255, 255, 0.62);
 }

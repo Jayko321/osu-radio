@@ -3,13 +3,17 @@ use sea_orm::{ConnectionTrait, DatabaseConnection, TransactionTrait};
 use sea_orm_migration::{MigratorTrait, SchemaManager, prelude::*};
 
 mod m20260913_000001_library;
+mod m20260913_000002_background;
 
 pub(crate) struct Migrator;
 
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(m20260913_000001_library::Migration)]
+        vec![
+            Box::new(m20260913_000001_library::Migration),
+            Box::new(m20260913_000002_background::Migration),
+        ]
     }
 }
 

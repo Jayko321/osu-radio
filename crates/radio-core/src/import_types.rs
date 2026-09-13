@@ -14,11 +14,18 @@ pub struct ImportedBeatmapSet {
 impl ImportedBeatmapSet {
     #[must_use]
     pub fn resolved_audio_path(&self, beatmap: &ImportedBeatmap) -> Option<&Path> {
-        let audio_file = beatmap.metadata.as_ref()?.audio_file.as_ref()?;
+        self.resolved_file(beatmap.metadata.as_ref()?.audio_file.as_deref()?)
+    }
 
+    #[must_use]
+    pub fn resolved_background_path(&self, beatmap: &ImportedBeatmap) -> Option<&Path> {
+        self.resolved_file(beatmap.metadata.as_ref()?.background_file.as_deref()?)
+    }
+
+    fn resolved_file(&self, filename: &str) -> Option<&Path> {
         self.files
             .iter()
-            .find(|usage| usage.filename.as_ref() == Some(audio_file))
+            .find(|usage| usage.filename.as_deref() == Some(filename))
             .and_then(|usage| usage.file.as_ref())
             .and_then(|file| file.resolved_path.as_deref())
     }

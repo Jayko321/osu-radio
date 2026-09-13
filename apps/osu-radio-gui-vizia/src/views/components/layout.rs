@@ -9,7 +9,3 @@ pub(crate) fn gap(cx: &mut Context, height: f32) {
 pub(crate) fn hspacer(cx: &mut Context) {
     Element::new(cx).class("hspacer");
 }
-
-pub(crate) fn vspacer(cx: &mut Context) {
-    Element::new(cx).class("vspacer");
-}

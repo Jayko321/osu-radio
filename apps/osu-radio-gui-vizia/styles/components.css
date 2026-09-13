@@ -27,6 +27,7 @@
     width: 1s;
     height: 24px;
     font-size: 16px;
+    font-weight: 500;
     font-variation-settings: "wght" 500;
     color: rgba(255, 255, 255, 0.62);
     pointer-events: none;
@@ -40,6 +41,7 @@
     corner-radius: 0px;
     background-color: rgba(0, 0, 0, 0);
     font-size: 16px;
+    font-weight: 500;
     font-variation-settings: "wght" 500;
     color: #ffffff;
     caret-color: #ffffff;
@@ -80,6 +82,7 @@
     width: auto;
     height: auto;
     font-size: 16px;
+    font-weight: 500;
     font-variation-settings: "wght" 500;
     color: #ffffff;
 }

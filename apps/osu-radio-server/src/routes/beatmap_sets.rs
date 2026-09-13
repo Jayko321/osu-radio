@@ -11,6 +11,7 @@ pub(crate) struct BeatmapSetResponse {
     pub(crate) id: i32,
     pub(crate) online_id: Option<i32>,
     pub(crate) hash: Option<String>,
+    pub(crate) beatmaps: Vec<BeatmapDetailsResponse>,
     pub(crate) audio_sources: Vec<AudioSourceResponse>,
 }
 
@@ -26,6 +27,11 @@ pub(crate) struct AudioSourceResponse {
 impl From<BeatmapSetWithAudio> for BeatmapSetResponse {
     fn from(listed: BeatmapSetWithAudio) -> Self {
         Self {
+            beatmaps: listed
+                .beatmaps
+                .into_iter()
+                .map(BeatmapDetailsResponse::from)
+                .collect(),
             id: listed.beatmap_set.id,
             online_id: listed.beatmap_set.online_id,
             hash: listed.beatmap_set.hash,
@@ -96,6 +102,18 @@ mod tests {
         assert_eq!(listed[0].online_id, Some(1));
         assert_eq!(listed[0].hash.as_deref(), Some("set-hash-1"));
         assert_eq!(listed[0].audio_sources.len(), 1);
+        assert_eq!(listed[0].beatmaps.len(), 2);
+        assert_eq!(listed[0].beatmaps[0].title.as_deref(), Some("Song"));
+        assert_eq!(listed[0].beatmaps[0].artist.as_deref(), Some("Artist"));
+        assert_eq!(
+            listed[0].beatmaps[0].difficulty_name.as_deref(),
+            Some("Easy")
+        );
+        assert_eq!(
+            listed[0].beatmaps[0].audio_source_id,
+            Some(listed[0].audio_sources[0].id)
+        );
+        assert!(!listed[0].beatmaps[0].has_cover);
         assert_eq!(listed[0].audio_sources[0].kind, "local");
         assert_eq!(listed[0].audio_sources[0].location, "/osu/files/a/ab/abc");
     }
@@ -145,5 +163,32 @@ mod tests {
             .expect("beatmap sets should be listed");
 
         assert!(listed.is_empty());
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
+pub(crate) struct BeatmapDetailsResponse {
+    id: i32,
+    audio_source_id: Option<i32>,
+    difficulty_name: Option<String>,
+    title: Option<String>,
+    title_unicode: Option<String>,
+    artist: Option<String>,
+    artist_unicode: Option<String>,
+    has_cover: bool,
+}
+impl From<radio_services::model::BeatmapDetails> for BeatmapDetailsResponse {
+    fn from(map: radio_services::model::BeatmapDetails) -> Self {
+        Self {
+            id: map.id,
+            audio_source_id: map.audio_source_id,
+            difficulty_name: map.difficulty_name,
+            title: map.title,
+            title_unicode: map.title_unicode,
+            artist: map.artist,
+            artist_unicode: map.artist_unicode,
+            has_cover: map.has_cover,
+        }
     }
 }
