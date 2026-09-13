@@ -1,14 +1,14 @@
 use anyhow::{Context, Result};
-use radio_db::Database;
+use radio_services::Services;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
-    database: Database,
+    services: Services,
 }
 
 impl AppState {
     pub(crate) async fn connect(database_url: &str) -> Result<Self> {
-        let database = Database::connect(database_url)
+        let database = Services::connect(database_url)
             .await
             .context("Failed to connect to the configured database")?;
 
@@ -21,10 +21,10 @@ impl AppState {
             .await
             .context("Failed to apply the beatmap schema to the configured database")?;
 
-        Ok(Self { database })
+        Ok(Self { services: database })
     }
 
-    pub(crate) const fn database(&self) -> &Database {
-        &self.database
+    pub(crate) const fn services(&self) -> &Services {
+        &self.services
     }
 }

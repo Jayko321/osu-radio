@@ -13,3 +13,4 @@ osu-radio.db
 osu-radio.db-shm
 
 osu-radio.db-wal
+/tmp/radio-services-map

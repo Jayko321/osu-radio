@@ -7,13 +7,30 @@ use sea_orm::{
 use crate::{entities::beatmap, model::Beatmap};
 
 pub struct BeatmapRepository<'a> {
-    pub(crate) connection: &'a sea_orm::DatabaseConnection,
+    pub(crate) connection: sea_orm::DatabaseExecutor<'a>,
 }
 
 impl BeatmapRepository<'_> {
+    pub async fn insert(
+        &self,
+        set_id: i32,
+        imported: &ImportedBeatmap,
+        metadata_hash: Option<String>,
+        audio_source_id: Option<i32>,
+    ) -> Result<Beatmap> {
+        insert(
+            &self.connection,
+            set_id,
+            imported,
+            metadata_hash,
+            audio_source_id,
+        )
+        .await
+    }
+
     pub async fn get(&self, id: i32) -> Result<Option<Beatmap>> {
         Ok(beatmap::Entity::find_by_id(id)
-            .one(self.connection)
+            .one(&self.connection)
             .await?
             .map(into_model))
     }
@@ -22,7 +39,7 @@ impl BeatmapRepository<'_> {
         Ok(beatmap::Entity::find()
             .filter(beatmap::Column::BeatmapSetId.eq(set_id))
             .order_by_asc(beatmap::Column::Id)
-            .all(self.connection)
+            .all(&self.connection)
             .await?
             .into_iter()
             .map(into_model)
@@ -30,7 +47,7 @@ impl BeatmapRepository<'_> {
     }
 }
 
-pub(crate) async fn insert(
+async fn insert(
     connection: &impl ConnectionTrait,
     set_id: i32,
     imported: &ImportedBeatmap,

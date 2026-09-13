@@ -31,8 +31,9 @@ Tokio runtime dependency. The helper is a separate .NET project.
 | `radio-scanner` | [Reader dispatch](../../crates/radio-scanner/src/lib.rs), [discovery](../../crates/radio-scanner/src/discovery/mod.rs), [lazer reader](../../crates/radio-scanner/src/lazer/scanner.rs) | Changing discovery or transforming a source into domain output. |
 | Realm helper | [.NET producer](../../tools/osu-lazer-realm-parser/Program.cs) | Changing Realm extraction or its NDJSON protocol. Coordinate with parser/domain types. |
 | `osu-radio-cli` | [Commands](../../apps/osu-radio-cli/src/commands/mod.rs), [arguments](../../apps/osu-radio-cli/src/types.rs) | Changing development-harness argument/output wiring. Keep reusable behavior in crates. |
-| `osu-radio-server` | [Startup](../../apps/osu-radio-server/src/main.rs), [routes](../../apps/osu-radio-server/src/routes/mod.rs), [services](../../apps/osu-radio-server/src/services/mod.rs) | Changing backend orchestration, HTTP translation or hosting. See the database and backend contracts. |
-| `radio-db` | [Package boundary](../../crates/radio-db/Cargo.toml) | [Repositories and transactional snapshots](database.md). |
+| `osu-radio-server` | [Startup](../../apps/osu-radio-server/src/main.rs), [routes](../../apps/osu-radio-server/src/routes/mod.rs) | Changing backend orchestration, HTTP translation or hosting. See the database and backend contracts. |
+| `radio-services` | [Shared handle and model services](../../crates/radio-services/src/lib.rs) | Persisted-model access and transactional workflows for server and CLI. |
+| `radio-db` | [Package boundary](../../crates/radio-db/Cargo.toml) | [Repositories, SQL and persistence constraints](database.md). |
 | `osu-radio-client` | [Public facade](../../crates/osu-radio-client/src/lib.rs), [session](../../crates/osu-radio-client/src/session.rs), [view models](../../crates/osu-radio-client/src/view_models/track.rs) | Changing reusable frontend communication, supervision or toolkit-free UI data. |
 | `osu-radio-gui-vizia` | [App state/events](../../apps/osu-radio-gui-vizia/src/app.rs), [view shell](../../apps/osu-radio-gui-vizia/src/views/mod.rs), [assets](../../apps/osu-radio-gui-vizia/src/assets.rs) | Changing desktop presentation and interactions. |
 
@@ -46,8 +47,10 @@ flowchart LR
     GUI["Vizia GUI: views, signals, events"] --> Client["Toolkit-free client: session, HTTP, view models"]
     Sample["GUI sample data"] --> GUI
     Client -->|"HTTP; supervises child today"| Server["Backend: routes and services"]
-    Server -->|"folder discovery use case"| Scanner["Scanner: discovery and source readers"]
-    Server --> DB["radio-db: repositories and snapshots"]
+    Server --> Services["radio-services: model services and transactions"]
+    Services -->|"folder discovery"| Scanner["Scanner: discovery and source readers"]
+    Services --> DB["radio-db: repositories and constraints"]
+    CLI --> Services
     CLI["Development CLI"] -->|"scan / import"| Scanner
     Scanner -->|"discovery reads"| Local["Local osu! installations"]
     Scanner -->|"launch / NDJSON"| Helper["C# Realm helper"]
@@ -98,7 +101,7 @@ the current Vizia choice nor a server subprocess constrains the future platform
 implementation. Hosted sources must not be ruled out by assuming every user
 needs a local installation.
 
-The database redesign establishes concrete repositories, installation-owned
+The shared services coordinate concrete repositories, installation-owned
 snapshots and shared immutable metadata. Read [database](database.md),
 [backend](backend.md) and the [API skill](../../.agents/skills/osu-radio-api/SKILL.md)
 for those contracts. Hosting, providers, mobile implementation and playback

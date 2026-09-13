@@ -8,6 +8,7 @@ members = [
     "crates/radio-core",
     "crates/radio-db",
     "crates/radio-scanner",
+    "crates/radio-services",
 ]
 
 [workspace.package]

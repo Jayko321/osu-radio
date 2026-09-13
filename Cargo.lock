@@ -3219,8 +3219,8 @@ dependencies = [
  "clap",
  "dotenvy",
  "radio-core",
- "radio-db",
  "radio-scanner",
+ "radio-services",
  "serde_json",
  "tokio",
 ]
@@ -3252,8 +3252,7 @@ dependencies = [
  "axum",
  "dotenvy",
  "radio-core",
- "radio-db",
- "radio-scanner",
+ "radio-services",
  "serde",
  "serde_json",
  "tempfile",
@@ -3727,6 +3726,20 @@ dependencies = [
  "serde",
  "serde_json",
  "sysinfo",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "radio-services"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "radio-core",
+ "radio-db",
+ "radio-scanner",
+ "sea-orm",
+ "serde_json",
  "tempfile",
  "tokio",
 ]

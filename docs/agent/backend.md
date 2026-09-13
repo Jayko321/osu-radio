@@ -11,14 +11,14 @@ and the [API skill](../../.agents/skills/osu-radio-api/SKILL.md) when changing c
 | --- | --- | --- |
 | Environment, process exit, listener | [`config.rs`](../../apps/osu-radio-server/src/config.rs), [`main.rs`](../../apps/osu-radio-server/src/main.rs) | Configuration and server startup belong here. |
 | HTTP routing and response shape | [`routes/`](../../apps/osu-radio-server/src/routes/mod.rs) | Handlers call services and map results into route DTOs. Keep both feature variants synchronized. |
-| Backend use cases | [`services/`](../../apps/osu-radio-server/src/services/mod.rs) | Compose backend operations here; do not move use cases into handlers or a GUI. |
+| Persisted-model use cases | [`radio-services`](../../crates/radio-services/src/lib.rs) | Shared services compose registration, snapshot replacement and cleanup for server and CLI; keep handlers focused on HTTP translation. |
 | Request failures | [`error.rs`](../../apps/osu-radio-server/src/error.rs) | Use `ApiError` for HTTP error translation and safe diagnostics. |
 | OpenAPI and Scalar | [`docs.rs`](../../apps/osu-radio-server/src/docs.rs), [`Cargo.toml`](../../apps/osu-radio-server/Cargo.toml) | Documentation metadata and its optional dependencies belong here. |
 | Frontend access and process ownership | Client [`api.rs`](../../crates/osu-radio-client/src/api.rs), [`server.rs`](../../crates/osu-radio-client/src/server.rs), [`session.rs`](../../crates/osu-radio-client/src/session.rs) | Keep reusable HTTP calls and supervision in the toolkit-free client. |
 
 The confirmed architectural direction keeps OS access, source reading, and future
 audio serving behind the backend boundary. Discovery and source parsing remain
-reusable scanner work; the server composes them for backend use cases. Domain
+reusable scanner work; shared installation services compose folder discovery. Domain
 types remain free of I/O. Database queries belong to the persistence component,
 whose concrete repositories are documented in [database](database.md).
 
@@ -123,8 +123,8 @@ as well. Check both feature states using the commands in
 
 ## Database-backed HTTP contracts
 
-`AppState` stores a cloneable `Database` handle directly; services use repository
-accessors. Handlers retain wire DTOs independent of database models. The client
+`AppState` stores a cloneable `Services` handle; handlers and test fixtures use its
+model-service accessors. The server has no `radio-db` dependency. Handlers retain wire DTOs independent of database models. The client
 continues to use its own [API DTOs](../../crates/osu-radio-client/src/api.rs).
 
 | Route | Response and behavior |
@@ -153,8 +153,9 @@ The ignored integration test
 [`the_embedded_server_answers_on_the_port_it_reports`](../../crates/osu-radio-client/tests/embedded_server.rs)
 launches a built server and also exercises database-backed requests. It is not a
 pure supervision test; run it only against its isolated test environment. Server
-route/service tests use [`test_support.rs`](../../apps/osu-radio-server/src/test_support.rs),
-cover repository-backed responses with isolated memory SQLite.
+route tests use [`test_support.rs`](../../apps/osu-radio-server/src/test_support.rs),
+cover service-backed responses with isolated memory SQLite. Shared workflow and
+folder-validation tests live in `radio-services`, as described in [database](database.md).
 
 All behavior above is source-confirmed. Recommended checks and actual validation
 results must be reported separately; a source review or compile check is not a

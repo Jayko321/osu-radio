@@ -1,3 +1,4 @@
+use radio_services::{FolderChanges, RegisterFolderError, UserDataOverview};
 use std::path::PathBuf;
 
 use axum::{
@@ -6,14 +7,10 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use radio_db::model::OsuInstallation;
+use radio_services::model::OsuInstallation;
 use serde::{Deserialize, Deserializer, Serialize};
 
-use crate::{
-    error::ApiError,
-    services::user_data::{FolderChanges, RegisterFolderError, UserDataOverview, UserDataService},
-    state::AppState,
-};
+use crate::{error::ApiError, state::AppState};
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
@@ -84,24 +81,22 @@ impl From<UserDataOverview> for UserDataResponse {
     }
 }
 
-impl From<RegisterFolderError> for ApiError {
-    fn from(error: RegisterFolderError) -> Self {
-        match error {
-            RegisterFolderError::RelativePath(path) => Self::bad_request(format!(
-                "`{}` is not an absolute path. Register an osu! folder by its full path.",
-                path.display()
-            )),
-            RegisterFolderError::NotAnOsuFolder(path) => Self::bad_request(format!(
-                "No osu! installation was found in `{}`. Expected a client.realm or osu!.db there.",
-                path.display()
-            )),
-            RegisterFolderError::Ambiguous { path, found } => Self::bad_request(format!(
-                "`{}` holds {} osu! installations. Register each one by its own folder.",
-                path.display(),
-                found.len()
-            )),
-            RegisterFolderError::Failed(error) => Self::from(error),
-        }
+fn registration_error(error: RegisterFolderError) -> ApiError {
+    match error {
+        RegisterFolderError::RelativePath(path) => ApiError::bad_request(format!(
+            "`{}` is not an absolute path. Register an osu! folder by its full path.",
+            path.display()
+        )),
+        RegisterFolderError::NotAnOsuFolder(path) => ApiError::bad_request(format!(
+            "No osu! installation was found in `{}`. Expected a client.realm or osu!.db there.",
+            path.display()
+        )),
+        RegisterFolderError::Ambiguous { path, found } => ApiError::bad_request(format!(
+            "`{}` holds {} osu! installations. Register each one by its own folder.",
+            path.display(),
+            found.len()
+        )),
+        RegisterFolderError::Failed(error) => ApiError::from(error),
     }
 }
 
@@ -131,7 +126,7 @@ where
 pub(crate) async fn get_user_data(
     State(state): State<AppState>,
 ) -> Result<Json<UserDataResponse>, ApiError> {
-    let overview = UserDataService::new(&state).overview().await?;
+    let overview = state.services().user_data().overview().await?;
 
     Ok(Json(UserDataResponse::from(overview)))
 }
@@ -152,7 +147,7 @@ pub(crate) async fn get_user_data(
 pub(crate) async fn list_osu_folders(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<OsuFolderResponse>>, ApiError> {
-    let folders = UserDataService::new(&state).osu_folders().await?;
+    let folders = state.services().osu_installations().all().await?;
 
     Ok(Json(
         folders.into_iter().map(OsuFolderResponse::from).collect(),
@@ -179,9 +174,12 @@ pub(crate) async fn register_osu_folder(
     State(state): State<AppState>,
     Json(request): Json<RegisterOsuFolderRequest>,
 ) -> Result<Response, ApiError> {
-    let registered = UserDataService::new(&state)
-        .register_osu_folder(request.path, request.label)
-        .await?;
+    let registered = state
+        .services()
+        .osu_installations()
+        .register_folder(request.path, request.label)
+        .await
+        .map_err(registration_error)?;
 
     let status = if registered.was_created() {
         StatusCode::CREATED
@@ -214,8 +212,10 @@ pub(crate) async fn update_osu_folder(
     RoutePath(id): RoutePath<i32>,
     Json(request): Json<UpdateOsuFolderRequest>,
 ) -> Result<Json<OsuFolderResponse>, ApiError> {
-    let updated = UserDataService::new(&state)
-        .update_osu_folder(
+    let updated = state
+        .services()
+        .osu_installations()
+        .update(
             id,
             FolderChanges {
                 label: request.label,
@@ -249,7 +249,7 @@ pub(crate) async fn remove_osu_folder(
     State(state): State<AppState>,
     RoutePath(id): RoutePath<i32>,
 ) -> Result<StatusCode, ApiError> {
-    let removed = UserDataService::new(&state).remove_osu_folder(id).await?;
+    let removed = state.services().osu_installations().delete(id).await?;
 
     if removed {
         Ok(StatusCode::NO_CONTENT)

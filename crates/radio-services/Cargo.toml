@@ -1,0 +1,25 @@
+[package]
+name = "radio-services"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["sqlite"]
+sqlite = ["radio-db/sqlite"]
+postgres = ["radio-db/postgres"]
+
+[dependencies]
+anyhow.workspace = true
+radio-core = { path = "../radio-core" }
+radio-db = { path = "../radio-db", default-features = false }
+radio-scanner = { path = "../radio-scanner" }
+
+[dev-dependencies]
+tokio.workspace = true
+tempfile = "3"
+serde_json = "1.0.145"
+sea-orm = { version = "=2.0.2", default-features = false, features = ["runtime-tokio-rustls"] }

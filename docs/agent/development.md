@@ -124,29 +124,32 @@ select the backend explicitly when disabling default features.
 Use each backend in a separate Cargo invocation. Default tests use SQLite:
 
 ```sh
-cargo test -p radio-db --locked
+cargo test -p radio-db -p radio-services --locked
+cargo test -p osu-radio-cli --locked
 cargo test -p osu-radio-server --locked
 cargo test -p osu-radio-server --no-default-features --features sqlite --locked
-cargo clippy -p radio-db -p osu-radio-cli -p osu-radio-server --all-targets --locked -- -D warnings
-cargo clippy -p radio-db -p osu-radio-cli -p osu-radio-server --no-default-features --features postgres --all-targets --locked -- -D warnings
+cargo clippy -p radio-db -p radio-services -p osu-radio-cli -p osu-radio-server --all-targets --locked -- -D warnings
+cargo clippy -p radio-db -p radio-services -p osu-radio-cli -p osu-radio-server --no-default-features --features postgres --all-targets --locked -- -D warnings
 cargo clippy -p osu-radio-server --no-default-features --features postgres,docs --all-targets --locked -- -D warnings
 ```
 
-The PostgreSQL repository test is ignored by default. Provision a **fresh,
+The PostgreSQL service and repository contract tests are ignored by default. Provision a **fresh,
 disposable local cluster/database**, naming the database `radio_db_test_*`, and
 supply only its URL in `RADIO_DB_TEST_POSTGRES_URL`:
 
 ```sh
-RADIO_DB_TEST_POSTGRES_URL='postgres://USER@127.0.0.1:PORT/radio_db_test_contracts' cargo test -p radio-db --no-default-features --features postgres --locked -- --include-ignored
+RADIO_DB_TEST_POSTGRES_URL='postgres://USER@127.0.0.1:PORT/radio_db_test_repositories' cargo test -p radio-db --no-default-features --features postgres --locked -- --include-ignored
+RADIO_DB_TEST_POSTGRES_URL='postgres://USER@127.0.0.1:PORT/radio_db_test_services' cargo test -p radio-services --no-default-features --features postgres --locked -- --include-ignored
 ```
 
 Replace USER and PORT with the disposable cluster's values. The test never reads
 `POSTGRES_DATABASE_URL`. It exercises explicit reset, creates failure triggers,
-and retains an unrelated-table fixture to prove reset scope; use a new disposable
-database for each run. Stop and remove only that test cluster after testing.
+and retains an unrelated-table fixture to prove reset scope; use a separate fresh disposable
+database for each test command. Stop and remove only that test cluster after testing.
 PostgreSQL caller builds compile both router variants; route/service runtime tests
 use isolated SQLite. Memory tests, generated keys and independent-pool concurrency
-are covered by [repository contracts](../../crates/radio-db/src/tests.rs).
+are covered by [service contracts](../../crates/radio-services/src/tests.rs) and
+[repository contracts](../../crates/radio-db/src/tests.rs).
 
 Both commands below **must fail** with the explicit exactly-one-backend error:
 

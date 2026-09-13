@@ -9,15 +9,15 @@ workspace = true
 
 [features]
 default = ["sqlite"]
-sqlite = ["radio-db/sqlite"]
-postgres = ["radio-db/postgres"]
+sqlite = ["radio-services/sqlite"]
+postgres = ["radio-services/postgres"]
 
 [dependencies]
 anyhow.workspace = true
 clap = { version = "4", features = ["derive"] }
 dotenvy.workspace = true
 radio-core = { path = "../../crates/radio-core/" }
-radio-db = { path = "../../crates/radio-db/", default-features = false }
+radio-services = { path = "../../crates/radio-services/", default-features = false }
 radio-scanner = { path = "../../crates/radio-scanner/" }
 serde_json = { version = "1.0.145" }
 tokio.workspace = true

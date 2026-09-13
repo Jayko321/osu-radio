@@ -1,16 +1,13 @@
-use super::{ImportSummary, audio_source, beatmap, beatmap_metadata, beatmap_set, user_data};
 use crate::{
     entities::osu_installation,
-    model::{OsuInstallation, OsuInstallationChanges, SourceType, USER_DATA_ID},
+    model::{OsuInstallation, OsuInstallationChanges, USER_DATA_ID},
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use chrono::Utc;
-use radio_core::{OsuMarker, import_types::ImportedBeatmapSet};
+use radio_core::OsuMarker;
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, Set,
-    TransactionTrait, sea_query::OnConflict,
+    ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set, sea_query::OnConflict,
 };
-use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegisteredInstallation {
@@ -40,14 +37,14 @@ impl RegisteredInstallation {
 }
 
 pub struct OsuInstallationRepository<'a> {
-    pub(crate) connection: &'a DatabaseConnection,
+    pub(crate) connection: sea_orm::DatabaseExecutor<'a>,
 }
 
 impl OsuInstallationRepository<'_> {
     pub async fn all(&self) -> Result<Vec<OsuInstallation>> {
         osu_installation::Entity::find()
             .order_by_asc(osu_installation::Column::Id)
-            .all(self.connection)
+            .all(&self.connection)
             .await?
             .into_iter()
             .map(model)
@@ -55,7 +52,7 @@ impl OsuInstallationRepository<'_> {
     }
 
     pub async fn get(&self, id: i32) -> Result<Option<OsuInstallation>> {
-        get(self.connection, id).await
+        get(&self.connection, id).await
     }
 
     pub async fn register(
@@ -80,11 +77,11 @@ impl OsuInstallationRepository<'_> {
                 .to_owned(),
         )
         .try_insert()
-        .exec(self.connection)
+        .exec(&self.connection)
         .await?;
         let stored = osu_installation::Entity::find()
             .filter(osu_installation::Column::MarkerPath.eq(marker_path))
-            .one(self.connection)
+            .one(&self.connection)
             .await?
             .context("Registered installation disappeared")?;
         let stored = model(stored)?;
@@ -120,92 +117,29 @@ impl OsuInstallationRepository<'_> {
                 sea_orm::sea_query::Expr::value(enabled),
             );
         }
-        let transaction = self.connection.begin().await?;
-        update.exec(&transaction).await?;
-        let result = get(&transaction, id).await?;
-        transaction.commit().await?;
-        Ok(result)
+        update.exec(&self.connection).await?;
+        self.get(id).await
     }
 
+    /// Deletes the installation using schema cascades; the service coordinates shared cleanup.
     pub async fn delete(&self, id: i32) -> Result<bool> {
-        let transaction = self.connection.begin().await?;
-        user_data::lock(&transaction).await?;
-        let deleted = osu_installation::Entity::delete_by_id(id)
-            .exec(&transaction)
+        Ok(osu_installation::Entity::delete_by_id(id)
+            .exec(&self.connection)
             .await?
             .rows_affected
-            > 0;
-        beatmap_metadata::cleanup(&transaction).await?;
-        audio_source::cleanup(&transaction).await?;
-        transaction.commit().await?;
-        Ok(deleted)
+            > 0)
     }
 
-    /// Atomically replaces this installation's complete scanner snapshot, including an empty one.
-    pub async fn replace_snapshot(
-        &self,
-        id: i32,
-        imported: &[ImportedBeatmapSet],
-    ) -> Result<ImportSummary> {
-        let transaction = self.connection.begin().await?;
-        user_data::lock(&transaction).await?;
-        let installation = get(&transaction, id)
-            .await?
-            .context("Installation does not exist")?;
-        ensure!(
-            imported.iter().all(|set| set.source == installation.kind),
-            "Imported source kind does not match the registered installation"
-        );
-        beatmap_set::delete_for_installation(&transaction, id).await?;
-        let mut summary = ImportSummary {
-            beatmap_sets: imported.len(),
-            ..ImportSummary::default()
-        };
-        let mut audio_ids = HashSet::new();
-        for imported_set in imported {
-            let set = beatmap_set::insert(&transaction, id, imported_set).await?;
-            for imported_beatmap in &imported_set.beatmaps {
-                let metadata_hash = match &imported_beatmap.metadata {
-                    Some(metadata) => Some(
-                        beatmap_metadata::get_or_insert(&transaction, metadata)
-                            .await?
-                            .hash,
-                    ),
-                    None => None,
-                };
-                let audio_id = match imported_set.resolved_audio_path(imported_beatmap) {
-                    Some(path) => {
-                        let source = SourceType::Local(path.to_string_lossy().into_owned());
-                        let id = audio_source::get_or_insert(&transaction, &source).await?.id;
-                        audio_ids.insert(id);
-                        Some(id)
-                    }
-                    None => None,
-                };
-                beatmap::insert(
-                    &transaction,
-                    set.id,
-                    imported_beatmap,
-                    metadata_hash,
-                    audio_id,
-                )
-                .await?;
-            }
-            summary.beatmaps = summary.beatmaps.saturating_add(imported_set.beatmaps.len());
-        }
-        beatmap_metadata::cleanup(&transaction).await?;
-        audio_source::cleanup(&transaction).await?;
+    pub async fn mark_scanned(&self, id: i32) -> Result<()> {
         osu_installation::Entity::update_many()
             .col_expr(
                 osu_installation::Column::LastScannedAt,
                 sea_orm::sea_query::Expr::value(Utc::now().to_rfc3339()),
             )
             .filter(osu_installation::Column::Id.eq(id))
-            .exec(&transaction)
+            .exec(&self.connection)
             .await?;
-        transaction.commit().await?;
-        summary.audio_sources = audio_ids.len();
-        Ok(summary)
+        Ok(())
     }
 }
 

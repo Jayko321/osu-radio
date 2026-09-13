@@ -10,24 +10,28 @@ use crate::{
 };
 
 pub struct AudioSourceRepository<'a> {
-    pub(crate) connection: &'a sea_orm::DatabaseConnection,
+    pub(crate) connection: sea_orm::DatabaseExecutor<'a>,
 }
 
 impl AudioSourceRepository<'_> {
+    pub async fn cleanup(&self) -> Result<()> {
+        cleanup(&self.connection).await
+    }
+
     pub async fn get(&self, id: i32) -> Result<Option<AudioSource>> {
         audio_source::Entity::find_by_id(id)
-            .one(self.connection)
+            .one(&self.connection)
             .await?
             .map(into_model)
             .transpose()
     }
 
     pub async fn find(&self, source: &SourceType) -> Result<Option<AudioSource>> {
-        find(self.connection, source).await
+        find(&self.connection, source).await
     }
 
     pub async fn get_or_insert(&self, source: &SourceType) -> Result<AudioSource> {
-        get_or_insert(self.connection, source).await
+        get_or_insert(&self.connection, source).await
     }
 }
 
@@ -44,7 +48,7 @@ async fn find(
         .transpose()
 }
 
-pub(crate) async fn get_or_insert(
+async fn get_or_insert(
     connection: &impl ConnectionTrait,
     source: &SourceType,
 ) -> Result<AudioSource> {
@@ -65,7 +69,7 @@ pub(crate) async fn get_or_insert(
         .context("audio source missing after insertion")
 }
 
-pub(crate) async fn cleanup(connection: &impl ConnectionTrait) -> Result<()> {
+async fn cleanup(connection: &impl ConnectionTrait) -> Result<()> {
     audio_source::Entity::delete_many()
         .filter(
             audio_source::Column::Id.not_in_subquery(

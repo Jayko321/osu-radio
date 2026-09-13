@@ -48,7 +48,7 @@ pub(crate) fn beatmap_set(online_id: i32, audio_path: &str) -> ImportedBeatmapSe
 pub(crate) async fn state_with(beatmap_sets: &[ImportedBeatmapSet]) -> AppState {
     let state = empty_state().await;
     let installation = state
-        .database()
+        .services()
         .osu_installations()
         .register(
             &OsuMarker {
@@ -62,7 +62,7 @@ pub(crate) async fn state_with(beatmap_sets: &[ImportedBeatmapSet]) -> AppState 
         .expect("test installation should register")
         .into_installation();
     state
-        .database()
+        .services()
         .osu_installations()
         .replace_snapshot(installation.id, beatmap_sets)
         .await
@@ -83,9 +83,4 @@ pub(crate) fn lazer_folder() -> TempDir {
     fs::write(folder.path().join("client.realm"), b"").expect("write client.realm");
 
     folder
-}
-
-/// Adds a stable marker to an existing folder, so one root holds two installations.
-pub(crate) fn stable_folder(folder: &TempDir) {
-    fs::write(folder.path().join("osu!.db"), b"").expect("write osu!.db");
 }

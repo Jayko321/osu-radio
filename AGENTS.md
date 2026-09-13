@@ -2,6 +2,7 @@
 
 Build a desktop music player for local osu! installations, with hosted sources intended later. Linux and Windows are current targets; macOS is unverified, Android and iOS are future goals. Hosting and provider choices remain open.
 
+`radio-services` is the shared persisted-model entry point for server and CLI.
 `radio-db` uses SeaORM 2 repositories and a fresh versioned schema. Read the
 [database guide](docs/agent/database.md) for ownership, immutable metadata identity,
 snapshot replacement, and explicit reset behavior. Legacy databases require a
@@ -16,7 +17,8 @@ new database or an explicitly requested reset; ordinary startup never resets.
 | `tools/osu-lazer-realm-parser` | Realm extraction; stdout is NDJSON, diagnostics go to stderr. |
 | `apps/osu-radio-cli` | Thin development harness; reusable behavior belongs in crates. |
 | `apps/osu-radio-server` | Backend startup, HTTP transport and services; backend owns OS access and eventual audio serving. |
-| `crates/radio-db` | Persistence boundary; concrete repositories own queries and transactional snapshots. |
+| `crates/radio-services` | Shared model services and transaction orchestration for server and CLI. |
+| `crates/radio-db` | Persistence boundary; concrete repositories own SQL and constraints; opaque transactions bind repositories. |
 | `crates/osu-radio-client` | Toolkit-free frontend access, session/supervision and reusable view models. |
 | `apps/osu-radio-gui-vizia` | Views, signals, events, styles and assets. |
 

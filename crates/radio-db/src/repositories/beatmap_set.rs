@@ -14,13 +14,24 @@ use crate::{
 };
 
 pub struct BeatmapSetRepository<'a> {
-    pub(crate) connection: &'a sea_orm::DatabaseConnection,
+    pub(crate) connection: sea_orm::DatabaseExecutor<'a>,
 }
 
 impl BeatmapSetRepository<'_> {
+    pub async fn insert(
+        &self,
+        installation_id: i32,
+        imported: &ImportedBeatmapSet,
+    ) -> Result<BeatmapSet> {
+        insert(&self.connection, installation_id, imported).await
+    }
+    pub async fn delete_for_installation(&self, installation_id: i32) -> Result<()> {
+        delete_for_installation(&self.connection, installation_id).await
+    }
+
     pub async fn get(&self, id: i32) -> Result<Option<BeatmapSet>> {
         Ok(beatmap_set::Entity::find_by_id(id)
-            .one(self.connection)
+            .one(&self.connection)
             .await?
             .map(into_model))
     }
@@ -29,7 +40,7 @@ impl BeatmapSetRepository<'_> {
         Ok(beatmap_set::Entity::find()
             .filter(beatmap_set::Column::InstallationId.eq(installation_id))
             .order_by_asc(beatmap_set::Column::Id)
-            .all(self.connection)
+            .all(&self.connection)
             .await?
             .into_iter()
             .map(into_model)
@@ -78,7 +89,7 @@ impl BeatmapSetRepository<'_> {
             .to_owned();
         let rows =
             SetWithAudio::find_by_statement(self.connection.get_database_backend().build(&query))
-                .all(self.connection)
+                .all(&self.connection)
                 .await?;
         let mut sets = BTreeMap::<i32, (BeatmapSet, Vec<AudioSource>)>::new();
         for row in rows {
@@ -119,7 +130,7 @@ struct SetWithAudio {
     audio_location: Option<String>,
 }
 
-pub(crate) async fn insert(
+async fn insert(
     connection: &impl ConnectionTrait,
     installation_id: i32,
     imported: &ImportedBeatmapSet,
@@ -136,7 +147,7 @@ pub(crate) async fn insert(
     ))
 }
 
-pub(crate) async fn delete_for_installation(
+async fn delete_for_installation(
     connection: &impl ConnectionTrait,
     installation_id: i32,
 ) -> Result<()> {

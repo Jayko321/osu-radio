@@ -13,7 +13,6 @@ pub(crate) mod config;
 pub(crate) mod docs;
 pub(crate) mod error;
 pub(crate) mod routes;
-pub(crate) mod services;
 pub(crate) mod state;
 #[cfg(all(test, feature = "sqlite"))]
 pub(crate) mod test_support;

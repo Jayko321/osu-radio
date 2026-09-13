@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait};
+use sea_orm::{ConnectionTrait, EntityTrait};
 
 use crate::{
     entities::user_data,
@@ -7,13 +7,17 @@ use crate::{
 };
 
 pub struct UserDataRepository<'a> {
-    pub(crate) connection: &'a DatabaseConnection,
+    pub(crate) connection: sea_orm::DatabaseExecutor<'a>,
 }
 
 impl UserDataRepository<'_> {
+    pub async fn lock(&self) -> Result<()> {
+        lock(&self.connection).await
+    }
+
     pub async fn get(&self) -> Result<UserData> {
         let row = user_data::Entity::find_by_id(USER_DATA_ID)
-            .one(self.connection)
+            .one(&self.connection)
             .await?
             .context("Settings row is missing; apply database migrations first")?;
         Ok(UserData { id: row.id })
@@ -21,7 +25,7 @@ impl UserDataRepository<'_> {
 }
 
 /// A write statement acquires a SQLite writer lock before any reads and a PostgreSQL row lock.
-pub(crate) async fn lock(connection: &impl ConnectionTrait) -> Result<()> {
+async fn lock(connection: &impl ConnectionTrait) -> Result<()> {
     // ponytail: one global writer serializes snapshot replacement and cleanup across processes;
     // use finer locks and coordinated garbage collection if write throughput becomes a bottleneck.
     let result = connection

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use radio_core::{OsuMarker, import_types::ImportedBeatmapSet};
-use radio_db::{Database, ImportSummary, model::OsuInstallation};
+use radio_services::{ImportSummary, Services, model::OsuInstallation};
 use serde_json::json;
 
 use crate::{
@@ -42,7 +42,7 @@ pub(crate) async fn store(args: StoreArgs) -> Result<()> {
     Ok(())
 }
 
-async fn prepare_schema(database: &Database, clear: bool) -> Result<()> {
+async fn prepare_schema(database: &Services, clear: bool) -> Result<()> {
     if clear {
         database.reset().await
     } else {

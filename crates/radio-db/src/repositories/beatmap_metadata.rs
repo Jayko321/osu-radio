@@ -12,19 +12,23 @@ use crate::{
 };
 
 pub struct BeatmapMetadataRepository<'a> {
-    pub(crate) connection: &'a sea_orm::DatabaseConnection,
+    pub(crate) connection: sea_orm::DatabaseExecutor<'a>,
 }
 
 impl BeatmapMetadataRepository<'_> {
+    pub async fn cleanup(&self) -> Result<()> {
+        cleanup(&self.connection).await
+    }
+
     pub async fn get(&self, hash: &str) -> Result<Option<BeatmapMetadata>> {
         Ok(beatmap_metadata::Entity::find_by_id(hash)
-            .one(self.connection)
+            .one(&self.connection)
             .await?
             .map(into_model))
     }
 
     pub async fn get_or_insert(&self, imported: &ImportedMetadata) -> Result<BeatmapMetadata> {
-        get_or_insert(self.connection, imported).await
+        get_or_insert(&self.connection, imported).await
     }
 }
 
@@ -51,7 +55,7 @@ pub fn metadata_hash(imported: &ImportedMetadata) -> Result<String> {
     Ok(hex::encode(Sha256::digest(bytes)))
 }
 
-pub(crate) async fn get_or_insert(
+async fn get_or_insert(
     connection: &impl ConnectionTrait,
     imported: &ImportedMetadata,
 ) -> Result<BeatmapMetadata> {
@@ -95,7 +99,7 @@ pub(crate) async fn get_or_insert(
     Ok(into_model(actual))
 }
 
-pub(crate) async fn cleanup(connection: &impl ConnectionTrait) -> Result<()> {
+async fn cleanup(connection: &impl ConnectionTrait) -> Result<()> {
     beatmap_metadata::Entity::delete_many()
         .filter(
             beatmap_metadata::Column::Hash.not_in_subquery(

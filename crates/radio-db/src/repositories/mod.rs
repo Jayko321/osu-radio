@@ -11,10 +11,3 @@ pub use beatmap_metadata::{BeatmapMetadataRepository, metadata_hash};
 pub use beatmap_set::BeatmapSetRepository;
 pub use osu_installation::{OsuInstallationRepository, RegisteredInstallation};
 pub use user_data::UserDataRepository;
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ImportSummary {
-    pub beatmap_sets: usize,
-    pub beatmaps: usize,
-    pub audio_sources: usize,
-}

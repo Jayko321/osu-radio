@@ -1,12 +1,9 @@
 use axum::{Json, extract::State};
-use radio_db::model::AudioSource;
+use radio_services::BeatmapSetWithAudio;
+use radio_services::model::AudioSource;
 use serde::Serialize;
 
-use crate::{
-    error::ApiError,
-    services::beatmap_sets::{BeatmapSetService, BeatmapSetWithAudio},
-    state::AppState,
-};
+use crate::{error::ApiError, state::AppState};
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
@@ -67,7 +64,9 @@ impl From<AudioSource> for AudioSourceResponse {
 pub(crate) async fn list_beatmap_sets(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<BeatmapSetResponse>>, ApiError> {
-    let beatmap_sets = BeatmapSetService::new(&state)
+    let beatmap_sets = state
+        .services()
+        .beatmap_sets()
         .all_with_audio_sources()
         .await?;
 
@@ -106,14 +105,14 @@ mod tests {
         let state = state_with(&[beatmap_set(1, "/osu/old.mp3")]).await;
         let cloned = state.clone();
         let installation = state
-            .database()
+            .services()
             .osu_installations()
             .all()
             .await
             .expect("installations should load")
             .remove(0);
         state
-            .database()
+            .services()
             .osu_installations()
             .replace_snapshot(installation.id, &[beatmap_set(2, "/osu/new.mp3")])
             .await
@@ -126,7 +125,7 @@ mod tests {
         assert_eq!(listed[0].audio_sources[0].location, "/osu/new.mp3");
 
         state
-            .database()
+            .services()
             .osu_installations()
             .delete(installation.id)
             .await
