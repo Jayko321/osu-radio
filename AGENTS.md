@@ -2,7 +2,10 @@
 
 Build a desktop music player for local osu! installations, with hosted sources intended later. Linux and Windows are current targets; macOS is unverified, Android and iOS are future goals. Hosting and provider choices remain open.
 
-**Current priority: rewrite `radio-db`.** Its internals, database-backed API contracts, and persistence workflows are deliberately excluded from this guidance. Do not treat removed documentation as a design contract or infer a replacement design. Read the current source and the specific redesign task when working there.
+`radio-db` uses SeaORM 2 repositories and a fresh versioned schema. Read the
+[database guide](docs/agent/database.md) for ownership, immutable metadata identity,
+snapshot replacement, and explicit reset behavior. Legacy databases require a
+new database or an explicitly requested reset; ordinary startup never resets.
 
 ## Ownership and constraints
 
@@ -13,7 +16,7 @@ Build a desktop music player for local osu! installations, with hosted sources i
 | `tools/osu-lazer-realm-parser` | Realm extraction; stdout is NDJSON, diagnostics go to stderr. |
 | `apps/osu-radio-cli` | Thin development harness; reusable behavior belongs in crates. |
 | `apps/osu-radio-server` | Backend startup, HTTP transport and services; backend owns OS access and eventual audio serving. |
-| `crates/radio-db` | Persistence boundary; documentation deferred during rewrite. |
+| `crates/radio-db` | Persistence boundary; concrete repositories own queries and transactional snapshots. |
 | `crates/osu-radio-client` | Toolkit-free frontend access, session/supervision and reusable view models. |
 | `apps/osu-radio-gui-vizia` | Views, signals, events, styles and assets. |
 
@@ -30,6 +33,7 @@ Start with [the guide index](docs/agent/index.md) for reading order, architectur
 | Domain types, discovery, import mapping, Realm helper | [Scanner guide](docs/agent/scanner.md), [osu-radio-scanner skill](.agents/skills/osu-radio-scanner/SKILL.md) |
 | GUI layout, interactions, styles, assets | [Frontend guide](docs/agent/frontend.md), [osu-radio-gui skill](.agents/skills/osu-radio-gui/SKILL.md) |
 | Reusable client state or server supervision | [Frontend guide](docs/agent/frontend.md), [backend guide](docs/agent/backend.md) |
+| Database repositories, persistence, server/client API contracts | [Database guide](docs/agent/database.md), [backend guide](docs/agent/backend.md), [API skill](.agents/skills/osu-radio-api/SKILL.md) |
 | Backend startup, service boundaries, errors, optional API docs | [Backend guide](docs/agent/backend.md) |
 | Setup, environment, commands, testing, troubleshooting | [Development guide](docs/agent/development.md) |
 | Findings-only pre-commit review | [cr skill](.agents/skills/cr/SKILL.md) and its linked checklist |
@@ -42,4 +46,4 @@ For library/framework/SDK/API/CLI/cloud-service guidance, fetch current document
 - Keep technical facts in `docs/agent/`, task procedures in `.agents/skills/`, and Claude-only notes in `CLAUDE.md`. Link shared procedures instead of duplicating them.
 - Label implementation, placeholders, confirmed direction and deferred decisions separately. Do not turn an implementation detail or a proposed improvement into a product requirement.
 - Check changed links, paths, symbols, flags and examples. Record executed checks separately from suggested commands. `docs/agent/` is versioned; review reports elsewhere under `docs/` remain ignored.
-- Add database documentation and a server/client API skill after the redesign establishes those contracts.
+- Keep database contracts in the database guide and API procedures in the shared API skill.

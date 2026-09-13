@@ -32,7 +32,7 @@ impl ApiError {
         Self::client(StatusCode::NOT_FOUND, message)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "sqlite"))]
     pub(crate) const fn status(&self) -> StatusCode {
         self.status
     }

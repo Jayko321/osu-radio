@@ -2,9 +2,8 @@
 
 Read [the index](index.md) for product direction and [development](development.md)
 for checks. This guide describes the current server boundary and hosting protocol.
-`radio-db` is being rewritten: its internals, database-backed endpoint contracts,
-and persistence workflows are deliberately deferred. Existing routes and DTOs are
-implementation evidence, not a settled API specification.
+Read [database](database.md) for SeaORM repositories and persistence workflows,
+and the [API skill](../../.agents/skills/osu-radio-api/SKILL.md) when changing contracts.
 
 ## Ownership and change locations
 
@@ -21,7 +20,7 @@ The confirmed architectural direction keeps OS access, source reading, and futur
 audio serving behind the backend boundary. Discovery and source parsing remain
 reusable scanner work; the server composes them for backend use cases. Domain
 types remain free of I/O. Database queries belong to the persistence component,
-whose design is outside these guides.
+whose concrete repositories are documented in [database](database.md).
 
 The GUI calls `osu-radio-client`, not server internals, scanner functions, or
 local osu! files. `ApiClient` has its own wire DTOs; the client also owns reusable
@@ -37,8 +36,10 @@ today's implementation even if all configuration variables already exist in the
 process environment. Merely setting environment variables is not a workaround
 for `Failed to load .env`.
 
-`SQLITE_DATABASE_URL` is currently a startup prerequisite; its value and the
-database setup workflow are deferred. `OSU_RADIO_SERVER_ADDRESS` defaults to
+The default SQLite build requires `SQLITE_DATABASE_URL` (a path, SQLite URL or
+`:memory:`); the PostgreSQL build requires `POSTGRES_DATABASE_URL`. Startup opens
+the pool and applies versioned migrations without resetting. Legacy tables without
+SeaORM history are rejected with instructions to use a new database or explicit reset. `OSU_RADIO_SERVER_ADDRESS` defaults to
 `127.0.0.1:3000` when its environment lookup fails. An invalid address or a bind
 failure propagates with context and exits unsuccessfully; it does not silently
 select another port. Keep the loopback default unless a task explicitly changes
@@ -110,7 +111,8 @@ boundary and decides how to display them.
 
 The default `docs` feature enables `utoipa`, `utoipa-axum`, and `utoipa-scalar`,
 mounts Scalar at `/docs`, and prints its URL. The dependencies are optional;
-`--no-default-features` removes this documentation code.
+`--no-default-features --features sqlite` removes this documentation code while
+selecting SQLite; `--no-default-features --features postgres` selects PostgreSQL.
 
 `routes::router` has two mutually exclusive implementations: an ordinary axum
 router without `docs`, and an `OpenApiRouter` with it. A route change must update
@@ -118,6 +120,27 @@ both. Handlers and DTOs use `cfg_attr(feature = "docs", ...)` for OpenAPI
 attributes and schema derives. Keep documentation-only field annotations gated
 as well. Check both feature states using the commands in
 [development](development.md); compiling only one cannot verify the other.
+
+## Database-backed HTTP contracts
+
+`AppState` stores a cloneable `Database` handle directly; services use repository
+accessors. Handlers retain wire DTOs independent of database models. The client
+continues to use its own [API DTOs](../../crates/osu-radio-client/src/api.rs).
+
+| Route | Response and behavior |
+| --- | --- |
+| `GET /api/beatmap-sets` | Array of `{id, online_id, hash, audio_sources}`. Each audio source has `{id, kind, location}`; distinct sources per set, empty arrays allowed. |
+| `GET /api/user-data` | `{id, osu_folders}` with singleton `id = 1`. |
+| `GET /api/user-data/osu-folders` | Folder array, including disabled entries. |
+| `POST /api/user-data/osu-folders` | Body `{path, label?}`. Discovery validates an absolute path. New folder: 201; duplicate marker: 409 with the existing folder body, leaving its label unchanged. Invalid/ambiguous folder: 400. |
+| `PATCH /api/user-data/osu-folders/{id}` | Optional `label` and `enabled`; 200 with folder, or 404. Omitted fields remain unchanged; explicit null clears label. Supplied non-null labels are trimmed by the service. |
+| `DELETE /api/user-data/osu-folders/{id}` | 204 when removed, 404 when absent. Transactional cascade and shared cleanup; no file deletion. |
+
+Folder JSON fields remain `id`, `kind`, `root_path`, `marker_path`, `label`,
+`enabled`, and `last_scanned_at`. Unexpected failures retain the safe 500 error
+boundary described above. Registration does not scan/import a library; the CLI
+`store` workflow performs complete snapshot replacement. Audio locations in these
+responses are references, not a streaming endpoint.
 
 ## Evidence and verification limits
 
@@ -129,9 +152,9 @@ without launching a server.
 The ignored integration test
 [`the_embedded_server_answers_on_the_port_it_reports`](../../crates/osu-radio-client/tests/embedded_server.rs)
 launches a built server and also exercises database-backed requests. It is not a
-pure supervision test and is deferred during this documentation effort. Server
+pure supervision test; run it only against its isolated test environment. Server
 route/service tests use [`test_support.rs`](../../apps/osu-radio-server/src/test_support.rs),
-but their database-dependent behavior is outside this guide.
+cover repository-backed responses with isolated memory SQLite.
 
 All behavior above is source-confirmed. Recommended checks and actual validation
 results must be reported separately; a source review or compile check is not a

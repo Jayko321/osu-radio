@@ -2,7 +2,7 @@
 
 Read [the project map](index.md) first. This guide describes implementation checked against the source; commands and prerequisites are in [development](development.md). Use the [scanner skill](../../.agents/skills/osu-radio-scanner/SKILL.md) for the change procedure.
 
-The scanner discovers installations and returns imported domain values. It does not choose what the application retains, modify osu! data, copy audio, or own playback. Database internals, database-backed contracts, and persistence workflows are deferred while `radio-db` is rewritten.
+The scanner discovers installations and returns imported domain values. It does not choose what the application retains, modify osu! data, copy audio, or own playback. Database internals and persistence workflows belong to [database](database.md); scanner contracts do not decide persistence.
 
 The confirmed product direction is desktop music playback from local osu! installations and eventually hosted sources. Hosted providers and their import representation remain undecided. Linux and Windows are current platforms; macOS discovery branches exist but are unverified, and mobile support is future work.
 

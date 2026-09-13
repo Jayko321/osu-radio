@@ -1,35 +1,30 @@
-use std::sync::Arc;
-
 use anyhow::{Context, Result};
 use radio_db::Database;
-use tokio::sync::{Mutex, MutexGuard};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
-    database: Arc<Mutex<Database>>,
+    database: Database,
 }
 
 impl AppState {
     pub(crate) async fn connect(database_url: &str) -> Result<Self> {
-        let mut database = Database::connect(database_url)
+        let database = Database::connect(database_url)
             .await
-            .context("Failed to connect to the configured SQLite database")?;
+            .context("Failed to connect to the configured database")?;
 
         database
             .check_connection()
             .await
-            .context("The configured SQLite database did not respond to a connectivity check")?;
+            .context("The configured database did not respond to a connectivity check")?;
         database
-            .apply_schema()
+            .migrate()
             .await
-            .context("Failed to apply the beatmap schema to the configured SQLite database")?;
+            .context("Failed to apply the beatmap schema to the configured database")?;
 
-        Ok(Self {
-            database: Arc::new(Mutex::new(database)),
-        })
+        Ok(Self { database })
     }
 
-    pub(crate) async fn database(&self) -> MutexGuard<'_, Database> {
-        self.database.lock().await
+    pub(crate) const fn database(&self) -> &Database {
+        &self.database
     }
 }

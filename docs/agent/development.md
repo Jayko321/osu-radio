@@ -1,13 +1,13 @@
 # Development and verification
 
 Start with [the index](index.md), then the guide for the affected component:
-[scanner](scanner.md), [frontend](frontend.md), or [backend](backend.md).
+[scanner](scanner.md), [frontend](frontend.md), [database](database.md), or [backend](backend.md).
 The commands below are recommendations checked against repository paths and
 flags, not a record that they ran successfully.
 
-`radio-db` internals, database-backed API contracts, and persistence workflows
-are deferred during its rewrite. Do not use database resets, storage imports,
-or broad machine discovery as routine documentation or frontend checks.
+Database contracts are documented in [database](database.md). Use disposable
+databases for persistence checks; do not use application database resets, real
+storage imports, or broad machine discovery as routine verification.
 
 ## Platforms and prerequisites
 
@@ -47,7 +47,7 @@ frontends.
 | `DOTNET_CLI_HOME` | Used by the helper build when supplied; otherwise the build script uses `target/dotnet-home`. | [Build script](../../crates/radio-scanner/build.rs) |
 | `OSU_RADIO_SERVER_ADDRESS` | Standalone default is `127.0.0.1:3000`; the supervisor supplies `ServerOptions::address`, default `127.0.0.1:0`. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
 | `OSU_RADIO_SERVER_BIN` | Server executable override after explicit `ServerOptions::binary`, before sibling and `PATH` lookup. | [Supervisor](../../crates/osu-radio-client/src/server.rs) |
-| `SQLITE_DATABASE_URL` | Required by current server startup; database values/setup and behavior are deferred. | [Server config](../../apps/osu-radio-server/src/config.rs) |
+| `SQLITE_DATABASE_URL` / `POSTGRES_DATABASE_URL` | Required by SQLite / PostgreSQL CLI and server builds respectively. SQLite accepts paths, SQLite URLs and `:memory:`. | [Server config](../../apps/osu-radio-server/src/config.rs) |
 | `.env` and process working directory | Server unconditionally propagates failure to load `.env`; environment variables alone do not permit launch without a discoverable, loadable file. `ServerOptions::working_directory` can select the child directory. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
 
 Discovery's default candidates also consult OS location inputs such as
@@ -107,17 +107,62 @@ playback.
 | Unsupported-source behavior | `cargo test -p radio-scanner --locked reports_unsupported_scanner_sources` | [Scanner entry-point test](../../crates/radio-scanner/src/lib.rs). |
 | Scanner change spanning these paths | `cargo test -p radio-scanner --locked` | Combines the preceding scanner checks; helper build prerequisites still apply. |
 | C# helper source | `dotnet build tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj --configuration Release --nologo` | Compiles the producer; no automated C# test project currently exists. Follow the [scanner skill](../../.agents/skills/osu-radio-scanner/SKILL.md) for contract checks. |
-| CLI discovery/import wiring | `cargo clippy -p osu-radio-cli --all-targets --locked` | Compile/lint check; the current CLI unit test is database-specific, and there are no dedicated scan/import command tests. Help commands above inspect flags without discovery. |
+| CLI wiring | `cargo test -p osu-radio-cli --locked` and `cargo clippy -p osu-radio-cli --all-targets --locked` | Argument tests reject removed `store --count` and retain `--clear`; memory SQLite connection check. No real source import. |
 | Client formatting, state, readiness parsing | `cargo test -p osu-radio-client --lib --locked` | [Client tests](../../crates/osu-radio-client/src/lib.rs), [Track tests](../../crates/osu-radio-client/src/view_models/track.rs), [readiness tests](../../crates/osu-radio-client/src/server.rs); launches no server. |
 | GUI code and embedded stylesheet paths | `cargo check -p osu-radio-gui-vizia --release --locked` | Release `include_style!` resolves stylesheet paths at compile time. Debug can defer missing paths to runtime. |
 | Server changes, default docs | `cargo clippy -p osu-radio-server --all-targets --locked` | Compiles the documentation-enabled router; does not launch the server. |
-| Server changes, docs disabled | `cargo clippy -p osu-radio-server --no-default-features --all-targets --locked` | Compiles the other router and checks OpenAPI annotations remain optional. |
+| Server changes, docs disabled | `cargo clippy -p osu-radio-server --no-default-features --features sqlite --all-targets --locked` | Compiles the other router and checks OpenAPI annotations remain optional. |
 | Covered cross-crate changes | Combine the affected rows above | Do not automatically expand to persistence workflows or real installation reads. |
-| Broad review compile/lint coverage when warranted | `cargo clippy --workspace --all-targets --locked` | Builds existing workspace dependencies, including deferred components; it is not a specification or runtime test of those components. |
+| Broad review compile/lint coverage when warranted | `cargo clippy --workspace --all-targets --locked` | Builds existing workspace dependencies, including database components; it is not a specification or runtime test of those components. |
 
 Do not use Cargo `--all-features`: the workspace includes mutually exclusive
 database backend features. Feature compatibility is a build constraint here;
-database behavior and backend-specific test procedures remain deferred.
+select the backend explicitly when disabling default features.
+
+### Repository and backend checks
+
+Use each backend in a separate Cargo invocation. Default tests use SQLite:
+
+```sh
+cargo test -p radio-db --locked
+cargo test -p osu-radio-server --locked
+cargo test -p osu-radio-server --no-default-features --features sqlite --locked
+cargo clippy -p radio-db -p osu-radio-cli -p osu-radio-server --all-targets --locked -- -D warnings
+cargo clippy -p radio-db -p osu-radio-cli -p osu-radio-server --no-default-features --features postgres --all-targets --locked -- -D warnings
+cargo clippy -p osu-radio-server --no-default-features --features postgres,docs --all-targets --locked -- -D warnings
+```
+
+The PostgreSQL repository test is ignored by default. Provision a **fresh,
+disposable local cluster/database**, naming the database `radio_db_test_*`, and
+supply only its URL in `RADIO_DB_TEST_POSTGRES_URL`:
+
+```sh
+RADIO_DB_TEST_POSTGRES_URL='postgres://USER@127.0.0.1:PORT/radio_db_test_contracts' cargo test -p radio-db --no-default-features --features postgres --locked -- --include-ignored
+```
+
+Replace USER and PORT with the disposable cluster's values. The test never reads
+`POSTGRES_DATABASE_URL`. It exercises explicit reset, creates failure triggers,
+and retains an unrelated-table fixture to prove reset scope; use a new disposable
+database for each run. Stop and remove only that test cluster after testing.
+PostgreSQL caller builds compile both router variants; route/service runtime tests
+use isolated SQLite. Memory tests, generated keys and independent-pool concurrency
+are covered by [repository contracts](../../crates/radio-db/src/tests.rs).
+
+Both commands below **must fail** with the explicit exactly-one-backend error:
+
+```sh
+cargo check -p radio-db --no-default-features --locked
+cargo check -p radio-db --no-default-features --features sqlite,postgres --locked
+```
+
+### Store and schema lifecycle
+
+`store` reads a full scanner result before opening the replacement transaction.
+It registers the selected marker and replaces that installation's snapshot;
+`--count` is no longer accepted. `--clear` explicitly resets all application data,
+including registered folders. Plain startup migrates without clearing, and rejects
+legacy unversioned tables. Use a new database when retaining a legacy database is
+necessary. See [database](database.md) for lock, hash and cleanup guarantees.
 
 For a GUI interaction check, first build the server with
 `cargo build -p osu-radio-server --locked`, then launch the GUI with
@@ -128,7 +173,7 @@ validation. Check the affected interactions using the [GUI skill](../../.agents/
 
 The ignored [embedded-server test](../../crates/osu-radio-client/tests/embedded_server.rs)
 also launches a real server and exercises database-backed requests. It is not a
-safe replacement for the isolated readiness parser tests during this rewrite.
+replacement for the isolated readiness parser tests; it requires its own isolated runtime environment.
 
 ## Troubleshooting and limits
 
@@ -150,7 +195,7 @@ safe replacement for the isolated readiness parser tests during this rewrite.
 | Modify GUI layout, interaction, styles, or assets | [`osu-radio-gui`](../../.agents/skills/osu-radio-gui/SKILL.md) | [Frontend](frontend.md) |
 | Modify discovery, import mapping, or Realm helper | [`osu-radio-scanner`](../../.agents/skills/osu-radio-scanner/SKILL.md) | [Scanner](scanner.md) |
 | Review staged/unstaged work and write findings only | [`cr`](../../.agents/skills/cr/SKILL.md) | This verification matrix plus the affected guide |
-| Server or client API work | Read source and [backend](backend.md); no dedicated API skill yet | Database-dependent contracts remain deferred |
+| Database or server/client API work | [API skill](../../.agents/skills/osu-radio-api/SKILL.md) | [Database](database.md), [backend](backend.md) |
 
 Keep task procedures in skills and technical facts in guides. Claude uses the
 same procedures linked from `CLAUDE.md`; do not create separate copies.

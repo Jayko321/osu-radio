@@ -1,6 +1,6 @@
 # Frontend and desktop GUI
 
-Read [the architecture and capability map](index.md) first. This guide describes the current source; it does not declare Vizia or child-process hosting permanent platform requirements. The confirmed direction is desktop music playback on Linux and Windows, eventually including hosted sources; macOS is unverified and mobile platforms are future goals. Database-backed API contracts and persistence workflows are deferred during the `radio-db` rewrite.
+Read [the architecture and capability map](index.md) first. This guide describes the current source; it does not declare Vizia or child-process hosting permanent platform requirements. The confirmed direction is desktop music playback on Linux and Windows, eventually including hosted sources; macOS is unverified and mobile platforms are future goals. Database-backed API contracts and persistence workflows are described in [backend](backend.md) and [database](database.md).
 
 For a GUI task, use the [osu-radio-gui procedure](../../.agents/skills/osu-radio-gui/SKILL.md). Build commands and their limitations belong in [development](development.md); server-side protocol ownership belongs in [backend](backend.md).
 

@@ -79,7 +79,7 @@ pub(crate) async fn list_beatmap_sets(
     ))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use crate::test_support::{beatmap_set, state_with};
 
@@ -99,6 +99,42 @@ mod tests {
         assert_eq!(listed[0].audio_sources.len(), 1);
         assert_eq!(listed[0].audio_sources[0].kind, "local");
         assert_eq!(listed[0].audio_sources[0].location, "/osu/files/a/ab/abc");
+    }
+
+    #[tokio::test]
+    async fn cloned_state_reads_replacements_and_installation_deletion() {
+        let state = state_with(&[beatmap_set(1, "/osu/old.mp3")]).await;
+        let cloned = state.clone();
+        let installation = state
+            .database()
+            .osu_installations()
+            .all()
+            .await
+            .expect("installations should load")
+            .remove(0);
+        state
+            .database()
+            .osu_installations()
+            .replace_snapshot(installation.id, &[beatmap_set(2, "/osu/new.mp3")])
+            .await
+            .expect("replacement should store");
+        let Json(listed) = list_beatmap_sets(State(cloned.clone()))
+            .await
+            .expect("replacement should be listed");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].online_id, Some(2));
+        assert_eq!(listed[0].audio_sources[0].location, "/osu/new.mp3");
+
+        state
+            .database()
+            .osu_installations()
+            .delete(installation.id)
+            .await
+            .expect("installation should delete");
+        let Json(listed) = list_beatmap_sets(State(cloned))
+            .await
+            .expect("empty library should be listed");
+        assert!(listed.is_empty());
     }
 
     #[tokio::test]

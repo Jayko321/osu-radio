@@ -22,8 +22,8 @@ impl<'a> BeatmapSetService<'a> {
         let stored = self
             .state
             .database()
-            .await
-            .beatmap_sets_with_audio_sources()
+            .beatmap_sets()
+            .all_with_audio_sources()
             .await
             .context("Failed to load beatmap sets with their audio sources")?;
 
@@ -37,7 +37,7 @@ impl<'a> BeatmapSetService<'a> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use radio_db::model::SourceType;
 

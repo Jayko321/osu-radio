@@ -45,17 +45,18 @@ impl<'a> UserDataService<'a> {
     }
 
     pub(crate) async fn overview(&self) -> Result<UserDataOverview> {
-        let mut database = self.state.database().await;
+        let database = self.state.database();
 
         let user_data = database
             .user_data()
+            .get()
             .await
             .context("Failed to load the stored user data")?;
         let osu_folders = database
             .osu_installations()
+            .all()
             .await
             .context("Failed to load the registered osu! folders")?;
-        drop(database);
 
         Ok(UserDataOverview {
             id: user_data.id,
@@ -66,8 +67,8 @@ impl<'a> UserDataService<'a> {
     pub(crate) async fn osu_folders(&self) -> Result<Vec<OsuInstallation>> {
         self.state
             .database()
-            .await
             .osu_installations()
+            .all()
             .await
             .context("Failed to load the registered osu! folders")
     }
@@ -81,8 +82,8 @@ impl<'a> UserDataService<'a> {
 
         self.state
             .database()
-            .await
-            .register_osu_installation(&marker, label.as_deref())
+            .osu_installations()
+            .register(&marker, label.as_deref())
             .await
             .context("Failed to register the osu! folder")
             .map_err(RegisterFolderError::Failed)
@@ -95,8 +96,8 @@ impl<'a> UserDataService<'a> {
     ) -> Result<Option<OsuInstallation>> {
         self.state
             .database()
-            .await
-            .update_osu_installation(
+            .osu_installations()
+            .update(
                 id,
                 OsuInstallationChanges {
                     label: changes
@@ -113,8 +114,8 @@ impl<'a> UserDataService<'a> {
     pub(crate) async fn remove_osu_folder(&self, id: i32) -> Result<bool> {
         self.state
             .database()
-            .await
-            .delete_osu_installation(id)
+            .osu_installations()
+            .delete(id)
             .await
             .context("Failed to remove the registered osu! folder")
     }
@@ -148,7 +149,7 @@ async fn resolve_osu_folder(path: &Path) -> Result<OsuMarker, RegisterFolderErro
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use radio_core::OsuKind;
 

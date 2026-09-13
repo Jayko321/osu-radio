@@ -2,7 +2,7 @@
 
 @AGENTS.md
 
-The import above is the shared project contract. Use its task links to read only the relevant guides. Database internals, database-backed API contracts and persistence workflows are deferred while `radio-db` is rewritten.
+The import above is the shared project contract. Use its task links to read only the relevant guides. Database internals and persistence workflows are documented in [database](docs/agent/database.md); HTTP contracts are in [backend](docs/agent/backend.md).
 
 ## Shared procedures in Claude
 
@@ -10,6 +10,7 @@ Read and follow these repository-local procedures for matching tasks; their bodi
 
 - GUI layout, interactions, styles or assets: [osu-radio-gui](.agents/skills/osu-radio-gui/SKILL.md).
 - Discovery, import mapping or Realm helper changes: [osu-radio-scanner](.agents/skills/osu-radio-scanner/SKILL.md).
+- Database repositories and server/client API changes: [osu-radio-api](.agents/skills/osu-radio-api/SKILL.md).
 - Findings-only pre-commit review: [cr](.agents/skills/cr/SKILL.md), including its linked Rust checklist and report format.
 
 These files live under `.agents/skills/`; this repository does not provide Claude slash-command wrappers for them. Follow the linked files directly when a matching procedure is requested or needed. Do not duplicate them under `.claude/` just to maintain a second copy.

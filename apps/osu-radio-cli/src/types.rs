@@ -31,7 +31,7 @@ pub(crate) enum Command {
     Import(ImportArgs),
     #[command(about = "Import beatmaps from an osu! source into the configured database.")]
     Store(StoreArgs),
-    #[command(about = "Connect to the SQLite database configured in .env and verify it responds.")]
+    #[command(about = "Connect to the database configured in .env and verify it responds.")]
     Database,
 }
 
@@ -129,13 +129,7 @@ pub(crate) struct StoreArgs {
     pub(crate) marker: Option<PathBuf>,
     #[arg(
         long,
-        value_name = "COUNT",
-        help = "Store at most COUNT beatmap sets. Defaults to storing every discovered set."
-    )]
-    pub(crate) count: Option<usize>,
-    #[arg(
-        long,
-        help = "Drop and recreate every table before importing, discarding stored beatmaps and registered osu! folders."
+        help = "Reset application tables before importing, discarding stored beatmaps and registered osu! folders."
     )]
     pub(crate) clear: bool,
     #[arg(long, help = "Print machine-readable JSON instead of a summary.")]
@@ -172,5 +166,19 @@ impl From<SourceArg> for OsuKind {
             SourceArg::Stable => Self::Stable,
             SourceArg::Lazer => Self::Lazer,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Command};
+    use clap::Parser;
+
+    #[test]
+    fn store_rejects_count_and_retains_explicit_clear() {
+        assert!(Cli::try_parse_from(["osu-radio-cli", "store", "--count", "1"]).is_err());
+        let cli = Cli::try_parse_from(["osu-radio-cli", "store", "--clear"])
+            .expect("explicit reset should remain available");
+        assert!(matches!(cli.command, Some(Command::Store(args)) if args.clear));
     }
 }

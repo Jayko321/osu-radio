@@ -262,7 +262,7 @@ fn unknown_folder(id: i32) -> ApiError {
     ApiError::not_found(format!("No osu! folder is registered with id {id}."))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use crate::test_support::{empty_state, lazer_folder};
 
@@ -304,10 +304,19 @@ mod tests {
         let state = empty_state().await;
         let folder = lazer_folder();
 
-        register(&state, folder.path().to_path_buf(), None).await;
-        let response = register(&state, folder.path().to_path_buf(), None).await;
+        register(&state, folder.path().to_path_buf(), Some("Desktop")).await;
+        let response = register(&state, folder.path().to_path_buf(), Some("Changed")).await;
 
         assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("conflict body should be readable");
+        let stored: serde_json::Value = serde_json::from_slice(&body)
+            .expect("conflict body should retain the folder response shape");
+        assert_eq!(stored["id"], 1);
+        assert_eq!(stored["label"], "Desktop");
+        assert_eq!(stored["enabled"], true);
+        assert!(stored["last_scanned_at"].is_null());
     }
 
     #[tokio::test]

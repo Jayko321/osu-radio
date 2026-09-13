@@ -1,9 +1,9 @@
 use std::{fs, path::PathBuf};
 
-use radio_core::OsuKind;
 use radio_core::import_types::{
     BeatmapMetadata, ImportedBeatmap, ImportedBeatmapSet, RealmFile, RealmNamedFileUsage,
 };
+use radio_core::{OsuKind, OsuMarker};
 use tempfile::TempDir;
 
 use crate::state::AppState;
@@ -47,10 +47,24 @@ pub(crate) fn beatmap_set(online_id: i32, audio_path: &str) -> ImportedBeatmapSe
 
 pub(crate) async fn state_with(beatmap_sets: &[ImportedBeatmapSet]) -> AppState {
     let state = empty_state().await;
+    let installation = state
+        .database()
+        .osu_installations()
+        .register(
+            &OsuMarker {
+                kind: OsuKind::Lazer,
+                root_path: PathBuf::from("/test/osu"),
+                marker_path: PathBuf::from("/test/osu/client.realm"),
+            },
+            None,
+        )
+        .await
+        .expect("test installation should register")
+        .into_installation();
     state
         .database()
-        .await
-        .import_beatmap_sets(beatmap_sets, None, None)
+        .osu_installations()
+        .replace_snapshot(installation.id, beatmap_sets)
         .await
         .expect("beatmap sets should store");
 

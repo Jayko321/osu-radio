@@ -1,5 +1,9 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BeatmapMetadata {
+use sea_orm::entity::prelude::*;
+
+#[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
+#[sea_orm(table_name = "beatmap_metadata")]
+pub struct Model {
+    #[sea_orm(primary_key, auto_increment = false)]
     pub hash: String,
     pub title: Option<String>,
     pub title_unicode: Option<String>,
@@ -13,3 +17,8 @@ pub struct BeatmapMetadata {
     pub audio_file: Option<String>,
     pub background_file: Option<String>,
 }
+
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+pub enum Relation {}
+
+impl ActiveModelBehavior for ActiveModel {}
