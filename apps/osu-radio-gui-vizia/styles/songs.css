@@ -3,6 +3,17 @@
     height: 1s;
 }
 
+.songs-footer {
+    width: 1s;
+    height: auto;
+    padding-top: 12px;
+    alignment: left;
+}
+
+button.library-refresh { height: 36px; }
+.library-refresh-content { width: auto; height: auto; gap: 8px; alignment: center; }
+.library-refresh-content .icon { size: 18px; }
+
 .track-row { width: 1s; padding-bottom: 16px; }
 .track-list list-item { padding: 0px; }
 
@@ -19,11 +30,11 @@
 }
 
 .track-card:hover {
-    outline: 1px solid rgba(255, 255, 255, 0.25);
+    outline-width: 1px; outline-color: var(--border);
 }
 
 .track-card.playing .track-card-border {
-    border: 1px solid #79d9d9;
+    border-width: 1px; border-color: var(--accent);
 }
 
 .track-card-border,
@@ -47,9 +58,9 @@
     height: 30px;
     text-wrap: false;
     font-size: 22px;
-    font-weight: 800;
-    font-variation-settings: "wght" 800;
-    color: #ffffff;
+    font-weight: 700;
+
+    color: var(--text);
     text-overflow: ellipsis;
 }
 
@@ -60,8 +71,8 @@
     text-overflow: ellipsis;
     font-size: 16px;
     font-weight: 500;
-    font-variation-settings: "wght" 500;
-    color: #ffffff;
+
+    color: var(--text);
 }
 
 .tint-navy {

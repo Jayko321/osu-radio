@@ -17,7 +17,7 @@ use std::{
     ops::ControlFlow,
     path::{Path, PathBuf},
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -109,6 +109,16 @@ where
     F: FnMut(OsuMarker) -> ControlFlow<()> + Send,
 {
     let collector = Collector::new(sink, options);
+    run_discovery(options, &collector);
+}
+
+fn run_discovery<F>(options: &DiscoveryOptions, collector: &Collector<F>)
+where
+    F: FnMut(OsuMarker) -> ControlFlow<()> + Send,
+{
+    if collector.stopped() {
+        return;
+    }
 
     for (kind, marker_path) in known::known_candidates(&options.roots) {
         if collector.offer(kind, marker_path).is_break() {
@@ -121,13 +131,13 @@ where
     }
 
     let roots = options.sweep_roots();
-    sweep::sweep(&roots, Some(options.shallow_max_depth), &collector);
+    sweep::sweep(&roots, Some(options.shallow_max_depth), collector);
 
     if options.depth == DiscoveryDepth::Shallow || collector.stopped() {
         return;
     }
 
-    sweep::sweep(&roots, None, &collector);
+    sweep::sweep(&roots, None, collector);
 }
 
 /// Runs discovery synchronously and collects every marker it finds.
@@ -148,6 +158,13 @@ pub fn find_osu_markers(options: &DiscoveryOptions) -> Vec<OsuMarker> {
 #[derive(Debug)]
 pub struct Discovery {
     receiver: mpsc::Receiver<OsuMarker>,
+    stop: Arc<AtomicBool>,
+}
+
+impl Drop for Discovery {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
 }
 
 impl Discovery {
@@ -171,15 +188,18 @@ impl Discovery {
 #[must_use]
 pub fn discover(options: DiscoveryOptions) -> Discovery {
     let (sender, receiver) = mpsc::channel(DISCOVERY_CHANNEL_CAPACITY);
-
-    tokio::task::spawn_blocking(move || {
-        find_osu_markers_with(&options, |marker| match sender.blocking_send(marker) {
+    let collector = Collector::new(
+        move |marker| match sender.blocking_send(marker) {
             Ok(()) => ControlFlow::Continue(()),
             Err(_) => ControlFlow::Break(()),
-        });
-    });
+        },
+        &options,
+    );
+    let stop = Arc::clone(&collector.stop);
 
-    Discovery { receiver }
+    tokio::task::spawn_blocking(move || run_discovery(&options, &collector));
+
+    Discovery { receiver, stop }
 }
 
 struct CollectorState<F> {
@@ -191,7 +211,7 @@ struct CollectorState<F> {
 pub(crate) struct Collector<F> {
     state: Mutex<CollectorState<F>>,
     kind: Option<OsuKind>,
-    stop: AtomicBool,
+    stop: Arc<AtomicBool>,
 }
 
 impl<F> Collector<F>
@@ -206,7 +226,7 @@ where
                 remaining: options.limit.map(NonZeroUsize::get),
             }),
             kind: options.kind,
-            stop: AtomicBool::new(false),
+            stop: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -234,6 +254,9 @@ where
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.stopped() {
+            return ControlFlow::Break(());
+        }
         if !state.seen.insert(key) {
             return ControlFlow::Continue(());
         }
@@ -248,29 +271,30 @@ where
             *remaining = remaining.saturating_sub(1);
             *remaining == 0
         });
-        drop(state);
-
-        if exhausted {
+        if exhausted || flow.is_break() {
             self.stop.store(true, Ordering::Relaxed);
+            drop(state);
             return ControlFlow::Break(());
         }
 
-        if flow.is_break() {
-            self.stop.store(true, Ordering::Relaxed);
-        }
-
+        drop(state);
         flow
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, num::NonZeroUsize, path::Path};
+    use std::{
+        fs, num::NonZeroUsize, ops::ControlFlow, path::Path, sync::Arc, sync::atomic::Ordering,
+        thread, time::Duration,
+    };
 
     use radio_core::OsuKind;
     use tempfile::TempDir;
 
-    use super::{DiscoveryDepth, DiscoveryOptions, discover, find_osu_markers};
+    use super::{
+        DiscoveryDepth, DiscoveryOptions, discover, find_osu_markers, find_osu_markers_with,
+    };
 
     fn fixture() -> TempDir {
         let temp = TempDir::new().expect("temp dir");
@@ -320,6 +344,49 @@ mod tests {
         });
 
         assert_eq!(markers.len(), 1, "{markers:?}");
+    }
+
+    #[test]
+    fn parallel_sweep_stops_after_limit_or_callback_break() {
+        let temp = TempDir::new().expect("temp dir");
+        for index in 0..64 {
+            write_marker(&temp.path().join(format!("library/{index}/client.realm")));
+        }
+
+        for limit in [NonZeroUsize::new(1), None] {
+            let mut emitted = 0;
+            find_osu_markers_with(
+                &DiscoveryOptions {
+                    limit,
+                    shallow_max_depth: 0,
+                    ..options(&temp)
+                },
+                |_| {
+                    emitted += 1;
+                    // Hold the callback lock while other walk workers offer markers.
+                    thread::sleep(Duration::from_millis(50));
+                    if limit.is_some() {
+                        ControlFlow::Continue(())
+                    } else {
+                        ControlFlow::Break(())
+                    }
+                },
+            );
+            assert_eq!(emitted, 1, "limit: {limit:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_discovery_sets_worker_stop_flag_without_markers() {
+        let temp = TempDir::new().expect("temp dir");
+        fs::create_dir_all(temp.path().join("empty/tree")).expect("create empty tree");
+        let discovery = discover(options(&temp));
+        let stop = Arc::clone(&discovery.stop);
+        assert!(!stop.load(Ordering::Relaxed));
+
+        drop(discovery);
+
+        assert!(stop.load(Ordering::Relaxed));
     }
 
     #[test]

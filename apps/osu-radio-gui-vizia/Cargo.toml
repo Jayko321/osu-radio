@@ -12,3 +12,6 @@ osu-radio-client = { path = "../../crates/osu-radio-client" }
 rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 tokio.workspace = true
 vizia = { version = "0.4.0" }
+
+[dev-dependencies]
+vizia_style = "=0.4.0"

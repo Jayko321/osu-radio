@@ -4,6 +4,7 @@ use sea_orm_migration::{MigratorTrait, SchemaManager, prelude::*};
 
 mod m20260913_000001_library;
 mod m20260913_000002_background;
+mod m20260914_000003_native_paths;
 
 pub(crate) struct Migrator;
 
@@ -13,6 +14,7 @@ impl MigratorTrait for Migrator {
         vec![
             Box::new(m20260913_000001_library::Migration),
             Box::new(m20260913_000002_background::Migration),
+            Box::new(m20260914_000003_native_paths::Migration),
         ]
     }
 }
@@ -28,9 +30,10 @@ const APPLICATION_TABLES: &[&str] = &[
 ];
 
 pub(crate) async fn migrate(connection: &DatabaseConnection) -> Result<()> {
-    let manager = SchemaManager::new(connection);
+    let transaction = begin_schema_change(connection).await?;
+    let manager = SchemaManager::new(&transaction);
     let has_history = manager.has_table("seaql_migrations").await?
-        && !Migrator::get_applied_migrations(connection)
+        && !Migrator::get_applied_migrations(&transaction)
             .await?
             .is_empty();
     if !has_history {
@@ -42,12 +45,13 @@ pub(crate) async fn migrate(connection: &DatabaseConnection) -> Result<()> {
             }
         }
     }
-    Migrator::up(connection, None).await?;
+    Migrator::up(&transaction, None).await?;
+    transaction.commit().await?;
     Ok(())
 }
 
 pub(crate) async fn reset(connection: &DatabaseConnection) -> Result<()> {
-    let transaction = connection.begin().await?;
+    let transaction = begin_schema_change(connection).await?;
     for table in APPLICATION_TABLES
         .iter()
         .copied()
@@ -66,4 +70,29 @@ pub(crate) async fn reset(connection: &DatabaseConnection) -> Result<()> {
     Migrator::up(&transaction, None).await?;
     transaction.commit().await?;
     Ok(())
+}
+
+// Lock before reading history, including on a database with no application tables yet.
+async fn begin_schema_change(
+    connection: &DatabaseConnection,
+) -> Result<sea_orm::DatabaseTransaction> {
+    #[cfg(feature = "sqlite")]
+    let transaction = connection
+        .begin_with_options(sea_orm::TransactionOptions {
+            sqlite_transaction_mode: Some(sea_orm::SqliteTransactionMode::Immediate),
+            ..Default::default()
+        })
+        .await?;
+    #[cfg(feature = "postgres")]
+    let transaction = {
+        let transaction = connection
+            .begin_with_config(Some(sea_orm::IsolationLevel::ReadCommitted), None)
+            .await?;
+        // Fixed application namespace and schema-lock ID; released on commit/rollback/drop.
+        transaction
+            .execute_unprepared("SELECT pg_advisory_xact_lock(1918985321, 1)")
+            .await?;
+        transaction
+    };
+    Ok(transaction)
 }

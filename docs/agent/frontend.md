@@ -36,7 +36,7 @@ refresh by audio ID, falling back to the first remaining row. Tests live in
 
 ## Session and server supervision
 
-`Session::start` starts `EmbeddedServer`, then creates an `ApiClient` at the reported URL. `Session` exposes `api`, `base_url`, and asynchronous `shutdown`. It does not itself perform an HTTP readiness request. After `Connected`, the GUI loads library and folders independently, each with loading, empty and error states. Songs retain Refresh / Retry; settings show Retry only after a failure.
+`Session::start` starts `EmbeddedServer`, then creates an `ApiClient` at the reported URL. `Session` exposes `api`, `base_url`, and asynchronous `shutdown`. It does not itself perform an HTTP readiness request. After `Connected`, the GUI loads library and folders independently, each with loading, empty and error states. Songs have a “Refresh library” button in the bottom-left footer, outside the scrolling list; it also retries failures and is disabled while loading. Status messages remain above the list and are hidden when empty. Settings show Retry only after a failure.
 
 The current [supervisor](../../crates/osu-radio-client/src/server.rs) has these behaviors:
 
@@ -52,7 +52,7 @@ Readiness parsing has focused unit tests in [server.rs](../../crates/osu-radio-c
 
 ## GUI state and event flow
 
-[main.rs](../../apps/osu-radio-gui-vizia/src/main.rs) owns one Tokio runtime that outlives the window. It passes a runtime handle to the app, allowing server shutdown and child reaping during UI teardown. Do not move runtime ownership into a model whose destruction would end it too early.
+[main.rs](../../apps/osu-radio-gui-vizia/src/main.rs) parses launch mode before constructing a runtime. Normal player mode owns one Tokio runtime that outlives the window; `--component-gallery` directly builds the memory-only gallery without that runtime, `AppData`, a session, database access or installation discovery. It passes a runtime handle to the app, allowing server shutdown and child reaping during UI teardown. Do not move runtime ownership into a model whose destruction would end it too early.
 
 [app.rs](../../apps/osu-radio-gui-vizia/src/app.rs) builds `AppData`, emits `Connect`, and builds the shell. `AppData` holds an optional `Arc<Session>`, runtime handle, and `UiState`. `UiState` is `Copy` and carries signals for the selected tab, selected audio ID and track, library rows, registered folders and the selected folder ID, independent loading states, artwork revision, two search strings, connection status, and tracked maximize state. Existing builder functions pass it by value.
 
@@ -62,7 +62,7 @@ Window-close events call `stop`, taking the session and spawning asynchronous sh
 
 The songs pane uses Vizia `VirtualList::new_generic` with a checked optional row lookup (the stock indexer can panic while a list shrinks). It uses 106px slots containing 90px cards and 16px spacing. Visible row construction and selection request media. A queue runs at most four tasks; each task fetches cover and duration sequentially. HTTP requests time out after 30 seconds. Image responses are bounded to 16 MiB on both client and server; raster decoding runs in a blocking task, cached covers are scaled proportionally to at most 1280px on the longest side, and the GUI-owned LRU cache is bounded to 64 MiB. Unavailable, corrupt or oversized artwork remains neutral. Duration failures leave `--:--`; refreshing permits another attempt.
 
-The General section shows an **osu! folders** dropdown with names formatted as `{kind} - {root_path}` and an adjacent plus button. The first returned folder is selected initially; selection is retained by ID on refresh and is session-local presentation only. An empty list shows `No osu! folders`. Long dropdown entries wrap, and the collapsed field has a full-name tooltip. Selecting a folder closes the popup and does not filter songs.
+The General section uses the shared **osu! folders** dropdown with names formatted as `{kind} - {root_path}` and an adjacent plus button. The first returned folder is selected initially; selection is retained by ID on refresh and is session-local presentation only. An empty list shows `No osu! folders`. Long dropdown entries wrap, and the collapsed field has a full-name tooltip. Selecting a folder closes the popup and does not filter songs.
 
 The plus button opens `rfd::AsyncFileDialog` for a directory and immediately registers the chosen path through the client API with no label. Cancellation leaves folder state unchanged. Adding is disabled during connection, loading, picking and registration. Duplicate registration selects the existing stored folder without adding a duplicate or changing its saved values. Loading/registration errors appear inline; Retry reloads a failed list or reopens the picker after failed registration. Settings have no manual path entry, label editing, enabled toggle, save/delete controls or last-scan display. Existing labels and backend CRUD contracts remain intact. Registration does not import songs; existing libraries obtain cover references after CLI reimport without `--clear`.
 
@@ -77,34 +77,113 @@ These are source-confirmed bindings, not a claim of interactive verification on 
 | Search fields | Edit independent query signals and toggle placeholder labels. Neither songs nor settings are filtered yet. | [search row](../../apps/osu-radio-gui-vizia/src/views/components/search_row.rs), [track list](../../apps/osu-radio-gui-vizia/src/views/songs/track_list.rs), [settings pane](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) |
 | Song filter chips | Static labels and visual hover treatment; no filter or picker actions. | [chip](../../apps/osu-radio-gui-vizia/src/views/components/chip.rs) |
 | Folder settings | Display-only dropdown selection, native directory picker with immediate registration, and failure-only retry. No GUI editing/removal, import or output-device selection. | [settings](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) |
-| Transport, volume, add, stack icon | Visual controls without action handlers. `icon_button` itself only adds a CSS class. | [controls](../../apps/osu-radio-gui-vizia/src/views/player/controls.rs), [icon helpers](../../apps/osu-radio-gui-vizia/src/views/components/icon.rs), [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs) |
+| Transport, volume, add, stack icon | Shared native icon buttons, explicitly disabled while playback/playlist actions are unavailable. | [controls](../../apps/osu-radio-gui-vizia/src/views/player/controls.rs), [icon helpers](../../apps/osu-radio-gui-vizia/src/views/components/icon.rs), [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs) |
 | Progress and elapsed time | Zero progress and `00:00` elapsed; optional duration follows the selected track. No seeking or playback clock. | [progress](../../apps/osu-radio-gui-vizia/src/views/player/progress.rs), [player stylesheet](../../apps/osu-radio-gui-vizia/styles/player.css) |
 | Window controls | Custom minimize/maximize/close actions and title-bar dragging; double-click handler requests maximize toggling. | [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs), [events](../../apps/osu-radio-gui-vizia/src/app.rs) |
 
-The app disables native decorations, so empty title-bar space and custom controls are operational UI. Dragging is guarded by `cx.hovered() == cx.current()` because mouse-down events bubble from children. The double-click handler currently checks the button only. The maximize icon follows a local boolean, not an observed OS window state; an OS-side maximize can desynchronize it, and a later button press may only bring the tracked state back into agreement.
+The app disables native decorations, so empty title-bar space and custom controls are operational UI. Dragging is guarded by `cx.hovered() == cx.current()` because mouse-down events bubble from children. The double-click handler has the same empty-bar target guard, preventing a control double-click from maximizing the window. The maximize icon follows a local boolean, not an observed OS window state; an OS-side maximize can desynchronize it, and a later button press may only bring the tracked state back into agreement.
+
+The title bar has an opaque background and `z-index: 1` in
+[top-bar.css](../../apps/osu-radio-gui-vizia/styles/top-bar.css), drawing it after
+the body's blur layers to keep it solid across tab changes and control hover.
+Visual consistency still requires manual GUI verification.
 
 ## View, stylesheet, and asset ownership
 
-Views use free builder functions, with one private custom `Artwork` view for raster rendering. Shared builders are re-exported by [components/mod.rs](../../apps/osu-radio-gui-vizia/src/views/components/mod.rs): `icon`, `icon_button`, `gap`, `hspacer`, `search_row`, `chip_row`, and `sidebar`. Songs, settings, and player each have an area module with leaf modules for their parts.
+Views use free builder functions; custom views handle raster artwork, menu keyboard traversal and the modal overlay. Native Vizia buttons, textboxes, switches, dropdowns and scroll views own the standard interactions. Shared builders are re-exported by [components/mod.rs](../../apps/osu-radio-gui-vizia/src/views/components/mod.rs): `icon`, `icon_button`, `button`, `field`, `text_input`, `search_row`, `toggle`, `tabs`, `tag`, `filter_tag`, `menu`, `material`, `modal`, `gap`, `hspacer`, `chip_row`, and `sidebar`. See the component contract below. Songs, settings, and player each have an area module with leaf modules for their parts.
 
-Stylesheets are owned by **areas**, not by every Rust view module. [The stylesheet registry](../../apps/osu-radio-gui-vizia/src/views/mod.rs) loads `base.css` first, then the six area `style()` functions in this order:
+Stylesheets are owned by **areas**, not by every Rust view module. [The stylesheet registry](../../apps/osu-radio-gui-vizia/src/views/mod.rs) loads `base.css` first, then shared components and area sheets, with the gallery sheet last:
 
 | Module | Sheet and covered views |
 | --- | --- |
 | [background.rs](../../apps/osu-radio-gui-vizia/src/views/background.rs) | [background.css](../../apps/osu-radio-gui-vizia/styles/background.css): body, backdrop, glows, pane layout |
+| [components/mod.rs](../../apps/osu-radio-gui-vizia/src/views/components/mod.rs) | [components.css](../../apps/osu-radio-gui-vizia/styles/components.css): shared controls, sidebar, materials, menus and modal |
 | [top_bar.rs](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs) | [top-bar.css](../../apps/osu-radio-gui-vizia/styles/top-bar.css): navigation, connection status, window controls |
-| [components/mod.rs](../../apps/osu-radio-gui-vizia/src/views/components/mod.rs) | [components.css](../../apps/osu-radio-gui-vizia/styles/components.css): shared sidebar, search, chips, icon buttons |
 | [songs/mod.rs](../../apps/osu-radio-gui-vizia/src/views/songs/mod.rs) | [songs.css](../../apps/osu-radio-gui-vizia/styles/songs.css): list and cards |
 | [settings/mod.rs](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) | [settings.css](../../apps/osu-radio-gui-vizia/styles/settings.css): list, sections, fields |
 | [player/mod.rs](../../apps/osu-radio-gui-vizia/src/views/player/mod.rs) | [player.css](../../apps/osu-radio-gui-vizia/styles/player.css): cover, metadata, progress, controls |
+| [gallery.rs](../../apps/osu-radio-gui-vizia/src/gallery.rs) | [gallery.css](../../apps/osu-radio-gui-vizia/styles/gallery.css): demo layout and material backdrop |
 
-[base.css](../../apps/osu-radio-gui-vizia/styles/base.css) supplies global font/window styling and spacers. Most appearance belongs in these sheets. Existing view modifiers bind dynamic state, asset choices, visibility, and explicit gap sizes. Adding a leaf component normally reuses its area's sheet; it does not inherently require another sheet or registry entry.
+[base.css](../../apps/osu-radio-gui-vizia/styles/base.css) supplies global font/window styling, the shared 24px icon size, and spacers. Most appearance belongs in these sheets. Existing view modifiers bind dynamic state, asset choices, visibility, and explicit gap sizes. Adding a leaf component normally reuses its area's sheet; it does not inherently require another sheet or registry entry.
 
-The current `include_style!` workflow hot-reloads files in debug and embeds them in release. A debug build alone does not prove stylesheet paths resolve; the release check in [development](development.md) covers embedded paths. Stylesheet-load failures are printed to stderr by the registry and do not abort app construction.
+`components.css` keeps the shared search geometry/typography and `.load-message` ownership for songs and settings. Settings now uses the shared menu and icon button; its area sheet only owns section and picker-row geometry.
 
-[assets.rs](../../apps/osu-radio-gui-vizia/src/assets.rs) embeds Nunito and SVG icons. Source artwork arrives through the cover endpoint and is decoded with Skia into a bounded GUI cache keyed by beatmap ID. Bundled reference artwork remains on disk and supplies a decoding fixture, not sample songs. `tint` keeps the existing GUI tint classes. The shared [Artwork view](../../apps/osu-radio-gui-vizia/src/views/components/artwork.rs) draws the same cached images in cards, cover and backdrop with a centered source crop, uniform scaling, linear sampling and clipping to the styled rounded path. Selection bindings request a redraw. Overlays stay separate from the source assets; the backdrop has 6% opacity and 20px blur, with the existing glow hues. The body clips decorative overflow below the top bar; radial fades finish inside their bounds to avoid visible rectangular edges at large sizes.
+The `include_style!` workflow hot-reloads files in debug and embeds them in release. The release check verifies embedded paths; the headless stylesheet test parses all eight bundled sheets with Vizia 0.4, rejects errors and recovery warnings, and checks retained unparsed/custom declarations. Vizia accepts some unsupported syntax without a parse error, so a release build or parse success alone is insufficient. In particular use separate `border-width`/`border-color` and `outline-width`/`outline-color` for variable colours; literal-width shorthands with `var(...)` are not resolved. Stylesheet-load failures are printed to stderr and do not abort app construction.
 
-`Svg::new` receives embedded icon bytes. The shared `.icon` uses `fill: transparent` so Vizia preserves embedded white fills and asset opacity; navigation does not multiply the already translucent Settings glyph's opacity. Icons remain 24px, with 16px window glyphs. Card overlays darken artwork directionally while text stays white, and the selected card retains its cyan border. The font's license is bundled as [OFL.txt](../../apps/osu-radio-gui-vizia/assets/fonts/OFL.txt).
+[assets.rs](../../apps/osu-radio-gui-vizia/src/assets.rs) embeds Poppins Regular/Medium/SemiBold/Bold, Nunito as a fallback, and original Lucide SVG icons. Origins and licenses are in [assets/SOURCES.md](../../apps/osu-radio-gui-vizia/assets/SOURCES.md). Source artwork arrives through the cover endpoint and is decoded with Skia into a bounded GUI cache keyed by beatmap ID. Bundled reference artwork remains on disk and supplies a decoding fixture, not sample songs. `tint` keeps the existing GUI tint classes. The shared [Artwork view](../../apps/osu-radio-gui-vizia/src/views/components/artwork.rs) draws the same cached images in cards, cover and backdrop with a centered source crop, uniform scaling, linear sampling and clipping to the styled rounded path. Selection bindings request a redraw. Overlays stay separate from the source assets; the backdrop has 6% opacity and 20px blur, with the existing glow hues. The body clips decorative overflow below the top bar; radial fades finish inside their bounds to avoid visible rectangular edges at large sizes.
+
+`Svg::new` receives unmodified Lucide bytes. Shared `.icon` uses `fill: var(--text)`;
+Vizia tints the rendered silhouette, preserving the original SVG stroke geometry.
+Icons are 24px, with 16px window glyphs. Buttons give icons a separate hit area.
+Selected card borders, progress, play, selected tags and menu options use the
+single `--accent` in `base.css`. Selected gallery tabs and Songs/Settings navigation
+use the white `--text` background with dark labels and icons. Card/artwork dimensions and adaptive player geometry
+remain independent of the component theme.
+
+## Shared components and gallery
+
+The [Components specification](https://www.figma.com/design/VQULSEzRKI4ki7uWGJEezk/osu-radio--Copy-?node-id=509-1539)
+is represented by GUI-owned `ButtonVariant`, `MaterialKind` and `FilterTagState` in
+[controls.rs](../../apps/osu-radio-gui-vizia/src/views/components/controls.rs).
+Signals and callbacks come from callers; no backend contract or client model is involved.
+
+| Component | Contract |
+| --- | --- |
+| Button | Light, Alternate, Accent, Link; 40px height, 14px text. Icon buttons use native Button semantics and accessible names at call sites. |
+| Field/search | Shared 40px input, 8px radius, 16px text, optional label/hint. Empty placeholder remains a separate inert label. |
+| Switch | Native Switch with a 37 × 20px track, external checked state and toggle callback. |
+| Tabs | 42px group with 12px radius; one selected index, activation via native buttons. |
+| Tags | Ordinary/selected tags and a neutral → included → excluded → neutral filter cycle. Excluded state has red colour and a text indication. |
+| Menu | Shared trigger, wrapped options, selected state, optional case-insensitive search, scrollable results and empty message. Native Dropdown closes on selection, Escape or outside press. Arrow Up/Down wrap focus; Home/End move to first/last option; native buttons activate with Enter/Space. Focus is confined while open and restored on dismissal. |
+| Materials | Regular rgba(18,18,18,0.8)/50px, Thick rgba(13,13,13,0.95)/60px, Thin rgba(0,0,0,0.5)/60px. `backdrop-filter` blurs behind the surface while children remain sharp. |
+| Modal | Mount after page content at the window overlay root. Regular material, width 561px capped to 90%, 24px padding, 24px radius and content gaps. Scroll height subtracts 48px of panel padding and the existing 48px outer clearance from logical window height, with an 80px minimum. Backdrop blocks the page; Vizia locks focus and restores the initiator when removed. Close icon, Escape and backdrop press dismiss it. |
+
+Hover/pressed states and focus outlines live in shared CSS. Buttons (including
+tabs, window controls and menu options) and switches have no focus outline;
+keyboard focus and activation still work. Text fields and searches retain one
+white outline on the input container, and song outlines remain unchanged.
+Disabled text/icons use the app's white foreground, with dark
+foregrounds retained on light-filled buttons and selected tabs. Disabled controls
+fade to 40% once: nested field/input/textbox and toggle/switch pairs suppress the
+inner fade. Native disabled state continues to block callbacks.
+
+[field.rs](../../apps/osu-radio-gui-vizia/src/views/components/field.rs) retains the
+inert sibling placeholder and adds an inert, absolutely positioned empty caret
+inside the textbox. CSS follows Vizia's `:placeholder-shown`, `:focus`, `.caret`
+and enabled state, sharing the native blink timer without inserting characters.
+Nonempty text keeps Vizia's caret rendering; its focused blink colour is white and
+its off phase is transparent. Text selection uses the neutral translucent white
+`--text-selection` highlight rather than the accent colour. The inner textbox has
+square corners so selection is not clipped to a rounded shape.
+
+[input.rs](../../apps/osu-radio-gui-vizia/src/input.rs) installs one global listener
+at both player and gallery startup. It scales `MouseScroll` deltas in place for
+60 logical pixels per wheel unit, compensating for Vizia 0.4's 20-physical-pixel
+multiplier and current display scale. Target, origin and propagation are retained;
+native Shift-axis handling, nested routing and scroll bounds remain unchanged.
+This covers the gallery, virtual song list, settings, menus and modal scroll views.
+Vizia combines wheel and touchpad input, so both are affected. Recheck this adapter
+when updating the toolkit.
+
+This pass is dark-mode only. Light mode is deferred; requested future colours are
+gray disabled text and input outlines, and black selected-tab backgrounds.
+
+The normal player reuses these controls for refresh/retry,
+folder selection/registration, navigation and window actions. Unimplemented transport
+and playlist buttons are disabled; selection still changes presentation only.
+
+[gallery.rs](../../apps/osu-radio-gui-vizia/src/gallery.rs) demonstrates every variant,
+editable fields, independent switches/tags/tabs, tag and playlist menus, long Unicode
+labels, empty/searchable/scrolled menus, modal dismissal, disabled controls and all
+materials over a coloured background. Button presses have an in-memory counter;
+the global disable switch makes callback suppression easy to inspect. Demo data is
+not persisted and playlist creation does not call a backend.
+
+Headless tests cover launch-mode parsing, filter cycles, exclusive tab selection,
+menu matching/navigation, scroll-event scaling/routing and all stylesheets. They do not establish rendering,
+hit testing, keyboard focus restoration or display-scale correctness. The manual
+gallery checklist and launch command are in [development](development.md#component-gallery).
+
 
 ## Adaptive player layout
 
@@ -122,7 +201,7 @@ The private `PlayerGeometry` in [player/mod.rs](../../apps/osu-radio-gui-vizia/s
 
 The cover is centered in the flexible region above a 173px metadata/progress/control group, with 52px bottom spacing. Its square size is capped by both available width and height. Player titles/artists, card text and connection status stay on one line and truncate overflowing text. The progress knob is centered on the fill endpoint as width changes; progress remains zero until playback is implemented.
 
-Both `font-weight` and the Nunito `wght` variation specify the intended weight.
+CSS `font-weight` selects the bundled Poppins static face (400/500/600/700); Nunito remains in the fallback family list.
 
 Colocated unit tests cover the five sizing targets, short/empty bounds, centered cropping with equal axis scaling, invalid image bounds and valid/corrupt image decoding. These are mathematical/resource checks; visual and input checks require a running GUI as described below.
 
@@ -132,7 +211,7 @@ These constraints come from the checked-in implementation and its workaround com
 
 - **Clickable children:** hoverable contents can become the press target and prevent a parent's `on_press`. The [top-bar](../../apps/osu-radio-gui-vizia/styles/top-bar.css) and [song-card](../../apps/osu-radio-gui-vizia/styles/songs.css) rules make clickable contents inert with `pointer-events: none`. Keep the parent interactive and avoid disabling children that are intended to have their own actions.
 - **Decorative overlap:** the backdrop and oversized glows extend beyond their apparent area. [background.css](../../apps/osu-radio-gui-vizia/styles/background.css) records the hit-testing problem where a later overlapping view steals presses from the title bar. Keep decorative layers inert even when visually underneath controls.
-- **Empty textboxes:** [search_row.rs](../../apps/osu-radio-gui-vizia/src/views/components/search_row.rs) records a Vizia 0.4.0 accessibility subtraction overflow for an empty textbox using `Textbox::placeholder`. The current workaround is a separate label in a `ZStack`, visible while the query is empty, with pointer events disabled in [components.css](../../apps/osu-radio-gui-vizia/styles/components.css). Preserve it until a dependency change is verified to remove the issue.
+- **Empty textboxes:** [field.rs](../../apps/osu-radio-gui-vizia/src/views/components/field.rs) records a Vizia 0.4.0 accessibility subtraction overflow for an empty textbox using `Textbox::placeholder`. The current workaround is a separate label in a `ZStack`, visible while the query is empty, with pointer events disabled in [components.css](../../apps/osu-radio-gui-vizia/styles/components.css). Preserve it until a dependency change is verified to remove the issue.
 - **Stack spacing:** [layout.rs](../../apps/osu-radio-gui-vizia/src/views/components/layout.rs) records that a child's `top` is ignored for spacing inside a stack. Use the parent's `gap` for regular spacing or the existing explicit `gap` element for different sibling spacing.
 - **Selectors and property dialect:** `scroll-content` is an element selector in [songs.css](../../apps/osu-radio-gui-vizia/styles/songs.css) and [settings.css](../../apps/osu-radio-gui-vizia/styles/settings.css), not a class. Existing sheets use `corner-radius`, `layout-type`, `size`, `gap`, `alignment`, and `1s` stretch syntax. Do not assume browser CSS or main-branch Vizia examples apply unchanged.
 - **Padding syntax:** Vizia 0.4 accepts one value for `padding`; use `padding-top`, `padding-bottom`, `padding-left` and `padding-right` for different sides. A two-value declaration such as `padding: 10px 12px` clears preceding declarations in that rule during parser recovery, which collapsed the folder dropdown rows. Compilation checks embedded paths but do not validate stylesheet syntax.

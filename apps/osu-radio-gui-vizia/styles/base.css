@@ -1,21 +1,31 @@
 :root {
-    background-color: #18181b;
-    color: #ffffff;
-    font-family: "Nunito";
+    --accent: #9366ED;
+    --text: #EFF1F5;
+    --text-secondary: #767982;
+    --text-selection: rgba(239, 241, 245, 0.25);
+    --background: #0E0E0E;
+    --surface: rgba(132, 137, 143, 0.2);
+    --border: rgba(242, 244, 252, 0.1);
+    --green: #78CC32;
+    --red: #ED6666;
+    --regular: rgba(18, 18, 18, 0.8);
+    --thick: rgba(13, 13, 13, 0.95);
+    --thin: rgba(0, 0, 0, 0.5);
+    --hover: rgba(242, 244, 252, 0.08);
+    background-color: var(--background);
+    color: var(--text);
+    font-family: "Poppins", "Nunito";
     font-size: 16px;
+    caret-color: var(--text);
+    selection-color: var(--text-selection);
 }
-
-.app {
-    layout-type: column;
-    size: 1s;
-    background-color: #18181b;
+.app { layout-type: column; size: 1s; background-color: var(--background); }
+.icon { size: 24px; fill: var(--text); pointer-events: none; }
+.hspacer { width: 1s; }
+button:focus-visible, switch:focus-visible {
+    outline-width: 0px;
 }
-
-.icon {
-    size: 24px;
-    fill: transparent;
-}
-
-.hspacer {
-    width: 1s;
-}
+button:disabled, textbox:disabled, switch:disabled { opacity: 0.4; }
+/* Override the native theme's muted disabled foreground; opacity supplies the fade. */
+button:disabled, textbox:disabled, label:disabled { color: var(--text); }
+.icon:disabled { fill: var(--text); }

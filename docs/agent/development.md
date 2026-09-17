@@ -178,6 +178,70 @@ The ignored [embedded-server test](../../crates/osu-radio-client/tests/embedded_
 also launches a real server and exercises database-backed requests. It is not a
 replacement for the isolated readiness parser tests; it creates its own temporary SQLite database and `.env`, and requires a built SQLite server. Run with `env -u SQLITE_DATABASE_URL -u POSTGRES_DATABASE_URL cargo test -p osu-radio-client --test embedded_server --locked -- --ignored`. It covers registration, duplicates, label clearing, enabled edits, deletion, media route registration and restart persistence.
 
+## Component gallery
+
+```sh
+cargo run -p osu-radio-gui-vizia --locked -- --component-gallery
+```
+
+This launch mode is chosen before constructing the normal app or Tokio runtime.
+It needs no server binary, `.env`, database or osu! installation; examples and
+state live in memory. `--help` prints the launch syntax without opening a window.
+
+Headless verification for component changes:
+
+```sh
+cargo test -p osu-radio-gui-vizia --locked
+cargo check -p osu-radio-gui-vizia --release --locked
+cargo clippy -p osu-radio-gui-vizia --all-targets --locked -- -D warnings
+cargo fmt -p osu-radio-gui-vizia --check
+```
+
+The CSS test uses the exact Vizia 0.4 parser and checks errors, recovery warnings,
+unknown custom declarations and unresolved property forms. The release check alone
+does not parse stylesheets. Unit tests also cover launch flags, tag cycles,
+single tab selection, case-insensitive menu search, keyboard-index transitions,
+and scroll direction, fractional deltas, scaling, routing and unaffected non-scroll events.
+
+The user runs and visually checks the GUI. Suggested manual matrix (not an
+executed result):
+
+- Resize at 1024×640, 1440×952, 1920×1080 and 2560×1440; repeat at 100%, 150%
+  and 200% display scaling. Check scroll access, text clipping, covers and 90px song rows.
+- Inspect all four button variants, 24px icons/16px window glyphs, Poppins weights
+  and fallback text. Hover, press and keyboard-focus every control.
+  Buttons, tabs, window controls, menu options and switches must not show a focus
+  outline, but Tab navigation and keyboard activation must still work. Song
+  outlines and the white input-container focus outline must remain.
+- Edit empty/filled fields, inspect sibling placeholders, toggle switches, select
+  tabs and cycle each filter tag through all three states.
+- Check white selected-tab backgrounds with dark labels/icons in both the gallery
+  and Songs/Settings navigation. Focus fields/searches by mouse and keyboard: one
+  white outline must surround the input container. Verify a white blinking caret
+  before typing, while editing, and after clearing; blur/disable must hide the
+  empty caret, and the separate placeholder must remain visible when empty.
+- Scroll in both directions through the gallery, song list, settings, long menus
+  and modal at 100%, 150% and 200% scaling. Target 60 logical pixels per wheel unit;
+  test fractional/touchpad motion, Shift/horizontal scrolling, nested routing and
+  both scroll bounds. The toolkit combines wheel/touchpad deltas, so both change.
+- Search the playlist menu (including no results), scroll long/wrapped names,
+  use arrows and Home/End then Enter; dismiss with Escape and outside press.
+  Check focus returns to the menu trigger.
+- Open the modal with keyboard and mouse. Tab/Shift+Tab must stay inside;
+  background controls must not respond. Test close icon, Escape and backdrop,
+  then confirm focus returns to Create playlist. Resize while the dialog is open.
+  Check 24px panel padding/content gaps, preserved outer clearance and access to
+  the bottom of long content.
+- Toggle Disable demo controls: the counter, fields, switches, tags, tabs and menus
+  must stop responding. The disable switch itself must remain usable.
+  Text/icons must remain white with a single 40% fade; light-filled controls and
+  selected tabs retain dark foregrounds. Nested fields must not fade repeatedly.
+- Inspect Regular/Thick/Thin over the colour bands: background is blurred,
+  text/icons are sharp. Check the same colours on Songs, Settings and the player.
+- In an authorized normal-app environment, check Refresh/Retry, folder menu and
+  native picker, Songs/Settings navigation and custom window controls. The gallery
+  does not exercise these backend/window integrations.
+
 ## Troubleshooting and limits
 
 | Symptom | Inspect first |

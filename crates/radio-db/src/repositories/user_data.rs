@@ -11,8 +11,19 @@ pub struct UserDataRepository<'a> {
 }
 
 impl UserDataRepository<'_> {
+    /// Acquires a SQLite writer lock before reads and a PostgreSQL row lock.
     pub async fn lock(&self) -> Result<()> {
-        lock(&self.connection).await
+        // ponytail: one global writer serializes snapshot replacement and cleanup across processes;
+        // use finer locks and coordinated garbage collection if write throughput becomes a bottleneck.
+        let result = self
+            .connection
+            .execute_unprepared("UPDATE user_data SET id = id WHERE id = 1")
+            .await?;
+        anyhow::ensure!(
+            result.rows_affected() == 1,
+            "Settings row is missing; apply database migrations first"
+        );
+        Ok(())
     }
 
     pub async fn get(&self) -> Result<UserData> {
@@ -22,18 +33,4 @@ impl UserDataRepository<'_> {
             .context("Settings row is missing; apply database migrations first")?;
         Ok(UserData { id: row.id })
     }
-}
-
-/// A write statement acquires a SQLite writer lock before any reads and a PostgreSQL row lock.
-async fn lock(connection: &impl ConnectionTrait) -> Result<()> {
-    // ponytail: one global writer serializes snapshot replacement and cleanup across processes;
-    // use finer locks and coordinated garbage collection if write throughput becomes a bottleneck.
-    let result = connection
-        .execute_unprepared("UPDATE user_data SET id = id WHERE id = 1")
-        .await?;
-    anyhow::ensure!(
-        result.rows_affected() == 1,
-        "Settings row is missing; apply database migrations first"
-    );
-    Ok(())
 }

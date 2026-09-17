@@ -45,6 +45,8 @@ async fn postgres_repository_contracts() {
 async fn repository_contracts(url: &str) {
     let database = Database::connect(url).await.unwrap();
     database.check_connection().await.unwrap();
+    concurrent_schema_changes(&database, url).await;
+    native_path_migration(&database).await;
     // A fresh database is expected: no configured application database is consulted.
     sql(
         &database,
@@ -70,6 +72,8 @@ async fn repository_contracts(url: &str) {
 
     let other_pool = Database::connect(url).await.unwrap();
     other_pool.migrate().await.unwrap();
+    native_path_registration(&database, &other_pool).await;
+    aggregate_grouping_and_cleanup(&database).await;
     repository_transaction_contracts(&database).await;
     metadata_corruption_is_rejected(&database).await;
 
@@ -332,4 +336,233 @@ async fn background_migration_preserves_existing_rows() {
     assert_eq!(map.background_path, None);
     database.migrate().await.unwrap();
     assert_eq!(database.beatmaps().get(1).await.unwrap(), Some(map));
+}
+
+async fn drop_application_tables(database: &Database) {
+    for table in [
+        "beatmaps",
+        "beatmap_sets",
+        "beatmap_metadata",
+        "audio_sources",
+        "osu_installations",
+        "user_data",
+        "seaql_migrations",
+    ] {
+        sql(database, &format!("DROP TABLE IF EXISTS {table}")).await;
+    }
+}
+
+async fn concurrent_schema_changes(database: &Database, url: &str) {
+    use sea_orm_migration::MigratorTrait;
+    let other = Database::connect(url).await.unwrap();
+    for trial in 0..20 {
+        // Exercise both empty databases and pending upgrades through independent pools.
+        if trial % 2 == 1 {
+            crate::migrations::Migrator::up(&database.connection, Some(1))
+                .await
+                .unwrap();
+        }
+        let (first, second) = tokio::join!(database.migrate(), other.migrate());
+        first.unwrap();
+        second.unwrap();
+        assert_eq!(database.user_data().get().await.unwrap().id, 1);
+        assert_eq!(
+            crate::migrations::Migrator::get_applied_migrations(&database.connection)
+                .await
+                .unwrap()
+                .len(),
+            3
+        );
+        let (reset, migrate) = tokio::join!(database.reset(), other.migrate());
+        reset.unwrap();
+        migrate.unwrap();
+        drop_application_tables(database).await;
+    }
+}
+
+async fn native_path_migration(database: &Database) {
+    use crate::entities::osu_installation;
+    use sea_orm::{Set, sea_query::OnConflict};
+    use sea_orm_migration::MigratorTrait;
+    crate::migrations::Migrator::up(&database.connection, Some(2))
+        .await
+        .unwrap();
+    // Include a literal JSON-shaped filename and a transient unique-key collision.
+    let paths = [
+        "/osu/曲",
+        "\"/osu/曲\"",
+        "{\"Unix\":[255]}",
+        "C:\\osu\\client.realm",
+    ];
+    for path in paths {
+        osu_installation::Entity::insert(osu_installation::ActiveModel {
+            user_data_id: Set(1),
+            kind: Set("lazer".into()),
+            root_path: Set(path.into()),
+            marker_path: Set(path.into()),
+            enabled: Set(true),
+            ..Default::default()
+        })
+        .on_conflict(OnConflict::new().do_nothing().to_owned())
+        .exec(&database.connection)
+        .await
+        .unwrap();
+    }
+    database.migrate().await.unwrap();
+    for (stored, original) in database
+        .osu_installations()
+        .all()
+        .await
+        .unwrap()
+        .iter()
+        .zip(paths)
+    {
+        assert_eq!(stored.root_path, std::path::Path::new(original));
+        assert_eq!(stored.marker_path, std::path::Path::new(original));
+        let duplicate = database
+            .osu_installations()
+            .register(
+                &OsuMarker {
+                    kind: OsuKind::Lazer,
+                    root_path: original.into(),
+                    marker_path: original.into(),
+                },
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(!duplicate.was_created());
+        assert_eq!(duplicate.installation().id, stored.id);
+    }
+    drop_application_tables(database).await;
+}
+
+async fn native_path_registration(database: &Database, other: &Database) {
+    #[cfg(unix)]
+    let roots = {
+        use std::os::unix::ffi::OsStringExt;
+        [
+            std::ffi::OsString::from_vec(b"/osu/\xff".to_vec()),
+            std::ffi::OsString::from_vec(b"/osu/\xfe".to_vec()),
+        ]
+    };
+    #[cfg(windows)]
+    let roots = {
+        use std::os::windows::ffi::OsStringExt;
+        [
+            std::ffi::OsString::from_wide(&[67, 58, 92, 0xd800]),
+            std::ffi::OsString::from_wide(&[67, 58, 92, 0xd801]),
+        ]
+    };
+    assert_eq!(roots[0].to_string_lossy(), roots[1].to_string_lossy());
+    let mut ids = Vec::new();
+    for root in roots {
+        let root = std::path::PathBuf::from(root);
+        let marker = OsuMarker {
+            kind: OsuKind::Lazer,
+            marker_path: root.join("client.realm"),
+            root_path: root,
+        };
+        let registered = database
+            .osu_installations()
+            .register(&marker, None)
+            .await
+            .unwrap();
+        assert!(registered.was_created());
+        let stored = other
+            .osu_installations()
+            .get(registered.installation().id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.root_path, marker.root_path);
+        assert_eq!(stored.marker_path, marker.marker_path);
+        let duplicate = other
+            .osu_installations()
+            .register(&marker, None)
+            .await
+            .unwrap();
+        assert!(!duplicate.was_created());
+        assert_eq!(duplicate.installation(), &stored);
+        ids.push(stored.id);
+    }
+    assert_ne!(ids[0], ids[1]);
+    for id in ids {
+        database.osu_installations().delete(id).await.unwrap();
+    }
+}
+
+async fn aggregate_grouping_and_cleanup(database: &Database) {
+    let transaction = database.begin().await.unwrap();
+    transaction.user_data().lock().await.unwrap();
+    let installation = transaction
+        .osu_installations()
+        .register(&marker("groups"), None)
+        .await
+        .unwrap()
+        .into_installation();
+    let imported = &snapshot("Groups", "/audio")[0];
+    let empty = transaction
+        .beatmap_sets()
+        .insert(installation.id, imported)
+        .await
+        .unwrap();
+    let populated = transaction
+        .beatmap_sets()
+        .insert(installation.id, imported)
+        .await
+        .unwrap();
+    let audio = transaction.audio_sources();
+    let first = audio
+        .get_or_insert(&SourceType::Local("/first".into()))
+        .await
+        .unwrap();
+    let second = audio
+        .get_or_insert(&SourceType::Local("/second".into()))
+        .await
+        .unwrap();
+    let orphan = audio
+        .get_or_insert(&SourceType::Local("/orphan".into()))
+        .await
+        .unwrap();
+    let metadata = transaction.beatmap_metadata();
+    let used = metadata
+        .get_or_insert(&self::metadata("used"))
+        .await
+        .unwrap();
+    let unused = metadata
+        .get_or_insert(&self::metadata("unused"))
+        .await
+        .unwrap();
+    for id in [Some(second.id), None, Some(first.id), Some(second.id)] {
+        transaction
+            .beatmaps()
+            .insert(
+                populated.id,
+                &imported.beatmaps[0],
+                id.map(|_| used.hash.clone()),
+                id,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+    metadata.cleanup().await.unwrap();
+    audio.cleanup().await.unwrap();
+    assert!(metadata.get(&used.hash).await.unwrap().is_some());
+    assert!(metadata.get(&unused.hash).await.unwrap().is_none());
+    assert!(audio.get(orphan.id).await.unwrap().is_none());
+    let grouped = transaction
+        .beatmap_sets()
+        .all_with_audio_sources()
+        .await
+        .unwrap();
+    assert_eq!(grouped.len(), 2);
+    assert_eq!(grouped[0].beatmap_set, empty);
+    assert!(grouped[0].beatmaps.is_empty());
+    assert!(grouped[0].audio_sources.is_empty());
+    assert_eq!(grouped[1].beatmap_set, populated);
+    assert_eq!(grouped[1].beatmaps.len(), 4);
+    assert_eq!(grouped[1].audio_sources, [first, second]);
+    transaction.rollback().await.unwrap();
 }

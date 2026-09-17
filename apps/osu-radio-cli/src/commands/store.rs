@@ -64,7 +64,8 @@ fn print_store_summary(
     if newly_registered {
         println!(
             "Registered osu! folder #{} at `{}`.",
-            installation.id, installation.root_path
+            installation.id,
+            installation.root_path.display()
         );
     } else {
         println!(

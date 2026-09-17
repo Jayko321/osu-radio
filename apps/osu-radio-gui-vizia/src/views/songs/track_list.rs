@@ -1,16 +1,12 @@
 use vizia::prelude::*;
 
 use super::track_card::track_card;
-use crate::app::{AppEvent, UiState};
+use crate::app::UiState;
 
 pub(crate) fn track_list(cx: &mut Context, state: UiState) {
-    HStack::new(cx, move |cx| {
-        Label::new(cx, state.library_message).class("load-message");
-        Button::new(cx, |cx| Label::new(cx, "Refresh / Retry"))
-            .on_press(|cx| cx.emit(AppEvent::RefreshLibrary))
-            .disabled(state.library_loading);
-    })
-    .height(Auto);
+    Label::new(cx, state.library_message)
+        .class("load-message")
+        .display(state.library_message.map(|message| !message.is_empty()));
     Binding::new(cx, state.library_revision, move |cx| {
         // Old row bindings can run while a refreshed list shrinks. Never index unchecked.
         VirtualList::new_generic(

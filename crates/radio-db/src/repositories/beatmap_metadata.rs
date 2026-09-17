@@ -1,8 +1,8 @@
 use anyhow::{Context, Result, ensure};
 use radio_core::import_types::BeatmapMetadata as ImportedMetadata;
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, EntityTrait, IntoActiveModel, QueryFilter, QuerySelect,
-    QueryTrait, sea_query::OnConflict,
+    EntityTrait, IntoActiveModel, QueryFilter, QuerySelect, QueryTrait,
+    sea_query::{Expr, ExprTrait, OnConflict},
 };
 use sha2::{Digest, Sha256};
 
@@ -17,7 +17,23 @@ pub struct BeatmapMetadataRepository<'a> {
 
 impl BeatmapMetadataRepository<'_> {
     pub async fn cleanup(&self) -> Result<()> {
-        cleanup(&self.connection).await
+        beatmap_metadata::Entity::delete_many()
+            .filter(
+                Expr::exists(
+                    beatmap::Entity::find()
+                        .select_only()
+                        .column(beatmap::Column::MetadataHash)
+                        .filter(
+                            Expr::col((beatmap::Entity, beatmap::Column::MetadataHash))
+                                .equals((beatmap_metadata::Entity, beatmap_metadata::Column::Hash)),
+                        )
+                        .into_query(),
+                )
+                .not(),
+            )
+            .exec(&self.connection)
+            .await?;
+        Ok(())
     }
 
     pub async fn get(&self, hash: &str) -> Result<Option<BeatmapMetadata>> {
@@ -28,7 +44,44 @@ impl BeatmapMetadataRepository<'_> {
     }
 
     pub async fn get_or_insert(&self, imported: &ImportedMetadata) -> Result<BeatmapMetadata> {
-        get_or_insert(&self.connection, imported).await
+        let expected = beatmap_metadata::Model {
+            hash: metadata_hash(imported)?,
+            title: imported.title.clone(),
+            title_unicode: imported.title_unicode.clone(),
+            artist: imported.artist.clone(),
+            artist_unicode: imported.artist_unicode.clone(),
+            author: imported.author.as_ref().map(|author| {
+                serde_json::json!({
+                    "online_id": author.online_id,
+                    "username": author.username,
+                    "country_code": author.country_code,
+                })
+            }),
+            source: imported.source.clone(),
+            tags: imported.tags.clone(),
+            user_tags: serde_json::to_value(&imported.user_tags)?,
+            preview_time: imported.preview_time,
+            audio_file: imported.audio_file.clone(),
+            background_file: imported.background_file.clone(),
+        };
+        beatmap_metadata::Entity::insert(expected.clone().into_active_model())
+            .on_conflict(
+                OnConflict::column(beatmap_metadata::Column::Hash)
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .exec_without_returning(&self.connection)
+            .await?;
+        let actual = beatmap_metadata::Entity::find_by_id(&expected.hash)
+            .one(&self.connection)
+            .await?
+            .context("metadata missing after insertion")?;
+        ensure!(
+            actual == expected,
+            "metadata hash collision or corrupted content for {}",
+            expected.hash
+        );
+        Ok(into_model(actual))
     }
 }
 
@@ -53,66 +106,6 @@ pub fn metadata_hash(imported: &ImportedMetadata) -> Result<String> {
         &imported.background_file,
     ))?;
     Ok(hex::encode(Sha256::digest(bytes)))
-}
-
-async fn get_or_insert(
-    connection: &impl ConnectionTrait,
-    imported: &ImportedMetadata,
-) -> Result<BeatmapMetadata> {
-    let expected = beatmap_metadata::Model {
-        hash: metadata_hash(imported)?,
-        title: imported.title.clone(),
-        title_unicode: imported.title_unicode.clone(),
-        artist: imported.artist.clone(),
-        artist_unicode: imported.artist_unicode.clone(),
-        author: imported.author.as_ref().map(|author| {
-            serde_json::json!({
-                "online_id": author.online_id,
-                "username": author.username,
-                "country_code": author.country_code,
-            })
-        }),
-        source: imported.source.clone(),
-        tags: imported.tags.clone(),
-        user_tags: serde_json::to_value(&imported.user_tags)?,
-        preview_time: imported.preview_time,
-        audio_file: imported.audio_file.clone(),
-        background_file: imported.background_file.clone(),
-    };
-    beatmap_metadata::Entity::insert(expected.clone().into_active_model())
-        .on_conflict(
-            OnConflict::column(beatmap_metadata::Column::Hash)
-                .do_nothing()
-                .to_owned(),
-        )
-        .exec_without_returning(connection)
-        .await?;
-    let actual = beatmap_metadata::Entity::find_by_id(&expected.hash)
-        .one(connection)
-        .await?
-        .context("metadata missing after insertion")?;
-    ensure!(
-        actual == expected,
-        "metadata hash collision or corrupted content for {}",
-        expected.hash
-    );
-    Ok(into_model(actual))
-}
-
-async fn cleanup(connection: &impl ConnectionTrait) -> Result<()> {
-    beatmap_metadata::Entity::delete_many()
-        .filter(
-            beatmap_metadata::Column::Hash.not_in_subquery(
-                beatmap::Entity::find()
-                    .select_only()
-                    .column(beatmap::Column::MetadataHash)
-                    .filter(beatmap::Column::MetadataHash.is_not_null())
-                    .into_query(),
-            ),
-        )
-        .exec(connection)
-        .await?;
-    Ok(())
 }
 
 fn into_model(value: beatmap_metadata::Model) -> BeatmapMetadata {

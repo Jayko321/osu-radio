@@ -59,8 +59,8 @@ impl From<OsuInstallation> for OsuFolderResponse {
         Self {
             id: installation.id,
             kind: installation.kind.as_str(),
-            root_path: installation.root_path,
-            marker_path: installation.marker_path,
+            root_path: installation.root_path.to_string_lossy().into_owned(),
+            marker_path: installation.marker_path.to_string_lossy().into_owned(),
             label: installation.label,
             enabled: installation.enabled,
             last_scanned_at: installation.last_scanned_at,

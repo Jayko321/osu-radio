@@ -6,91 +6,134 @@
     padding-right: 20px;
     padding-top: 32px;
     padding-bottom: 20px;
-    background-color: rgba(24, 24, 27, 0.72);
-    border-right: 1px solid #27272a;
+    background-color: var(--regular);
+    backdrop-filter: blur(50px);
+    border-width: 1px; border-color: var(--border);
 }
 
-.search-row {
-    layout-type: row;
+.input-box {
     width: 1s;
-    height: 24px;
+    height: 40px;
+    padding-left: 12px;
+    padding-right: 12px;
     alignment: center;
     gap: 8px;
+    corner-radius: 8px;
+    background-color: var(--surface);
+    border-width: 1px; border-color: var(--border);
 }
-
-.search-field {
-    width: 1s;
-    height: 24px;
-}
-
-.search-placeholder {
-    width: 1s;
-    height: 24px;
-    font-size: 16px;
-    font-weight: 500;
-    font-variation-settings: "wght" 500;
-    color: rgba(255, 255, 255, 0.62);
-    pointer-events: none;
-}
-
+.input-box:hover { border-color: var(--text-secondary); }
+.input-box:focus-within { outline-width: 2px; outline-color: var(--text); outline-offset: 2px; }
+.search-field, .search-placeholder, .search-field textbox { width: 1s; height: 24px; }
+.search-placeholder, .search-field textbox, .chip label { font-size: 16px; font-weight: 400; }
+.search-placeholder { color: var(--text-secondary); pointer-events: none; }
 .search-field textbox {
-    width: 1s;
-    height: 24px;
     padding: 0px;
     border-width: 0px;
     corner-radius: 0px;
-    background-color: rgba(0, 0, 0, 0);
-    font-size: 16px;
-    font-weight: 500;
-    font-variation-settings: "wght" 500;
-    color: #ffffff;
-    caret-color: #ffffff;
-    selection-color: rgba(154, 39, 41, 0.62);
+    background-color: transparent;
+    color: var(--text);
+    caret-color: transparent;
+    selection-color: var(--text-selection);
 }
-
-/* A hoverable child becomes the press target and swallows the parent's
-   `on_press`, so anything clickable keeps its contents inert. */
-.chip > * {
+.search-field textbox:focus-visible { outline-width: 0px; }
+.search-field textbox:focus.caret { caret-color: var(--text); }
+/* Vizia skips the native caret for empty text. Reuse its focus/blink state. */
+.empty-caret {
+    position-type: absolute;
+    left: 0px;
+    top: 2px;
+    width: 1px;
+    height: 20px;
+    background-color: var(--text);
+    visibility: hidden;
     pointer-events: none;
 }
+textbox:placeholder-shown:focus.caret:enabled .empty-caret { visibility: visible; }
+.field { width: 1s; height: auto; gap: 8px; }
+.field-label { width: 1s; height: auto; font-size: 14px; font-weight: 500; color: var(--text); }
+.field-hint { width: 1s; height: auto; font-size: 14px; color: var(--text-secondary); text-wrap: true; }
+.field:disabled, .input-box:disabled { opacity: 0.4; }
+/* Disabled state is inherited; only the outer control should fade. */
+.field:disabled .input-box:disabled, .input-box:disabled textbox:disabled { opacity: 1; }
+.field:disabled label, .input-box:disabled label { color: var(--text); }
 
-.chip-row {
-    layout-type: row;
-    width: 1s;
-    height: 32px;
-    gap: 10px;
-}
-
-.chip {
-    layout-type: row;
+/* Decorative children never steal the button press target. */
+button.ui-button *, .chip > *, .toggle-row label { pointer-events: none; }
+button.ui-button {
     width: auto;
-    height: 32px;
-    alignment: center;
-    gap: 12px;
-    padding-left: 12px;
+    height: 40px;
+    padding-left: 16px;
     padding-right: 16px;
-    corner-radius: 31px;
-    border: 1px solid #27272a;
-    background-color: rgba(0, 0, 0, 0);
-}
-
-.chip:hover {
-    background-color: rgba(255, 255, 255, 0.04);
-}
-
-.chip label {
-    width: auto;
-    height: auto;
-    font-size: 16px;
+    padding-top: 0px;
+    padding-bottom: 0px;
+    alignment: center;
+    corner-radius: 8px;
+    border-width: 1px; border-color: var(--border);
+    background-color: var(--surface);
+    color: var(--text);
+    font-size: 14px;
     font-weight: 500;
-    font-variation-settings: "wght" 500;
-    color: #ffffff;
 }
+button.ui-button label { font-size: 14px; height: auto; text-wrap: false; text-overflow: ellipsis; }
+button.button-light { background-color: var(--text); color: var(--background); }
+button.button-light label { color: var(--background); }
+button.button-light .icon { fill: var(--background); }
+button.button-alternate { background-color: var(--surface); }
+button.button-accent { background-color: var(--accent); border-color: var(--accent); }
+button.button-link { background-color: transparent; border-width: 0px; color: var(--accent); }
+button.ui-button:hover { opacity: 0.8; }
+button.ui-button:active { opacity: 0.6; }
+button.ui-button:disabled { opacity: 0.4; cursor: default; }
+button.icon-button { size: 40px; padding: 0px; background-color: transparent; border-width: 0px; }
+button.icon-button:hover { background-color: var(--hover); }
 
-.icon-button {
-    size: 24px;
-}
+.chip-row { layout-type: row; width: 1s; height: 32px; gap: 10px; }
+.chip { width: auto; height: 32px; alignment: center; gap: 12px; padding-left: 12px; padding-right: 16px; corner-radius: 31px; border-width: 1px; border-color: var(--border); background-color: transparent; }
+.chip:hover, .folder-add:hover { background-color: var(--hover); }
+.chip label { width: auto; height: auto; color: var(--text); }
+button.tag { height: 32px; corner-radius: 16px; }
+button.tag:checked { background-color: var(--accent); border-color: var(--accent); }
+.tag.excluded { border-color: var(--red); color: var(--red); }
+.toggle-row { width: 1s; height: 32px; gap: 12px; alignment: left; }
+.toggle-row label { height: auto; font-size: 14px; }
+.toggle-row:disabled { opacity: 0.4; }
+.toggle-row:disabled switch:disabled { opacity: 1; }
+.ui-switch { width: 37px; height: 20px; corner-radius: 20px; background-color: var(--surface); border-width: 0px; }
+.ui-switch .thumb { width: 16px; height: 16px; left: 2px; top: 2px; corner-radius: 16px; background-color: var(--text); translate: 0px 0px; }
+.ui-switch:checked { background-color: var(--accent); }
+.ui-switch:checked .thumb { left: 19px; }
+.ui-switch:disabled .thumb { background-color: var(--text); }
+.ui-switch:hover { opacity: 0.8; }
+.ui-switch:active { opacity: 0.6; }
+.tabs { width: auto; height: 42px; padding: 4px; gap: 4px; corner-radius: 12px; background-color: var(--surface); }
+button.tab { height: 34px; background-color: transparent; border-width: 0px; }
+button.tab:checked { background-color: var(--text); color: var(--background); }
+button.tab:checked label { color: var(--background); }
+button.tab:checked .icon { fill: var(--background); }
 
-.icon-button:hover {
-    opacity: 0.72;
-}
+.ui-menu { width: 1s; min-width: 0px; height: 40px; }
+button.menu-trigger { width: 1s; min-width: 0px; }
+.menu-trigger-content { width: 1s; height: 24px; gap: 8px; alignment: center; }
+.menu-label { width: 1s; min-width: 0px; text-overflow: ellipsis; text-wrap: false; }
+.ui-menu popup { width: 100%; height: auto; padding: 8px; corner-radius: 12px; background-color: var(--thick); backdrop-filter: blur(60px); border-width: 1px; border-color: var(--border); z-index: 50; }
+.menu-content { layout-type: column; width: 1s; height: auto; gap: 8px; }
+.menu-scroll { width: 1s; height: auto; max-height: 280px; }
+.menu-options { width: 1s; height: auto; gap: 4px; }
+button.menu-option { width: 1s; height: auto; min-height: 40px; padding: 8px; background-color: transparent; border-width: 0px; alignment: left; }
+button.menu-option .menu-option-text { width: 1s; height: auto; text-wrap: true; }
+button.menu-option:checked { background-color: var(--accent); }
+button.menu-option:hover { background-color: var(--surface); }
+button.menu-option:checked:hover { background-color: var(--accent); }
+.menu-tooltip { width: 360px; height: auto; text-wrap: true; }
+
+.material-regular { background-color: var(--regular); backdrop-filter: blur(50px); }
+.material-thick { background-color: var(--thick); backdrop-filter: blur(60px); }
+.material-thin { background-color: var(--thin); backdrop-filter: blur(60px); }
+.modal-overlay { size: 1s; position-type: absolute; alignment: center; background-color: var(--thin); z-index: 100; }
+.modal-panel { width: 561px; max-width: 90%; height: auto; padding: 24px; corner-radius: 24px; border-width: 1px; border-color: var(--border); }
+.modal-content { width: 1s; height: auto; gap: 24px; }
+.modal-header { width: 1s; height: auto; alignment: center; gap: 12px; }
+.modal-title { width: 1s; height: auto; font-size: 24px; font-weight: 600; text-wrap: true; }
+.modal-description { width: 1s; height: auto; text-wrap: true; }
+.load-message { width: 1s; height: auto; text-wrap: true; font-size: 14px; }

@@ -151,6 +151,8 @@ hash filenames. Files stay in place. Expected media failures yield neutral UI
 states; unexpected database/task failures retain the safe 500 boundary. Both
 router/documentation feature variants register both endpoints.
 
+Folder paths are display strings; native installation paths remain lossless `PathBuf`
+values in services/storage (see [path encoding](database.md#schema-and-ownership)).
 Folder JSON fields remain `id`, `kind`, `root_path`, `marker_path`, `label`,
 `enabled`, and `last_scanned_at`. Unexpected failures retain the safe 500 error
 boundary described above. Registration does not scan/import a library; the CLI

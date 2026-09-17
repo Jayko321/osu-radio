@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use anyhow::{Context, Result};
 use radio_core::import_types::ImportedBeatmapSet;
 use sea_orm::{
@@ -23,10 +21,23 @@ impl BeatmapSetRepository<'_> {
         installation_id: i32,
         imported: &ImportedBeatmapSet,
     ) -> Result<BeatmapSet> {
-        insert(&self.connection, installation_id, imported).await
+        Ok(into_model(
+            beatmap_set::ActiveModel {
+                online_id: Set(imported.online_id),
+                hash: Set(imported.hash.clone()),
+                installation_id: Set(installation_id),
+                ..Default::default()
+            }
+            .insert(&self.connection)
+            .await?,
+        ))
     }
     pub async fn delete_for_installation(&self, installation_id: i32) -> Result<()> {
-        delete_for_installation(&self.connection, installation_id).await
+        beatmap_set::Entity::delete_many()
+            .filter(beatmap_set::Column::InstallationId.eq(installation_id))
+            .exec(&self.connection)
+            .await?;
+        Ok(())
     }
 
     pub async fn get(&self, id: i32) -> Result<Option<BeatmapSet>> {
@@ -113,18 +124,21 @@ impl BeatmapSetRepository<'_> {
             SetWithAudio::find_by_statement(self.connection.get_database_backend().build(&query))
                 .all(&self.connection)
                 .await?;
-        let mut sets = BTreeMap::<i32, BeatmapSetWithAudio>::new();
+        let mut sets = Vec::<BeatmapSetWithAudio>::new();
         for row in rows {
-            let set = sets.entry(row.id).or_insert_with(|| BeatmapSetWithAudio {
-                beatmap_set: BeatmapSet {
-                    id: row.id,
-                    online_id: row.online_id,
-                    hash: row.hash,
-                    installation_id: row.installation_id,
-                },
-                audio_sources: Vec::new(),
-                beatmaps: Vec::new(),
-            });
+            if sets.last().is_none_or(|set| set.beatmap_set.id != row.id) {
+                sets.push(BeatmapSetWithAudio {
+                    beatmap_set: BeatmapSet {
+                        id: row.id,
+                        online_id: row.online_id,
+                        hash: row.hash,
+                        installation_id: row.installation_id,
+                    },
+                    audio_sources: Vec::new(),
+                    beatmaps: Vec::new(),
+                });
+            }
+            let set = sets.last_mut().context("aggregate group missing")?;
             if let Some(id) = row.audio_id
                 && set.audio_sources.last().is_none_or(|audio| audio.id != id)
             {
@@ -150,7 +164,7 @@ impl BeatmapSetRepository<'_> {
                 });
             }
         }
-        Ok(sets.into_values().collect())
+        Ok(sets)
     }
 }
 
@@ -170,34 +184,6 @@ struct SetWithAudio {
     title_unicode: Option<String>,
     artist: Option<String>,
     artist_unicode: Option<String>,
-}
-
-async fn insert(
-    connection: &impl ConnectionTrait,
-    installation_id: i32,
-    imported: &ImportedBeatmapSet,
-) -> Result<BeatmapSet> {
-    Ok(into_model(
-        beatmap_set::ActiveModel {
-            online_id: Set(imported.online_id),
-            hash: Set(imported.hash.clone()),
-            installation_id: Set(installation_id),
-            ..Default::default()
-        }
-        .insert(connection)
-        .await?,
-    ))
-}
-
-async fn delete_for_installation(
-    connection: &impl ConnectionTrait,
-    installation_id: i32,
-) -> Result<()> {
-    beatmap_set::Entity::delete_many()
-        .filter(beatmap_set::Column::InstallationId.eq(installation_id))
-        .exec(connection)
-        .await?;
-    Ok(())
 }
 
 fn into_model(value: beatmap_set::Model) -> BeatmapSet {

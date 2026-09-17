@@ -69,23 +69,36 @@ where
             return;
         }
 
-        sweep_root(root, max_depth, collector);
+        sweep_root(root, roots, max_depth, collector);
     }
 }
 
-fn sweep_root<F>(root: &Path, max_depth: Option<usize>, collector: &Collector<F>)
+fn walk_builder(root: &Path, roots: &[PathBuf], max_depth: Option<usize>) -> WalkBuilder {
+    // Each explicit subtree gets its own full walk. Keep all roots for shallow
+    // walks, whose depth limit is relative to each root.
+    let separate_roots = if max_depth.is_none() {
+        roots.to_vec()
+    } else {
+        Vec::new()
+    };
+    let mut builder = WalkBuilder::new(root);
+    builder
+        .standard_filters(false)
+        .follow_links(false)
+        .max_depth(max_depth)
+        .filter_entry(move |entry| {
+            entry.depth() == 0
+                || (should_scan_entry(entry)
+                    && !separate_roots.iter().any(|root| root == entry.path()))
+        });
+    builder
+}
+
+fn sweep_root<F>(root: &Path, roots: &[PathBuf], max_depth: Option<usize>, collector: &Collector<F>)
 where
     F: FnMut(OsuMarker) -> ControlFlow<()> + Send,
 {
-    let walker = WalkBuilder::new(root)
-        .hidden(false)
-        .git_ignore(false)
-        .ignore(false)
-        .parents(false)
-        .follow_links(false)
-        .max_depth(max_depth)
-        .filter_entry(should_scan_entry)
-        .build_parallel();
+    let walker = walk_builder(root, roots, max_depth).build_parallel();
 
     walker.run(|| {
         Box::new(|entry: Result<DirEntry, Error>| {
@@ -209,11 +222,139 @@ fn is_ignored_scan_dir(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        process::Command,
+        sync::Mutex,
+    };
 
+    use ignore::{WalkBuilder, WalkState};
     use radio_core::OsuKind;
+    use tempfile::TempDir;
 
-    use super::{is_ignored_scan_dir, marker_kind};
+    use super::{is_ignored_scan_dir, marker_kind, walk_builder};
+
+    fn visited_paths(builder: &WalkBuilder) -> Vec<PathBuf> {
+        let paths = Mutex::new(Vec::new());
+        builder.build_parallel().run(|| {
+            Box::new(|entry| {
+                paths
+                    .lock()
+                    .unwrap()
+                    .push(entry.expect("walk entry").into_path());
+                WalkState::Continue
+            })
+        });
+        paths.into_inner().unwrap()
+    }
+
+    #[test]
+    fn full_sweep_visits_overlapping_roots_once_in_either_order() {
+        let temp = TempDir::new().expect("temp dir");
+        let child = temp.path().join("home/user");
+        fs::create_dir_all(child.join("library")).unwrap();
+        let marker = child.join("library/client.realm");
+        fs::write(&marker, "").unwrap();
+        let mut roots = vec![temp.path().to_path_buf(), child];
+
+        for _ in 0..2 {
+            let paths: Vec<_> = roots
+                .iter()
+                .flat_map(|root| visited_paths(&walk_builder(root, &roots, None)))
+                .collect();
+            assert_eq!(paths.iter().filter(|path| *path == &marker).count(), 1);
+            let unique: std::collections::HashSet<_> = paths.iter().collect();
+            assert_eq!(paths.len(), unique.len(), "visited a subtree twice");
+            roots.reverse();
+        }
+    }
+
+    #[test]
+    fn shallow_sweep_preserves_depth_relative_to_each_root() {
+        let temp = TempDir::new().expect("temp dir");
+        let child = temp.path().join("home/user");
+        fs::create_dir_all(child.join("library")).unwrap();
+        let marker = child.join("library/client.realm");
+        fs::write(&marker, "").unwrap();
+        let roots = vec![temp.path().to_path_buf(), child.clone()];
+
+        let parent_paths = visited_paths(&walk_builder(temp.path(), &roots, Some(2)));
+        let child_paths = visited_paths(&walk_builder(&child, &roots, Some(2)));
+        assert!(parent_paths.contains(&child));
+        assert!(!parent_paths.contains(&marker));
+        assert!(child_paths.contains(&marker));
+    }
+
+    #[test]
+    fn full_sweep_preserves_explicit_roots_inside_pruned_directories() {
+        let temp = TempDir::new().expect("temp dir");
+        let child = temp.path().join("node_modules/library");
+        fs::create_dir_all(&child).unwrap();
+        let marker = child.join("client.realm");
+        fs::write(&marker, "").unwrap();
+        let roots = vec![temp.path().to_path_buf(), child.clone()];
+
+        assert!(!visited_paths(&walk_builder(temp.path(), &roots, None)).contains(&marker));
+        assert!(visited_paths(&walk_builder(&child, &roots, None)).contains(&marker));
+    }
+
+    #[test]
+    fn git_exclude_rules_do_not_hide_markers() {
+        let temp = TempDir::new().expect("temp dir");
+        fs::create_dir_all(temp.path().join(".git/info")).unwrap();
+        fs::write(temp.path().join(".git/info/exclude"), "library/\n").unwrap();
+        fs::create_dir_all(temp.path().join("library")).unwrap();
+        let marker = temp.path().join("library/client.realm");
+        fs::write(&marker, "").unwrap();
+        let mut builder = walk_builder(temp.path(), &[], None);
+
+        assert!(visited_paths(&builder).contains(&marker));
+        // Prove the fixture would hide the installation with Git excludes enabled.
+        assert!(!visited_paths(builder.git_exclude(true)).contains(&marker));
+    }
+
+    #[test]
+    fn git_global_ignores_do_not_hide_markers() {
+        const FIXTURE: &str = "OSU_RADIO_TEST_GLOBAL_IGNORE_ROOT";
+        if let Some(root) = std::env::var_os(FIXTURE) {
+            let root = PathBuf::from(root);
+            let marker = root.join("library/client.realm");
+            let mut builder = walk_builder(&root, &[], None);
+            assert!(visited_paths(&builder).contains(&marker));
+            assert!(!visited_paths(builder.git_global(true).git_exclude(true)).contains(&marker));
+            return;
+        }
+
+        let temp = TempDir::new().expect("temp dir");
+        fs::create_dir_all(temp.path().join("repo/.git")).unwrap();
+        fs::create_dir_all(temp.path().join("repo/library")).unwrap();
+        fs::write(temp.path().join("repo/library/client.realm"), "").unwrap();
+        fs::create_dir_all(temp.path().join("config/git")).unwrap();
+        fs::write(temp.path().join("config/git/ignore"), "library/\n").unwrap();
+        fs::create_dir_all(temp.path().join("home")).unwrap();
+
+        // Isolate global Git configuration without mutating this test process's environment.
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "discovery::sweep::tests::git_global_ignores_do_not_hide_markers",
+                "--nocapture",
+            ])
+            .env(FIXTURE, temp.path().join("repo"))
+            .env("HOME", temp.path().join("home"))
+            .env("USERPROFILE", temp.path().join("home"))
+            .env("XDG_CONFIG_HOME", temp.path().join("config"))
+            .current_dir(temp.path().join("repo"))
+            .output()
+            .expect("run isolated global-ignore test");
+        assert!(
+            output.status.success(),
+            "stdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 
     #[test]
     fn recognizes_marker_file_names() {

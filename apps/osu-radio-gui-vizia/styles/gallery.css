@@ -1,0 +1,16 @@
+.gallery-root { size: 1s; background-color: var(--background); }
+.gallery-page { width: 1s; height: auto; padding: 32px; gap: 24px; }
+.gallery-title { width: 1s; height: auto; font-size: 28px; font-weight: 700; }
+.gallery-controls { width: 1s; height: auto; gap: 24px; }
+.gallery-section { width: 1s; height: auto; gap: 16px; padding: 24px; corner-radius: 16px; border-width: 1px; border-color: var(--border); }
+.gallery-heading { width: 1s; height: auto; font-size: 18px; font-weight: 600; }
+.gallery-row { width: 1s; height: auto; gap: 12px; alignment: left; }
+.material-stage { width: 1s; height: 220px; corner-radius: 16px; }
+.material-sample { width: 1s; height: 1s; padding: 24px; gap: 12px; corner-radius: 12px; }
+
+.material-backdrop { size: 1s; pointer-events: none; }
+.color-band { size: 1s; pointer-events: none; }
+.swatch-accent { background-color: var(--accent); }
+.swatch-green { background-color: var(--green); }
+.swatch-red { background-color: var(--red); }
+.material-samples { size: 1s; padding: 16px; gap: 16px; }

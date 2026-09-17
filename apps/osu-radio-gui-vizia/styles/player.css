@@ -26,9 +26,9 @@
     height: 38px;
     text-wrap: false;
     font-size: 28px;
-    font-weight: 800;
-    font-variation-settings: "wght" 800;
-    color: #ffffff;
+    font-weight: 700;
+
+    color: var(--text);
     text-overflow: ellipsis;
 }
 
@@ -39,8 +39,8 @@
     text-overflow: ellipsis;
     font-size: 20px;
     font-weight: 600;
-    font-variation-settings: "wght" 600;
-    color: #ffffff;
+
+    color: var(--text);
 }
 
 .progress-row {
@@ -53,7 +53,7 @@
     height: 4px;
     top: 6px;
     corner-radius: 4px;
-    background-color: #828282;
+    background-color: var(--text-secondary);
 }
 
 .progress-fill {
@@ -61,7 +61,7 @@
     height: 6px;
     top: 5px;
     corner-radius: 4px;
-    background-color: #9a2729;
+    background-color: var(--accent);
 }
 
 .progress-knob {
@@ -71,7 +71,7 @@
     width: 16px;
     height: 16px;
     corner-radius: 50%;
-    background-color: #9a2729;
+    background-color: var(--accent);
 }
 
 .time-row {
@@ -85,8 +85,8 @@
     height: auto;
     font-size: 12px;
     font-weight: 400;
-    font-variation-settings: "wght" 400;
-    color: rgba(255, 255, 255, 0.82);
+
+    color: var(--text);
 }
 
 .controls-row {
@@ -104,14 +104,14 @@
     gap: 28px;
 }
 
-.play-button {
+button.play-button {
     width: 48px;
     height: 48px;
     alignment: center;
     corner-radius: 50%;
-    background-color: #9a2729;
+    background-color: var(--accent);
 }
 
-.play-button:hover {
-    background-color: #b02e30;
+button.play-button:hover {
+    background-color: var(--accent);
 }

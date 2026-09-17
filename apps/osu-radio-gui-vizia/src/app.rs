@@ -16,6 +16,7 @@ use crate::{assets, views};
 
 pub fn run(runtime: Handle) -> Result<(), ApplicationError> {
     Application::new(move |cx| {
+        crate::input::install(cx);
         assets::register(cx);
         views::styles(cx);
         let state = UiState::new();

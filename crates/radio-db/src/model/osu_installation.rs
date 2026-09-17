@@ -1,12 +1,13 @@
 use radio_core::OsuKind;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OsuInstallation {
     pub id: i32,
     pub user_data_id: i32,
     pub kind: OsuKind,
-    pub root_path: String,
-    pub marker_path: String,
+    pub root_path: PathBuf,
+    pub marker_path: PathBuf,
     pub label: Option<String>,
     pub enabled: bool,
     pub last_scanned_at: Option<String>,

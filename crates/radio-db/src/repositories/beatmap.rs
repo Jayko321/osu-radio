@@ -1,8 +1,6 @@
 use anyhow::Result;
 use radio_core::import_types::ImportedBeatmap;
-use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set,
-};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 
 use crate::{entities::beatmap, model::Beatmap};
 
@@ -19,15 +17,20 @@ impl BeatmapRepository<'_> {
         audio_source_id: Option<i32>,
         background_path: Option<String>,
     ) -> Result<Beatmap> {
-        insert(
-            &self.connection,
-            set_id,
-            imported,
-            metadata_hash,
-            audio_source_id,
-            background_path,
-        )
-        .await
+        Ok(into_model(
+            beatmap::ActiveModel {
+                difficulty_name: Set(imported.difficulty_name.clone()),
+                bpm: Set(imported.bpm),
+                hash: Set(imported.hash.clone()),
+                beatmap_set_id: Set(set_id),
+                metadata_hash: Set(metadata_hash),
+                audio_source_id: Set(audio_source_id),
+                background_path: Set(background_path),
+                ..Default::default()
+            }
+            .insert(&self.connection)
+            .await?,
+        ))
     }
 
     pub async fn get(&self, id: i32) -> Result<Option<Beatmap>> {
@@ -47,30 +50,6 @@ impl BeatmapRepository<'_> {
             .map(into_model)
             .collect())
     }
-}
-
-async fn insert(
-    connection: &impl ConnectionTrait,
-    set_id: i32,
-    imported: &ImportedBeatmap,
-    metadata_hash: Option<String>,
-    audio_source_id: Option<i32>,
-    background_path: Option<String>,
-) -> Result<Beatmap> {
-    Ok(into_model(
-        beatmap::ActiveModel {
-            difficulty_name: Set(imported.difficulty_name.clone()),
-            bpm: Set(imported.bpm),
-            hash: Set(imported.hash.clone()),
-            beatmap_set_id: Set(set_id),
-            metadata_hash: Set(metadata_hash),
-            audio_source_id: Set(audio_source_id),
-            background_path: Set(background_path),
-            ..Default::default()
-        }
-        .insert(connection)
-        .await?,
-    ))
 }
 
 fn into_model(value: beatmap::Model) -> Beatmap {

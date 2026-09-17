@@ -30,7 +30,8 @@ future entity changes; add another versioned migration for subsequent changes.
 
 Installation deletion cascades through sets and beatmaps. Shared references use
 restrictive foreign keys. Repository cleanup deletes only unreferenced metadata
-and audio rows. Join/cleanup foreign keys are indexed. Persistence does not copy
+and audio rows, using correlated `NOT EXISTS` queries against beatmap references.
+Join/cleanup foreign keys are indexed. Persistence does not copy
 or delete files, including sources marked `copied`.
 
 The additive [background migration](../../crates/radio-db/src/migrations/m20260913_000002_background.rs)
@@ -40,6 +41,17 @@ through the same named-file map as audio and stores the reference in its existin
 transaction. Existing rows remain null until CLI reimport without `--clear`; startup
 never scans, backfills, or resets them. Migration and rollback tests cover this
 reference alongside the previous snapshot.
+
+The [native-path migration](../../crates/radio-db/src/migrations/m20260914_000003_native_paths.rs)
+converts existing installation root/marker text to JSON strings, preserving IDs and
+marker uniqueness. New UTF-8 paths use the same representation; non-Unicode paths
+use Serde's native `OsStr` JSON (`Unix` bytes or `Windows` UTF-16 units). Repository
+and service models return `PathBuf`, so invalid Unicode remains reversible on its
+native platform. JSON-shaped literal paths cannot collide with encoded native paths.
+Foreign-platform native encodings fail decoding explicitly. Previously lost bytes
+cannot be reconstructed; this migration does not permit a lossy downgrade.
+HTTP folder fields and CLI output remain display strings; HTTP registration still
+accepts Unicode JSON paths. Native scanner/service registration preserves the bytes.
 
 ## Metadata identity
 
@@ -69,7 +81,7 @@ there are no new standalone beatmap or set creation workflows.
 | --- | --- |
 | `user_data()` | `get`, `overview`; overview composes installation reads through `OsuInstallationService`. |
 | `osu_installations()` | `all`, `get`, `register` (resolved scanner marker), `register_folder` (discovery-validated absolute path), `update`, `delete`, `replace_snapshot`. |
-| `beatmap_sets()` | `get`, `for_installation`, `all_with_audio_sources`; aggregate read retains its single repository query and returns `BeatmapSetWithAudio` records. |
+| `beatmap_sets()` | `get`, `for_installation`, `all_with_audio_sources`; aggregate read retains its single repository query and returns `BeatmapSetWithAudio` records, grouped directly into a vector in SQL set-ID order. |
 | `beatmaps()` | `get`, `for_set`. |
 | `beatmap_metadata()` | `get`, `get_or_insert`; the pure `metadata_hash` helper is re-exported. |
 | `audio_sources()` | `get`, `find`, `get_or_insert`. |
@@ -114,6 +126,12 @@ startup, or explicitly call `reset` when discarding application data is intended
 five-second busy timeout on every connection. Memory SQLite uses one pooled
 connection. Existing plain SQLite paths and `:memory:` remain supported.
 
+Migration and explicit reset acquire the same database-level schema lock before
+checking history or selecting pending migrations: SQLite `BEGIN IMMEDIATE`, or a
+PostgreSQL transaction advisory lock under `READ COMMITTED`. All checks, migrations
+and history writes use that transaction; commit, errors and cancellation release
+its lock. Independent pools/processes therefore cannot select the same pending work.
+
 Application tables without applied SeaORM migration history produce an actionable
 legacy-database error. There is no legacy data migration: choose a new database or
 explicit reset. Reset drops only the six application tables and their SeaORM/
@@ -140,7 +158,21 @@ no public raw-SQL service escape hatch. Folder-validation tests use explicit tem
 
 [Repository contracts](../../crates/radio-db/src/tests.rs) retain legacy detection,
 reset scope, restrictive foreign keys, explicit/drop rollback and immutable metadata
-checks. [Hash tests](../../crates/radio-db/src/repositories/beatmap_metadata.rs) pin
+checks. They also cover 20 independent-pool startup/upgrade races and reset races,
+native path registration/readback/duplicates, existing text-path migration (including
+JSON-shaped filenames), ordered aggregates with empty sets and shared audio, and
+cleanup with null references. On Linux, native-path checks use distinct invalid
+UTF-8 bytes; Windows surrogate checks require running the contracts on Windows.
+[Hash tests](../../crates/radio-db/src/repositories/beatmap_metadata.rs) pin
 encoding and each imported field. See [development](development.md) for commands.
 These checks do not exercise a real Realm library, GUI interaction, audio playback
 or Windows deployment.
+
+Executed on Linux on 2026-09-14: repository/service contracts passed with SQLite
+and a fresh disposable PostgreSQL cluster; CLI and both SQLite server router
+variants passed their tests. Scoped Clippy passed for SQLite and PostgreSQL callers.
+A single PostgreSQL `EXPLAIN (ANALYZE, BUFFERS)` run with 50,000 metadata rows,
+50,000 audio rows, 200,000 beatmaps and 4 MiB `work_mem` used hash anti joins:
+metadata cleanup took 40.2 ms and audio cleanup 33.4 ms. All shared rows were
+referenced; deletion/null-reference correctness is covered by the contracts.
+Benchmark setup was rolled back. Windows native-path execution remains unverified.

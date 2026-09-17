@@ -1,23 +1,24 @@
 use vizia::prelude::*;
 
-pub const SEARCH: &[u8] = include_bytes!("../assets/icons/search-line.svg");
-pub const CHEVRON: &[u8] = include_bytes!("../assets/icons/arrow-down-s-line.svg");
-pub const PENCIL: &[u8] = include_bytes!("../assets/icons/pencil-line.svg");
-pub const ADD: &[u8] = include_bytes!("../assets/icons/add-line.svg");
-pub const PLAY: &[u8] = include_bytes!("../assets/icons/play-fill.svg");
-pub const SKIP_FORWARD: &[u8] = include_bytes!("../assets/icons/skip-forward-mini-fill.svg");
-pub const SKIP_BACK: &[u8] = include_bytes!("../assets/icons/skip-back-mini-fill.svg");
-pub const SHUFFLE: &[u8] = include_bytes!("../assets/icons/shuffle-line.svg");
-pub const REPEAT: &[u8] = include_bytes!("../assets/icons/repeat-2-line.svg");
-pub const VOLUME: &[u8] = include_bytes!("../assets/icons/volume-up-fill.svg");
-pub const ADD_CIRCLE: &[u8] = include_bytes!("../assets/icons/add-circle-line.svg");
-pub const STACK: &[u8] = include_bytes!("../assets/icons/stack-line.svg");
-pub const MUSIC: &[u8] = include_bytes!("../assets/icons/music-fill.svg");
-pub const SETTINGS: &[u8] = include_bytes!("../assets/icons/settings-4-line.svg");
-pub const MINIMIZE: &[u8] = include_bytes!("../assets/icons/subtract-line.svg");
-pub const MAXIMIZE: &[u8] = include_bytes!("../assets/icons/checkbox-blank-line.svg");
-pub const RESTORE: &[u8] = include_bytes!("../assets/icons/file-copy-line.svg");
-pub const CLOSE: &[u8] = include_bytes!("../assets/icons/close-line.svg");
+pub const SEARCH: &[u8] = include_bytes!("../assets/icons/search.svg");
+pub const CHEVRON: &[u8] = include_bytes!("../assets/icons/chevron-down.svg");
+pub const PENCIL: &[u8] = include_bytes!("../assets/icons/pencil.svg");
+pub const ADD: &[u8] = include_bytes!("../assets/icons/plus.svg");
+pub const PLAY: &[u8] = include_bytes!("../assets/icons/play.svg");
+pub const SKIP_FORWARD: &[u8] = include_bytes!("../assets/icons/skip-forward.svg");
+pub const SKIP_BACK: &[u8] = include_bytes!("../assets/icons/skip-back.svg");
+pub const SHUFFLE: &[u8] = include_bytes!("../assets/icons/shuffle.svg");
+pub const REPEAT: &[u8] = include_bytes!("../assets/icons/repeat-2.svg");
+pub const REFRESH: &[u8] = include_bytes!("../assets/icons/rotate-cw.svg");
+pub const VOLUME: &[u8] = include_bytes!("../assets/icons/volume-2.svg");
+pub const ADD_CIRCLE: &[u8] = include_bytes!("../assets/icons/circle-plus.svg");
+pub const STACK: &[u8] = include_bytes!("../assets/icons/layers.svg");
+pub const MUSIC: &[u8] = include_bytes!("../assets/icons/music.svg");
+pub const SETTINGS: &[u8] = include_bytes!("../assets/icons/settings.svg");
+pub const MINIMIZE: &[u8] = include_bytes!("../assets/icons/minus.svg");
+pub const MAXIMIZE: &[u8] = include_bytes!("../assets/icons/square.svg");
+pub const RESTORE: &[u8] = include_bytes!("../assets/icons/copy.svg");
+pub const CLOSE: &[u8] = include_bytes!("../assets/icons/x.svg");
 
 const NUNITO: &[u8] = include_bytes!("../assets/fonts/Nunito-Variable.ttf");
 
@@ -114,6 +115,10 @@ fn pick(options: &[&'static str], index: usize) -> &'static str {
 
 pub fn register(cx: &mut Context) {
     cx.add_font_mem(NUNITO);
+    cx.add_font_mem(include_bytes!("../assets/fonts/Poppins-Regular.ttf"));
+    cx.add_font_mem(include_bytes!("../assets/fonts/Poppins-Medium.ttf"));
+    cx.add_font_mem(include_bytes!("../assets/fonts/Poppins-SemiBold.ttf"));
+    cx.add_font_mem(include_bytes!("../assets/fonts/Poppins-Bold.ttf"));
 }
 
 #[cfg(test)]

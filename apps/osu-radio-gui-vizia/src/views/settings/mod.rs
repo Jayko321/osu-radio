@@ -2,7 +2,9 @@ use vizia::prelude::*;
 
 use crate::app::{AppEvent, SettingsRetry, UiState};
 use crate::assets;
-use crate::views::components::{gap, icon, search_row, sidebar};
+use crate::views::components::{
+    ButtonVariant, MenuItem, button, gap, icon, icon_button, menu, search_row, sidebar,
+};
 
 pub(crate) fn settings_pane(cx: &mut Context, state: UiState) -> Handle<'_, VStack> {
     let unavailable = Memo::new(move |_| {
@@ -11,16 +13,16 @@ pub(crate) fn settings_pane(cx: &mut Context, state: UiState) -> Handle<'_, VSta
             || state.busy.get()
             || state.browsing.get()
     });
-    let folder_name = Memo::new(move |_| {
+    let folders = Memo::new(move |_| {
         state
             .folders
             .get()
             .iter()
-            .find(|folder| Some(folder.id) == state.selected_folder.get())
-            .map_or_else(
-                || "No osu! folders".to_owned(),
-                |folder| format!("{} - {}", folder.kind, folder.root_path),
-            )
+            .map(|folder| MenuItem {
+                id: folder.id,
+                label: format!("{} - {}", folder.kind, folder.root_path),
+            })
+            .collect::<Vec<_>>()
     });
 
     sidebar(cx, move |cx| {
@@ -37,35 +39,18 @@ pub(crate) fn settings_pane(cx: &mut Context, state: UiState) -> Handle<'_, VSta
                 VStack::new(cx, move |cx| {
                     Label::new(cx, "osu! folders").class("field-label");
                     HStack::new(cx, move |cx| {
-                        Dropdown::new(
+                        menu(
                             cx,
-                            move |cx| {
-                                Button::new(cx, move |cx| {
-                                    HStack::new(cx, move |cx| {
-                                        Label::new(cx, folder_name).class("folder-name");
-                                        icon(cx, assets::CHEVRON);
-                                    })
-                                    .class("folder-trigger-content")
-                                })
-                                .name("osu! folders")
-                                .class("folder-trigger")
-                                .on_press(|cx| cx.emit(PopupEvent::Switch))
-                                .disabled(Memo::new(move |_| {
-                                    unavailable.get() || state.folders.get().is_empty()
-                                }))
-                                .tooltip(move |cx| {
-                                    Tooltip::new(cx, move |cx| {
-                                        Label::new(cx, folder_name).class("folder-tooltip-text");
-                                    })
-                                });
-                            },
-                            move |cx| folder_options(cx, state),
+                            folders,
+                            state.selected_folder,
+                            "No osu! folders",
+                            false,
+                            move |_, id| state.selected_folder.set(Some(id)),
                         )
-                        .show_arrow(false)
-                        .placement(Placement::BottomStart)
-                        .class("folder-dropdown");
-
-                        Button::new(cx, |cx| icon(cx, assets::ADD))
+                        .disabled(Memo::new(move |_| {
+                            unavailable.get() || state.folders.get().is_empty()
+                        }));
+                        icon_button(cx, assets::ADD)
                             .name("Add osu! folder")
                             .class("folder-add")
                             .on_press(|cx| cx.emit(AppEvent::Browse))
@@ -76,7 +61,7 @@ pub(crate) fn settings_pane(cx: &mut Context, state: UiState) -> Handle<'_, VSta
                     Label::new(cx, state.settings_message)
                         .class("load-message")
                         .display(state.settings_message.map(|message| !message.is_empty()));
-                    Button::new(cx, |cx| Label::new(cx, "Retry"))
+                    button(cx, "Retry", ButtonVariant::Alternate)
                         .class("settings-retry")
                         .display(state.settings_retry.map(Option::is_some))
                         .disabled(Memo::new(move |_| {
@@ -96,35 +81,6 @@ pub(crate) fn settings_pane(cx: &mut Context, state: UiState) -> Handle<'_, VSta
         .show_horizontal_scrollbar(false)
         .class("settings-list");
     })
-}
-
-fn folder_options(cx: &mut Context, state: UiState) {
-    ScrollView::new(cx, move |cx| {
-        VStack::new(cx, move |cx| {
-            Binding::new(cx, state.folders, move |cx| {
-                for folder in state.folders.get() {
-                    let id = folder.id;
-                    let name = format!("{} - {}", folder.kind, folder.root_path);
-                    Button::new(cx, move |cx| {
-                        Label::new(cx, name).class("folder-option-text")
-                    })
-                    .class("folder-option")
-                    .checked(
-                        state
-                            .selected_folder
-                            .map(move |selected| *selected == Some(id)),
-                    )
-                    .on_press(move |cx| {
-                        state.selected_folder.set(Some(id));
-                        cx.emit(PopupEvent::Close);
-                    });
-                }
-            });
-        })
-        .class("folder-options");
-    })
-    .show_horizontal_scrollbar(false)
-    .class("folder-popup");
 }
 
 pub(crate) fn style() -> CSS {

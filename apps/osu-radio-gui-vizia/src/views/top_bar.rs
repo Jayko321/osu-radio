@@ -8,13 +8,18 @@ use crate::views::components::{hspacer, icon, icon_button};
 /// window and the trailing group replaces the system minimize/maximize/close buttons.
 pub(crate) fn top_bar(cx: &mut Context, state: UiState) {
     HStack::new(cx, move |cx| {
-        nav_tab(cx, state, Tab::Songs, assets::MUSIC, "Songs");
-        nav_tab(cx, state, Tab::Settings, assets::SETTINGS, "Settings");
+        HStack::new(cx, move |cx| {
+            nav_tab(cx, state, Tab::Songs, assets::MUSIC, "Songs");
+            nav_tab(cx, state, Tab::Settings, assets::SETTINGS, "Settings");
+        })
+        .class("tabs");
 
         hspacer(cx);
         server_status(cx, state);
 
-        icon_button(cx, assets::STACK);
+        icon_button(cx, assets::STACK)
+            .name("Playlists (unavailable)")
+            .disabled(true);
         window_controls(cx, state);
     })
     .class("top-bar")
@@ -26,18 +31,23 @@ pub(crate) fn top_bar(cx: &mut Context, state: UiState) {
         }
     })
     .on_double_click(|cx, button| {
-        if button == MouseButton::Left {
+        if button == MouseButton::Left && cx.hovered() == cx.current() {
             cx.emit(AppEvent::ToggleMaximizeWindow);
         }
     });
 }
 
 fn nav_tab(cx: &mut Context, state: UiState, tab: Tab, glyph: &'static [u8], text: &'static str) {
-    HStack::new(cx, move |cx| {
-        icon(cx, glyph);
-        Label::new(cx, text).class("nav-label");
+    Button::new(cx, move |cx| {
+        HStack::new(cx, move |cx| {
+            icon(cx, glyph);
+            Label::new(cx, text).class("nav-label");
+        })
+        .class("nav-content")
     })
+    .class("ui-button")
     .class("nav-tab")
+    .name(text)
     .toggle_class("active", state.tab.map(move |current| *current == tab))
     .on_press(move |cx| cx.emit(AppEvent::SelectTab(tab)));
 }
@@ -56,7 +66,8 @@ fn window_controls(cx: &mut Context, state: UiState) {
                 icon(cx, assets::MINIMIZE);
             },
             |cx| cx.emit(AppEvent::MinimizeWindow),
-        );
+        )
+        .name("Minimize");
 
         window_button(
             cx,
@@ -65,7 +76,8 @@ fn window_controls(cx: &mut Context, state: UiState) {
                 icon(cx, assets::RESTORE).display(state.maximized);
             },
             |cx| cx.emit(AppEvent::ToggleMaximizeWindow),
-        );
+        )
+        .name("Maximize / restore");
 
         window_button(
             cx,
@@ -74,7 +86,8 @@ fn window_controls(cx: &mut Context, state: UiState) {
             },
             |cx| cx.emit(AppEvent::CloseWindow),
         )
-        .class("close");
+        .class("close")
+        .name("Close window");
     })
     .class("window-controls");
 }
@@ -83,11 +96,13 @@ fn window_button(
     cx: &mut Context,
     content: impl Fn(&mut Context) + 'static,
     action: impl Fn(&mut EventContext) + Send + Sync + 'static,
-) -> Handle<'_, HStack> {
-    HStack::new(cx, content)
-        .class("window-button")
-        .focusable(false)
-        .on_press(action)
+) -> Handle<'_, Button> {
+    Button::new(cx, move |cx| {
+        HStack::new(cx, content).class("window-button-content")
+    })
+    .class("ui-button")
+    .class("window-button")
+    .on_press(action)
 }
 
 pub(crate) fn style() -> CSS {
