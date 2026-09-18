@@ -21,8 +21,9 @@ new database or an explicitly requested reset; ordinary startup never resets.
 | `crates/radio-db` | Persistence boundary; concrete repositories own SQL and constraints; opaque transactions bind repositories. |
 | `crates/osu-radio-client` | Toolkit-free frontend access, session/supervision and reusable view models. |
 | `apps/osu-radio-gui-vizia` | Views, signals, events, styles and assets. |
+| `apps/osu-radio-qt` | Qt/QML mock Songs and gallery, adapters, window interactions and bundled assets. |
 
-Preserve domain/backend/client/GUI boundaries. Vizia and a child-process server are today's implementation, not permanent requirements for future platforms. The GUI is currently a prototype: track selection changes presentation, not audio playback. Keep UI-only assets and classes out of client view models.
+Preserve domain/backend/client/GUI boundaries. Vizia and a child-process server are today's implementation, not permanent requirements for future platforms. The GUIs are currently prototypes: track selection changes presentation, not audio playback. Keep UI-only assets and classes out of client view models. Qt uses the opt-in client `mock` module and never starts a server, scans installations or opens a database.
 
 Preserve unrelated working-tree changes. Use explicit roots in discovery tests and manual checks; unscoped discovery can walk every mounted root. Scanner import reads source data and returns it; it must not copy audio or decide persistence. Do not use Cargo `--all-features`: the workspace contains incompatible database backend features. Use the scoped [verification matrix](docs/agent/development.md#verification-matrix).
 

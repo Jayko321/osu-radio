@@ -219,3 +219,45 @@ These constraints come from the checked-in implementation and its workaround com
 Client unit tests cover shared loading/error behavior, track formatting, and readiness parsing. The headless `folder_selection_survives_refresh_and_duplicate_registration` test in [app.rs](../../apps/osu-radio-gui-vizia/src/app.rs) covers empty lists, selection retention, additions and duplicate registrations without opening a window or reading installations. GUI geometry, artwork and folder-state tests do not constitute an interaction test suite. Compilation and stylesheet-path checks do not validate clicks, native pickers, empty-search accessibility, title-bar dragging, OS window-state behavior, layout, audio output, or child cleanup after abrupt process death. Select scoped checks from [development](development.md), and record actual automated and manual results separately.
 
 When behavior changes, update the affected paragraph or table here and relevant source links. Keep reusable procedures in the skill and common build commands in the development guide; ordinary UI edits do not require rewriting all agent documentation.
+
+## Qt mock frontend
+
+[osu-radio-qt](../../apps/osu-radio-qt/Cargo.toml) is an additional Qt 6.8+ / CXX-Qt
+0.10 executable. Vizia retains its existing backend-connected behavior. Qt's default
+Songs mode and `--component-gallery` both run from bundled mock content, without
+creating a runtime/session, starting a server, accessing a database or scanning
+installations. Search accepts text without filtering; selection changes presentation
+only. Playback, seeking, volume, sorting, tags, playlists, refresh and Settings are
+disabled in Songs. No data persists.
+
+The opt-in client [`mock` module](../../crates/osu-radio-client/src/mock.rs) owns
+four sample metadata records, selection/search and gallery demo state/actions.
+It contains no Qt types or resource paths. Its `apply` method reports actual changes,
+ignores invalid/repeated selections, and suppresses gallery actions while disabled
+(except the global disable toggle). Menu search preserves original item indices.
+Qt's [`MockBridge`](../../apps/osu-radio-qt/src/bridge.rs) translates actions and
+publishes a read-only JSON snapshot with one notification per state change.
+[`Store.qml`](../../apps/osu-radio-qt/qml/Store.qml) binds that snapshot to QML.
+This bounded demo uses a small snapshot, not a production library item model.
+
+[`Songs.qml`](../../apps/osu-radio-qt/qml/Songs.qml) retains the 1024×640 minimum,
+50px title bar, 480px sidebar, 90px cards and Vizia's adaptive player geometry.
+Artwork uses centered cropping; labels elide. [`WindowBar.qml`](../../apps/osu-radio-qt/qml/WindowBar.qml)
+uses Qt window APIs for drag/resize/minimize/maximize/restore/close and observes
+actual window visibility. Qt 6.8 is the minimum for QML system move/resize methods.
+
+[`components`](../../apps/osu-radio-qt/qml/components) customizes Qt Quick Controls'
+Basic style and is shared by Songs and [`Gallery.qml`](../../apps/osu-radio-qt/qml/Gallery.qml).
+The dark palette, Poppins fonts and Lucide icons follow Vizia. The gallery contains
+button variants, icon buttons, editable fields/search, switches, exclusive tabs,
+ordinary/three-state tags, searchable/empty/long menus, modal, material surfaces,
+typography and icons. QML owns focus, popups and modal visibility; client actions
+own demo values. The modal creates no playlist. Native controls keep keyboard
+activation; fields and Songs retain focus outlines, buttons/switches do not.
+
+[`build.rs`](../../apps/osu-radio-qt/build.rs) embeds QML and assets as resources;
+launch does not depend on the working directory. Asset origins/licenses and the
+limits of known cover provenance are in [`SOURCES.md`](../../apps/osu-radio-qt/assets/SOURCES.md).
+Material blur uses Qt Quick Effects; the software renderer used by smoke tests
+does not validate GPU effects. Desktop visual/input and Windows checks remain
+separate from automated validation; see [development](development.md#qt-mock-frontend).

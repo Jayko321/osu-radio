@@ -36,6 +36,7 @@ Tokio runtime dependency. The helper is a separate .NET project.
 | `radio-db` | [Package boundary](../../crates/radio-db/Cargo.toml) | [Repositories, SQL and persistence constraints](database.md). |
 | `osu-radio-client` | [Public facade](../../crates/osu-radio-client/src/lib.rs), [session](../../crates/osu-radio-client/src/session.rs), [view models](../../crates/osu-radio-client/src/view_models/track.rs) | Changing reusable frontend communication, supervision or toolkit-free UI data. |
 | `osu-radio-gui-vizia` | [App state/events](../../apps/osu-radio-gui-vizia/src/app.rs), [view shell](../../apps/osu-radio-gui-vizia/src/views/mod.rs), [assets](../../apps/osu-radio-gui-vizia/src/assets.rs) | Changing desktop presentation and interactions. |
+| `osu-radio-qt` | [Rust launch/adapter](../../apps/osu-radio-qt/src/main.rs), [QML views](../../apps/osu-radio-qt/qml/Songs.qml) | Mock-only Qt desktop Songs and component gallery; shares toolkit-free client mock actions. |
 
 ## Architecture
 
@@ -44,6 +45,7 @@ arrows show intended future capabilities; they are not implemented paths.
 
 ```mermaid
 flowchart LR
+    Qt["Qt/QML Songs and gallery"] --> Mock["Client mock feature: bundled data and actions"]
     GUI["Vizia GUI: views, signals, events"] --> Client["Toolkit-free client: session, HTTP, view models"]
     Client -->|"HTTP; supervises child today"| Server["Backend: routes and services"]
     Server --> Services["radio-services: model services and transactions"]
@@ -83,6 +85,7 @@ Tests and their limits are linked in the component guides.
 | Search inputs | Partial | Text/query state and separate placeholders work in source; no filtering is wired. |
 | Library and folder settings | Implemented | [Frontend](frontend.md); server rows, bounded artwork loading, optional durations, folder dropdown and native chooser registration. Selection is presentation only. |
 | Transport, seeking, volume, output-device settings | Placeholder | [Frontend](frontend.md); visual controls, no playback engine or device selection wired. |
+| Qt Songs and component gallery | Implemented mock prototype | [Qt frontend](frontend.md#qt-mock-frontend); no session, backend, discovery or playback. |
 | End-to-end local music playback | Product goal | Not implemented by selecting a track. |
 | Hosted sources | Future direction | Provider, protocol and hosting remain undecided. |
 | Database repositories and complete snapshot replacement | Implemented | [Database](database.md); SQLite default, PostgreSQL alternative, explicit reset for legacy databases. |

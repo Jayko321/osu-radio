@@ -1,6 +1,6 @@
 ---
 name: osu-radio-gui
-description: Modify osu-radio GUI layouts, interactions, styles, or assets in apps/osu-radio-gui-vizia. Use for visual and interactive GUI changes; not for scanner work or backend API design.
+description: Modify osu-radio GUI layouts, interactions, styles, or assets in apps/osu-radio-gui-vizia or apps/osu-radio-qt. Use for visual and interactive GUI changes; not for scanner work or backend API design.
 ---
 
 # osu-radio GUI changes
@@ -12,3 +12,13 @@ Read [shared guidance](../../../AGENTS.md) and the [frontend guide](../../../doc
 3. For interactive changes, inspect hit targets, clickable children, decorative overlaps and bubbling. Preserve the empty-textbox placeholder workaround. Keep signals on the UI thread and route background results through existing events.
 4. Verify the affected stylesheet is included; a new leaf can use an existing area sheet. Select the relevant checks from the development matrix, including the release GUI check for stylesheet paths. Exercise affected interactions, empty search fields and window behavior when a GUI session is available. A successful build alone does not prove hit testing or interaction behavior; report unperformed manual checks.
 5. Update only affected guide facts if behavior, ownership or known limitations changed. Keep procedures here and technical detail in the linked guide.
+
+
+For Qt changes, trace the QML root through shared `qml/components` and the Rust
+adapter into the client's opt-in `mock` actions. Keep toolkit/resource paths in
+the Qt app; QML owns focus and popup/window presentation. Preserve both mock-only
+launch modes and the existing Vizia frontend. Use the Qt checks in the development
+guide: client feature off/on tests, Qt tests/build, generated-import `qmllint`,
+scoped Clippy and formatting. Offscreen smoke tests are permitted for this path;
+leave desktop input/visual checks to the user and report Windows separately.
+Do not apply Vizia-specific CSS/textbox workarounds to native QML controls.

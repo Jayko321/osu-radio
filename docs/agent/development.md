@@ -301,3 +301,54 @@ When behavior changes, update the affected guide, source/test links, and any
 procedure whose steps changed in the same task. Leave unrelated guides alone.
 Keep task-specific actual validation results in the task report rather than
 turning this recommended-command matrix into a stale record of passing checks.
+
+## Qt mock frontend
+
+Prerequisites: Qt **6.8+** development libraries/tools (Core, Gui, Qml, Quick,
+QuickControls2, Network), QML Basic Controls, Layouts and Effects modules, SVG/image
+plugins, a compatible C++ compiler, and Rust. CXX-Qt 0.10 finds Qt through `qmake`;
+set `QMAKE=/path/to/qmake6` if multiple installations exist. The runtime must also
+be able to locate Qt libraries and plugins. QML/fonts/icons/covers are embedded,
+but the executable is not a standalone Qt distribution. Windows packaging and
+execution are unverified.
+
+```sh
+cargo run -p osu-radio-qt --locked
+cargo run -p osu-radio-qt --locked -- --component-gallery
+cargo run -p osu-radio-qt --locked -- --help
+```
+
+Both GUI modes are mock-only and need no server, `.env`, database or osu!
+installation. `--help` and argument errors are handled before GUI initialization.
+Recommended automated checks:
+
+```sh
+cargo test -p osu-radio-client --lib --locked
+cargo test -p osu-radio-client --features mock --lib --locked
+cargo test -p osu-radio-qt --locked
+cargo build -p osu-radio-qt --locked
+cargo clippy -p osu-radio-client --features mock -p osu-radio-qt --all-targets --locked -- -D warnings
+cargo fmt -p osu-radio-client -p osu-radio-qt --check
+```
+
+The Qt integration test launches both roots with the offscreen/software backend
+from empty temporary working directories, enforces a 15-second timeout, checks
+QML diagnostics and exercises real adapter property notifications using the
+bundled [test probe](../../apps/osu-radio-qt/tests/AdapterProbe.qml). It also runs
+help/error paths with an invalid platform plugin to verify no GUI initialization.
+`OSU_RADIO_QT_SMOKE_TEST=1` is the internal test hook: it loads the adapter probe
+and schedules Qt exit after 300ms. Do not set it for interactive use.
+
+Run [`scripts/lint-qml.sh`](../../apps/osu-radio-qt/scripts/lint-qml.sh) after
+building. Set `QMLLINT=/path/to/qmllint` if needed (default `/usr/lib/qt6/bin/qmllint`).
+The script stages generated `OsuRadio/qmldir` and `plugin.qmltypes` with the QML
+source tree in a temporary import directory, then lints every app/probe QML file.
+It requires Bash, Python 3 and ripgrep. Generated QObject type information is
+necessary for `Store.qml`; linting only source paths cannot resolve `MockBridge`.
+
+The user performs desktop visual/input checks: the existing gallery matrix above
+applies to Qt too, with 1024×640 through 2560×1440 and 100/150/200% scaling.
+Check crop/cover changes, typography, blur, scrolling, keyboard navigation,
+menu and modal focus restoration/trapping, disabled controls and native window
+move/resize/minimize/maximize/close. The automated software smoke tests cannot
+establish these results, physical playback or Windows compatibility.
