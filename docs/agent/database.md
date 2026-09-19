@@ -16,8 +16,9 @@ privately use SeaORM's `DatabaseExecutor` for either a pool or borrowed transact
 ## Schema and ownership
 
 The versioned [initial migration](../../crates/radio-db/src/migrations/m20260913_000001_library.rs)
-creates the following schema. It is a fixed migration definition, independent of
-future entity changes; add another versioned migration for subsequent changes.
+and subsequent migrations create the current schema below. Migration definitions
+are fixed and independent of future entity changes; add another versioned
+migration for subsequent changes.
 
 | Table | Identity and relationships |
 | --- | --- |
@@ -26,11 +27,13 @@ future entity changes; add another versioned migration for subsequent changes.
 | `beatmap_sets` | Generated `i32` ID; required installation; optional online ID and source hash. |
 | `beatmaps` | Generated `i32` ID; required set; difficulty, BPM, source hash; optional independent metadata and audio references. Source kind is derived from the installation. |
 | `beatmap_metadata` | SHA-256 text primary key; immutable shared imported content. |
+| `tags` | Generated `i32` ID; globally unique normalized name, SQLite `BINARY` / PostgreSQL `C` collation. |
+| `beatmap_set_tags` | Composite primary key `(beatmap_set_id, tag_id)`; set cascade, restrictive tag reference, index on `tag_id`. |
 | `audio_sources` | Generated `i32` ID; globally unique `(kind, location)`; `local`, `copied`, or `online`. |
 
-Installation deletion cascades through sets and beatmaps. Shared references use
+Installation deletion cascades through sets, beatmaps and set-tag links. Shared references use
 restrictive foreign keys. Repository cleanup deletes only unreferenced metadata
-and audio rows, using correlated `NOT EXISTS` queries against beatmap references.
+and audio rows, plus tags without set links, using correlated `NOT EXISTS` queries.
 Join/cleanup foreign keys are indexed. Persistence does not copy
 or delete files, including sources marked `copied`.
 
@@ -60,17 +63,46 @@ helper accepts imported metadata and returns lowercase SHA-256 hexadecimal text.
 Hash input is a deterministic JSON tuple in this exact order:
 
 ```text
-["radio-db:metadata:v1", title, title_unicode, artist, artist_unicode,
- author-or-null, source, tags, user_tags, preview_time, audio_file, background_file]
+["radio-db:metadata:v2", title, title_unicode, artist, artist_unicode,
+ author-or-null, source, preview_time, audio_file, background_file]
 author = [online_id, username, country_code]
 ```
 
-Nulls, empty strings, author presence, tag order and original filenames are
-significant. There is no normalization. The database stores author as a nullable
-JSON object with those three fields and user tags as a JSON array. Resolved audio
-locations and background paths are separate beatmap references and never enter the hash. Insertions
+Nulls, empty strings, author presence and original filenames are significant.
+Retained metadata fields are not normalized. The database stores author as a
+nullable JSON object with those three fields. Tags are separate set relationships
+and do not affect metadata identity; persisted metadata has no `tags` or `user_tags`.
+Resolved audio locations and background paths are separate beatmap references and never enter the hash. Insertions
 compute the hash themselves, reuse an existing row without changing it, and
 reject a matching key whose stored content differs.
+
+## Tags and existing versioned databases
+
+[TagService](../../crates/radio-services/src/tag.rs) unions tags across every
+metadata-bearing difficulty in a set. `Tags` is split with `split_whitespace()`;
+each `UserTags` element remains a whole name, including internal whitespace.
+Names are trimmed, converted with Rust `to_lowercase()` (including Unicode), and
+empty names are skipped. Deduplication follows normalization. All sources, sets
+and installations share one tag ID for an equal normalized name. No Unicode
+normalization or full case folding is applied. The
+[repository](../../crates/radio-db/src/repositories/tag.rs) normalizes before
+lookup/insertion and inserts links idempotently. Import and cleanup use the outer
+snapshot transaction; deletion/empty replacement retain tags still linked elsewhere.
+Reimport reuses existing tag IDs before cleaning orphan rows. Unreferenced tags
+are deleted; a later reintroduction need not retain the deleted ID.
+
+The [tag migration](../../crates/radio-db/src/migrations/m20260919_000004_tags.rs)
+upgrades existing versioned databases without a reset or Realm reread. It extracts
+old metadata tags, creates links through existing beatmaps to their sets, then
+creates v2 metadata hashes and merges equal remaining content, verifying content
+on matching hashes. It redirects beatmap references before removing old metadata
+rows and both tag columns. Its old entity and hash encoding are frozen locally so
+future runtime model changes cannot change this historical migration. All schema,
+data and history changes run inside the existing schema lock/transaction. A
+failure rolls everything back; downgrade is rejected because original tag spelling,
+order and distribution between metadata records cannot be reconstructed.
+Scanner import types and Realm/NDJSON retain the original tag fields. This adds no
+HTTP endpoints or GUI tag controls.
 
 ## Shared service entry points
 
@@ -81,9 +113,10 @@ there are no new standalone beatmap or set creation workflows.
 | --- | --- |
 | `user_data()` | `get`, `overview`; overview composes installation reads through `OsuInstallationService`. |
 | `osu_installations()` | `all`, `get`, `register` (resolved scanner marker), `register_folder` (discovery-validated absolute path), `update`, `delete`, `replace_snapshot`. |
-| `beatmap_sets()` | `get`, `for_installation`, `all_with_audio_sources`; aggregate read retains its single repository query and returns `BeatmapSetWithAudio` records, grouped directly into a vector in SQL set-ID order. |
+| `beatmap_sets()` | `get`, `for_installation`, `all_with_audio_sources`, `search_with_audio_sources`, `search_tracks`; legacy aggregates retain set/audio/map order; tracks group globally by audio ID. |
 | `beatmaps()` | `get`, `for_set`. |
 | `beatmap_metadata()` | `get`, `get_or_insert`; the pure `metadata_hash` helper is re-exported. |
+| `tags()` | `all`, `get`, `for_set`; lists use `ORDER BY name ASC` with SQLite `BINARY` / PostgreSQL `C`. |
 | `audio_sources()` | `get`, `find`, `get_or_insert`. |
 
 [Installation services](../../crates/radio-services/src/osu_installation.rs) own
@@ -99,14 +132,40 @@ by the import/deletion workflows. Repositories expose the corresponding persiste
 primitives through both `Database` and `Transaction`; they never begin nested
 transactions. Applications cannot obtain those handles through `Services`.
 
+## Search reads
+
+`Database::begin_read` exposes an opaque transaction for consistent multi-query
+reads: a regular SQLite read transaction or PostgreSQL `REPEATABLE READ READ ONLY`.
+`BeatmapSetService` reads minimal unique metadata and audio-bearing difficulty
+relationships, plus matching set IDs per unique normalized word, inside that
+transaction. `TagRepository::matching_set_ids` binds literal substring values to
+SQLite `instr` / PostgreSQL `strpos`, selects tag IDs first, and resolves distinct
+set IDs through the existing `tag_id` index. It never loads repeated tag names
+for search or interprets input as a pattern.
+
+The service normalizes shared metadata once per hash and unions dynamic word
+vectors by global audio ID, across sets and difficulties. There is no 64-word
+limit. After matching, the same transaction loads full data only for the matching
+audio IDs, in chunks of at most 500 parameters, restoring set/audio/map order.
+Multiplicity is computed from unfiltered relationships and supplied to the
+filtered aggregate loader. No matches skip full loading. Blank queries retain
+the original single aggregate query, including empty sets on the legacy API.
+`search_tracks` groups that result for Songs; formatting remains in the client.
+
+[Search contracts](../../crates/radio-services/src/tests/search.rs) cover literal
+symbols, cross-reference matches, 70 unique words, three ID chunks, and a committed
+replacement from a second pool between projections and full result loading.
+Both backends must retain the old snapshot. The existing tag migration is unchanged;
+this optimization adds no schema or persistent index.
+
 ## Snapshot replacement
 
 Read the entire scanner result before calling `OsuInstallationService::replace_snapshot`. It requires an
 existing installation and matching source kinds. In one transaction it locks the
 singleton with a write statement, deletes the old installation sets, inserts all
 sets through `BeatmapSetService::add`, beatmaps through `BeatmapService::add`, and
-shared records through metadata/audio services. It then cleans up unreferenced shared rows and
-updates `last_scanned_at`. Every participating service uses repositories bound to that same transaction, with
+shared records through metadata/audio services and set links through `TagService`.
+It then cleans up unreferenced shared rows and updates `last_scanned_at`. Every participating service uses repositories bound to that same transaction, with
 no pool fallback. Only the outer workflow commits. Errors or cancellation before
 commit roll back the old snapshot, shared rows and timestamp together. Empty snapshots clear
 that installation's library. Other installations remain intact; shared rows still
@@ -134,7 +193,7 @@ its lock. Independent pools/processes therefore cannot select the same pending w
 
 Application tables without applied SeaORM migration history produce an actionable
 legacy-database error. There is no legacy data migration: choose a new database or
-explicit reset. Reset drops only the six application tables and their SeaORM/
+explicit reset. Reset drops only the eight application tables and their SeaORM/
 Diesel migration history, in child-first order, then recreates the schema in the
 same transaction. Unrelated tables are preserved; reset does not use a broad
 schema refresh or drop external objects.
@@ -164,7 +223,15 @@ JSON-shaped filenames), ordered aggregates with empty sets and shared audio, and
 cleanup with null references. On Linux, native-path checks use distinct invalid
 UTF-8 bytes; Windows surrogate checks require running the contracts on Windows.
 [Hash tests](../../crates/radio-db/src/repositories/beatmap_metadata.rs) pin
-encoding and each imported field. See [development](development.md) for commands.
+v2 encoding, each retained field, and exclusion of tags.
+[Migration tag contracts](../../crates/radio-db/src/tests/tag_migration.rs) cover
+filled upgrades, shared links, metadata merging, collision rollback, dropped
+columns, repeat/concurrent migration and rejected downgrade.
+[Service tag contracts](../../crates/radio-services/src/tests/tags.rs) cover Unicode
+lowercasing, whitespace, whole user tags, ordering, global IDs across sources and
+installations, repeated/empty replacement and shared cleanup. The existing failure
+and cancellation contracts also compare tag rows and set links before/after rollback.
+See [development](development.md) for commands.
 These checks do not exercise a real Realm library, GUI interaction, audio playback
 or Windows deployment.
 

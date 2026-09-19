@@ -119,6 +119,7 @@ struct AppData {
 pub enum AppEvent {
     Connect,
     RefreshLibrary,
+    SearchLibrary(String),
     RefreshSettings,
     RequestMedia(i32),
     Browse,
@@ -140,6 +141,9 @@ impl Model for AppData {
             }
             match app_event {
                 AppEvent::Connect => self.controller.send(AppCommand::Connect),
+                AppEvent::SearchLibrary(query) => self
+                    .controller
+                    .send(AppCommand::SearchLibrary(query.clone())),
                 AppEvent::RefreshLibrary => self.controller.send(AppCommand::RefreshLibrary),
                 AppEvent::RefreshSettings => self.controller.send(AppCommand::RefreshFolders),
                 AppEvent::RequestMedia(id) => self.request_media(*id),

@@ -13,13 +13,15 @@ mod beatmap;
 mod beatmap_metadata;
 mod beatmap_set;
 mod osu_installation;
+mod tag;
 mod user_data;
+pub use tag::TagService;
 
 use anyhow::Result;
 pub use audio_source::AudioSourceService;
 pub use beatmap::BeatmapService;
 pub use beatmap_metadata::BeatmapMetadataService;
-pub use beatmap_set::{BeatmapSetService, BeatmapSetWithAudio};
+pub use beatmap_set::{BeatmapSetService, BeatmapSetWithAudio, LibraryTrack, TrackDifficulty};
 pub use osu_installation::{FolderChanges, OsuInstallationService, RegisterFolderError};
 use radio_db::Database;
 pub use radio_db::{RegisteredInstallation, metadata_hash, model};
@@ -67,7 +69,7 @@ impl Services {
     #[must_use]
     pub const fn beatmap_sets(&self) -> BeatmapSetService<'_> {
         BeatmapSetService {
-            repository: self.database.beatmap_sets(),
+            database: &self.database,
         }
     }
     #[must_use]
@@ -80,6 +82,12 @@ impl Services {
     pub const fn beatmap_metadata(&self) -> BeatmapMetadataService<'_> {
         BeatmapMetadataService {
             repository: self.database.beatmap_metadata(),
+        }
+    }
+    #[must_use]
+    pub const fn tags(&self) -> TagService<'_> {
+        TagService {
+            repository: self.database.tags(),
         }
     }
     #[must_use]

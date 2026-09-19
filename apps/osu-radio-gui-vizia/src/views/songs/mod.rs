@@ -7,11 +7,21 @@ use track_list::track_list;
 
 use crate::app::{AppEvent, UiState};
 use crate::assets;
-use crate::views::components::{chip_row, gap, icon, search_row, sidebar};
+use crate::views::components::{chip_row, gap, icon, sidebar, text_input};
 
 pub(crate) fn songs_pane(cx: &mut Context, state: UiState) -> Handle<'_, VStack> {
     sidebar(cx, move |cx| {
-        search_row(cx, state.song_query, "Type to search songs...");
+        text_input(
+            cx,
+            state.song_query,
+            "Type to search songs...",
+            true,
+            move |cx, text| {
+                state.song_query.set(text.clone());
+                cx.emit(AppEvent::SearchLibrary(text));
+            },
+        )
+        .class("search-row");
         gap(cx, 16.0);
 
         chip_row(cx, &["Title", "All musics", "Tags"]);

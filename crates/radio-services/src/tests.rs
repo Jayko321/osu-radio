@@ -62,6 +62,8 @@ async fn contracts(url: &str) {
     let other_pool = TestDatabase::connect(url).await;
     registrations_and_updates(&database, &other_pool).await;
     snapshots_and_cleanup(&database, &other_pool).await;
+    tags::contracts(&database, &other_pool).await;
+    search::contracts(&database, &other_pool).await;
     rollback_preserves_snapshot(&database).await;
     cancellation_preserves_snapshot(&database).await;
     concurrent_replacements_and_deletion(&database, &other_pool).await;
@@ -137,7 +139,11 @@ fn metadata(title: &str) -> ImportedMetadata {
         }),
         source: Some(String::new()),
         tags: None,
-        user_tags: vec!["calm".to_owned(), "piano\nonly".to_owned()],
+        user_tags: vec![
+            "calm".to_owned(),
+            "piano\nonly".to_owned(),
+            title.to_owned(),
+        ],
         preview_time: Some(1200),
         audio_file: Some("audio.mp3".to_owned()),
         background_file: Some("bg.jpg".to_owned()),
@@ -343,8 +349,15 @@ async fn snapshots_and_cleanup(database: &TestDatabase, other_pool: &TestDatabas
         .unwrap()
         .unwrap();
     assert_eq!(
-        shared_metadata.user_tags,
-        serde_json::json!(["calm", "piano\nonly"])
+        database
+            .tags()
+            .for_set(first_sets[0].id)
+            .await
+            .unwrap()
+            .iter()
+            .map(|tag| tag.name.as_str())
+            .collect::<Vec<_>>(),
+        ["calm", "piano\nonly", "shared"]
     );
     assert_eq!(
         shared_metadata.author,
@@ -551,6 +564,8 @@ async fn rollback_preserves_snapshot(database: &TestDatabase) {
         .await
         .unwrap();
     let old_maps = database.beatmaps().for_set(old_sets[0].id).await.unwrap();
+    let old_tags = database.tags().all().await.unwrap();
+    let old_links = database.tags().for_set(old_sets[0].id).await.unwrap();
     let old_metadata = database
         .beatmap_metadata()
         .get(old_maps[0].metadata_hash.as_ref().unwrap())
@@ -625,6 +640,11 @@ async fn rollback_preserves_snapshot(database: &TestDatabase) {
             .await
             .unwrap()
             .is_none()
+    );
+    assert_eq!(database.tags().all().await.unwrap(), old_tags);
+    assert_eq!(
+        database.tags().for_set(old_sets[0].id).await.unwrap(),
+        old_links
     );
     assert_counts(database, [1, 2, 1, 1]).await;
     remove_failure_trigger(database).await;
@@ -778,6 +798,8 @@ async fn cancellation_preserves_snapshot(database: &TestDatabase) {
     let old_installation = database.osu_installations().get(id).await.unwrap();
     let old_sets = database.beatmap_sets().for_installation(id).await.unwrap();
     let old_maps = database.beatmaps().for_set(old_sets[0].id).await.unwrap();
+    let old_tags = database.tags().all().await.unwrap();
+    let old_links = database.tags().for_set(old_sets[0].id).await.unwrap();
     let old_metadata = database
         .beatmap_metadata()
         .get(old_maps[0].metadata_hash.as_ref().unwrap())
@@ -850,6 +872,16 @@ async fn cancellation_preserves_snapshot(database: &TestDatabase) {
             .unwrap()
             .is_none()
     );
+    assert_eq!(database.tags().all().await.unwrap(), old_tags);
+    assert_eq!(
+        database.tags().for_set(old_sets[0].id).await.unwrap(),
+        old_links
+    );
     assert_counts(database, [1, 2, 1, 1]).await;
     database.osu_installations().delete(id).await.unwrap();
 }
+
+#[path = "tests/tags.rs"]
+mod tags;
+
+mod search;

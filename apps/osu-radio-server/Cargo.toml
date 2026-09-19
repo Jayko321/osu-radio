@@ -27,5 +27,6 @@ utoipa-axum = { version = "0.2.0", optional = true }
 utoipa-scalar = { version = "0.3.0", features = ["axum"], optional = true }
 
 [dev-dependencies]
+osu-radio-client = { path = "../../crates/osu-radio-client" }
 serde_json = { version = "1.0.145" }
 tempfile = { version = "3" }

@@ -132,7 +132,8 @@ continues to use its own [API DTOs](../../crates/osu-radio-client/src/api.rs).
 
 | Route | Response and behavior |
 | --- | --- |
-| `GET /api/beatmap-sets` | Array of `{id, online_id, hash, audio_sources, beatmaps}`. Each audio source has `{id, kind, location}`; distinct sources per set, empty arrays allowed. |
+| `GET /api/beatmap-sets` | Optional `q` searches the library; existing contract retained. Array of `{id, online_id, hash, has_multiple_audio_sources, audio_sources, beatmaps}`. Each audio source has `{id, kind, location}`; distinct sources per set, empty arrays allowed. |
+| `GET /api/tracks` | Optional `q`; one record per global audio ID with nullable representative metadata, cover ID and all difficulties. Used by Songs. |
 | `GET /api/beatmaps/{id}/cover` | Stored background reference bytes, at most 16 MiB; absent/unreadable/oversized cover is 404. No path parameter or caller-supplied filesystem location. |
 | `GET /api/audio-sources/{id}/duration` | `{duration_ms}` with nullable duration; absent audio ID is 404, missing/corrupt/unsupported media is null. Local/copied sources only. |
 | `GET /api/user-data` | `{id, osu_folders}` with singleton `id = 1`. |
@@ -146,6 +147,52 @@ Each `beatmaps` entry adds `id`, `audio_source_id`, `difficulty_name`, `title`,
 means a stored reference exists, not that the file is currently readable. The
 single repository aggregate joins difficulties and metadata while retaining a
 distinct, ID-ordered audio-source list per set. Existing fields remain unchanged.
+
+### Library search
+
+The optional `q` parameter is split with Rust `split_whitespace()`. Every word must
+match a literal substring of a track's tags, artist, title or difficulty; words
+may match different fields or different difficulties sharing that audio ID.
+Artist/title Unicode variants are included. Query and metadata use Unicode
+`to_lowercase()`, matching the stored normalized tags; this is not full Unicode
+case folding or accent normalization. Special characters have no SQL wildcard or
+regular-expression meaning. Missing/whitespace-only queries preserve the complete
+library response, including empty sets, and existing order is retained without ranking.
+
+Both endpoints use the same optimized service search. Minimal unique metadata,
+audio relationships and per-word matching tag set IDs are read in one snapshot
+(SQLite transaction, PostgreSQL repeatable-read/read-only). The service matches
+shared metadata once per hash, unions matches by audio ID, then loads complete
+results only for matched audio in batches of at most 500 parameters inside that
+same transaction. No matches skip full loading; blank queries keep the full
+aggregate path. See [database](database.md).
+All audio references participate globally by ID. Tags apply to all audio in their
+set; matching a difficulty does not include unrelated audio from the same set.
+The response retains only matched audio and all their metadata references, keeping
+representative titles/covers unchanged. `has_multiple_audio_sources` is computed
+before filtering so clients retain difficulty annotations when only one audio remains.
+`search_tracks` groups returned references into unique audio tracks in existing order.
+
+The compact [tracks route](../../apps/osu-radio-server/src/routes/tracks.rs) returns
+`{audio_source_id, title, title_unicode, artist, artist_unicode, cover_beatmap_id,
+difficulties}`. Text and cover ID are nullable. Representative text comes from the
+lowest beatmap ID, even if null; cover uses the lowest ID with a stored reference.
+Each difficulty is `{beatmap_id, beatmap_set_id, difficulty_name,
+set_has_multiple_audio_sources}`, ordered by beatmap ID; duplicate names with
+different IDs remain. The client retains every difficulty in `Track`, choosing
+ordinary/Unicode/unknown text and unique subtitle names only for multi-audio sets.
+Server and client DTOs are independent. Both router variants register this route.
+[HTTP equivalence tests](../../apps/osu-radio-server/src/routes/tracks.rs) compare
+complete client tracks against the legacy endpoint, including null text, cover
+selection, split sets, shared audio, repeated names and encoded query symbols.
+
+Matching takes O(K × S) for K query words and S searchable text/relationships.
+Database reads, sorting, response serialization and transport are separate costs;
+this is not an O(n) promise for the whole HTTP request. No search migration is needed.
+[Service search contracts](../../crates/radio-services/src/tests/search.rs) exercise
+matching and concurrent replacement across a read snapshot on both backends.
+[HTTP tests](../../apps/osu-radio-server/src/routes/beatmap_sets.rs) exercise actual
+query extraction and literal symbol decoding under both documentation configurations.
 
 [Media handlers](../../apps/osu-radio-server/src/routes/media.rs) resolve IDs through
 services, then use `spawn_blocking` for filesystem reads and Lofty probing. Lofty

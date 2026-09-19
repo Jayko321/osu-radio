@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct BeatmapSet {
+    #[serde(default)]
+    pub has_multiple_audio_sources: bool,
     pub id: i32,
     pub online_id: Option<i32>,
     pub hash: Option<String>,
@@ -142,4 +144,23 @@ pub struct BeatmapDetails {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct AudioDuration {
     pub duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct LibraryTrack {
+    pub audio_source_id: i32,
+    pub title: Option<String>,
+    pub title_unicode: Option<String>,
+    pub artist: Option<String>,
+    pub artist_unicode: Option<String>,
+    pub cover_beatmap_id: Option<i32>,
+    pub difficulties: Vec<TrackDifficulty>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TrackDifficulty {
+    pub beatmap_id: i32,
+    pub beatmap_set_id: i32,
+    pub difficulty_name: Option<String>,
+    pub set_has_multiple_audio_sources: bool,
 }

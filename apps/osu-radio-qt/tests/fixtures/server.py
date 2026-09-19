@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import threading
+from urllib.parse import urlsplit, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 root = Path.cwd()
@@ -17,7 +18,7 @@ if starts == 1 and case == "fixture":
     print("fixture: first startup intentionally unsuccessful", file=sys.stderr)
     sys.exit(1)
 
-counts = {"library": 0, "folders": 0}
+counts = {"library": 0, "folders": 0, "retry": 0}
 library_pending = threading.Event()
 
 
@@ -28,11 +29,10 @@ def folder(identifier):
 
 
 def library(ids):
-    return [{"id": 1, "online_id": None, "hash": None,
-             "audio_sources": [{"id": i, "kind": "local", "location": str(i)} for i in ids],
-             "beatmaps": [{"id": i, "audio_source_id": i, "title": "Track " + str(i),
-                           "artist": "Fixture artist", "difficulty_name": "Hard",
-                           "has_cover": True} for i in ids]}]
+    return [{"audio_source_id": i, "title": "Track " + str(i), "title_unicode": None,
+             "artist": "Fixture artist", "artist_unicode": None, "cover_beatmap_id": i,
+             "difficulties": [{"beatmap_id": i, "beatmap_set_id": 1, "difficulty_name": "Hard",
+                               "set_has_multiple_audio_sources": True}]} for i in ids]
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -44,13 +44,21 @@ class Handler(BaseHTTPRequestHandler):
             log.write(self.path + "\n")
         status = 200
         content_type = "application/json"
-        if self.path == "/api/beatmap-sets":
+        if urlsplit(self.path).path == "/api/tracks":
             if case == "requests":
                 library_pending.set()
                 threading.Event().wait(60)
             counts["library"] += 1
             n = counts["library"]
-            if n in (1, 3):
+            if case == "search":
+                query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
+                if query == "retry":
+                    counts["retry"] += 1
+                if query == "retry" and counts["retry"] == 1:
+                    status, payload = 500, {"message": "fixture search unavailable"}
+                else:
+                    payload = library([7, 42, 103] if query == "" else [] if query == "missing" else [42])
+            elif n in (1, 3):
                 status, payload = 500, {"message": "fixture library unavailable"}
             else:
                 payload = library([7, 42, 103] if n == 2 else [103] if n == 4 else [])

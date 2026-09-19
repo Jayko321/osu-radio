@@ -67,8 +67,48 @@ QtObject {
         check(window.objectName === "galleryWindow", "standalone gallery root");
         finish();
     }
+    function searchProbe(): void {
+        if (!bridge.connected || bridge.libraryLoading) return;
+        const search = findChild(window.contentItem, "songSearch");
+        switch (stage) {
+        case 0:
+            if (bridge.trackCount !== 3) return;
+            bridge.selectTrack(42);
+            search.text = "r";
+            search.text = "ro";
+            search.text = "roc hard";
+            stage = 1;
+            break;
+        case 1:
+            check(bridge.trackCount === 1 && bridge.selectedAudioId === 42, "search preserves selected audio ID");
+            check(bridge.selectedSubtitle === "Fixture artist | Hard", "filtered split label remains stable");
+            search.text = "missing";
+            stage = 2;
+            break;
+        case 2:
+            check(bridge.trackCount === 0 && bridge.libraryMessage === "Nothing found.", "separate search empty state");
+            search.text = "retry";
+            stage = 3;
+            break;
+        case 3:
+            check(bridge.libraryMessage.includes("fixture search"), "search error visible");
+            bridge.refreshLibrary();
+            stage = 4;
+            break;
+        case 4:
+            check(bridge.trackCount === 1 && bridge.selectedAudioId === 42, "refresh retries current query");
+            search.text = "";
+            stage = 5;
+            break;
+        case 5:
+            check(bridge.trackCount === 3 && bridge.selectedAudioId === 42, "clear restores library and selection");
+            finish();
+            break;
+        }
+    }
     function step(): void {
         if (passed || gallery) return;
+        if (testCase === "search") { searchProbe(); return; }
         if (testCase === "requests") {
             if (!bridge.connected || bridge.folders.length !== 2) return;
             check(bridge.libraryLoading, "library HTTP request remains pending at close");
@@ -118,11 +158,10 @@ QtObject {
             if (bridge.selectedAudioId !== 42 || bridge.selectedDurationLabel !== "02:05" || bridge.selectedArtworkUrl === "") return;
             check(bridge.selectedTitle === "Track 42" && bridge.selectedSubtitle === "Fixture artist | Hard", "shared selection formatting");
             check(resets === retainedResets, "selection and media must not replace the model");
-            findChild(window.contentItem, "songSearch").text = "songs query";
             findChild(window.contentItem, "settingsSearch").text = "settings query";
             window.selectedTab = 1;
             check(findChild(window.contentItem, "selectedTitle").text === "Track 42", "persistent player follows selection");
-            check(findChild(window.contentItem, "songSearch").text === "songs query", "search fields are independent");
+            check(findChild(window.contentItem, "songSearch").text === "", "search fields are independent");
             check(bridge.selectedAudioId === 42, "settings preserves player selection");
             findChild(window.contentItem, "folderMenu").choose(1);
             check(bridge.selectedAudioId === 42, "folder selection does not filter songs");

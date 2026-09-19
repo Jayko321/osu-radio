@@ -16,6 +16,25 @@ pub struct BeatmapMetadataRepository<'a> {
 }
 
 impl BeatmapMetadataRepository<'_> {
+    pub async fn search_metadata(&self) -> Result<Vec<crate::model::SearchMetadata>> {
+        use sea_orm::{ConnectionTrait, FromQueryResult, Statement};
+        Ok(SearchMetadataRow::find_by_statement(Statement::from_string(
+            self.connection.get_database_backend(),
+            "SELECT hash, title, title_unicode, artist, artist_unicode FROM beatmap_metadata",
+        ))
+        .all(&self.connection)
+        .await?
+        .into_iter()
+        .map(|row| crate::model::SearchMetadata {
+            hash: row.hash,
+            title: row.title,
+            title_unicode: row.title_unicode,
+            artist: row.artist,
+            artist_unicode: row.artist_unicode,
+        })
+        .collect())
+    }
+
     pub async fn cleanup(&self) -> Result<()> {
         beatmap_metadata::Entity::delete_many()
             .filter(
@@ -58,8 +77,6 @@ impl BeatmapMetadataRepository<'_> {
                 })
             }),
             source: imported.source.clone(),
-            tags: imported.tags.clone(),
-            user_tags: serde_json::to_value(&imported.user_tags)?,
             preview_time: imported.preview_time,
             audio_file: imported.audio_file.clone(),
             background_file: imported.background_file.clone(),
@@ -85,22 +102,20 @@ impl BeatmapMetadataRepository<'_> {
     }
 }
 
-/// Hashes every imported metadata field without normalization or resolved audio paths.
+/// Hashes persisted metadata fields; tags and resolved paths are separate identities.
 pub fn metadata_hash(imported: &ImportedMetadata) -> Result<String> {
     let author = imported
         .author
         .as_ref()
         .map(|author| (author.online_id, &author.username, &author.country_code));
     let bytes = serde_json::to_vec(&(
-        "radio-db:metadata:v1",
+        "radio-db:metadata:v2",
         &imported.title,
         &imported.title_unicode,
         &imported.artist,
         &imported.artist_unicode,
         author,
         &imported.source,
-        &imported.tags,
-        &imported.user_tags,
         imported.preview_time,
         &imported.audio_file,
         &imported.background_file,
@@ -117,8 +132,6 @@ fn into_model(value: beatmap_metadata::Model) -> BeatmapMetadata {
         artist_unicode: value.artist_unicode,
         author: value.author,
         source: value.source,
-        tags: value.tags,
-        user_tags: value.user_tags,
         preview_time: value.preview_time,
         audio_file: value.audio_file,
         background_file: value.background_file,
@@ -154,7 +167,7 @@ mod tests {
     fn metadata_hash_has_a_stable_versioned_encoding() {
         assert_eq!(
             metadata_hash(&fixture()).unwrap(),
-            "d0ed39eaa01ceeaf916423e6bd763a88f046b0b968b7ce5ff78fafa1de8f1afe"
+            "6f78a79388cb66be88bcc349805c754c495332623b3905ef190b8bcfaff41211"
         );
         assert_eq!(
             metadata_hash(&fixture()).unwrap(),
@@ -163,7 +176,7 @@ mod tests {
     }
 
     #[test]
-    fn every_metadata_field_affects_identity() {
+    fn every_persisted_metadata_field_affects_identity() {
         let original = fixture();
         let original_hash = metadata_hash(&original).unwrap();
         let mutations: &[fn(&mut ImportedMetadata)] = &[
@@ -176,9 +189,6 @@ mod tests {
             |m| m.author.as_mut().unwrap().username = None,
             |m| m.author.as_mut().unwrap().country_code = None,
             |m| m.source = None,
-            |m| m.tags = None,
-            |m| m.user_tags.clear(),
-            |m| m.user_tags.reverse(),
             |m| m.preview_time = None,
             |m| m.audio_file = None,
             |m| m.background_file = None,
@@ -198,7 +208,6 @@ mod tests {
             |m| &mut m.artist,
             |m| &mut m.artist_unicode,
             |m| &mut m.source,
-            |m| &mut m.tags,
             |m| &mut m.audio_file,
             |m| &mut m.background_file,
             |m| &mut m.author.as_mut().unwrap().username,
@@ -229,9 +238,23 @@ mod tests {
         absent.user_tags.clear();
         present = absent.clone();
         present.user_tags.push(String::new());
-        assert_ne!(
+        assert_eq!(
+            metadata_hash(&absent).unwrap(),
+            metadata_hash(&present).unwrap()
+        );
+        present.tags = Some("ROCK rock".into());
+        assert_eq!(
             metadata_hash(&absent).unwrap(),
             metadata_hash(&present).unwrap()
         );
     }
+}
+
+#[derive(sea_orm::FromQueryResult)]
+struct SearchMetadataRow {
+    hash: String,
+    title: Option<String>,
+    title_unicode: Option<String>,
+    artist: Option<String>,
+    artist_unicode: Option<String>,
 }

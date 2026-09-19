@@ -175,6 +175,7 @@ Basic.ApplicationWindow {
                     leftPadding: 44
                     placeholderText: "Type to search songs..."
                     Accessible.name: "Search songs"
+                    onTextChanged: bridge.searchLibrary(text)
                     AppIcon { x: 12; anchors.verticalCenter: parent.verticalCenter; name: "search"; color: Theme.muted }
                 }
                 Row {

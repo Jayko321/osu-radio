@@ -1,6 +1,6 @@
 use crate::{
     AudioSourceService, BeatmapMetadataService, BeatmapService, BeatmapSetService, ImportSummary,
-    RegisteredInstallation, UserDataService,
+    RegisteredInstallation, TagService, UserDataService,
     model::{OsuInstallation, OsuInstallationChanges, SourceType},
 };
 use anyhow::{Context, Result, ensure};
@@ -104,6 +104,11 @@ impl OsuInstallationService<'_> {
         }
         .cleanup()
         .await?;
+        TagService {
+            repository: transaction.tags(),
+        }
+        .cleanup()
+        .await?;
         transaction.commit().await?;
         Ok(deleted)
     }
@@ -134,9 +139,6 @@ impl OsuInstallationService<'_> {
             imported.iter().all(|set| set.source == installation.kind),
             "Imported source kind does not match the registered installation"
         );
-        let sets = BeatmapSetService {
-            repository: transaction.beatmap_sets(),
-        };
         let maps = BeatmapService {
             repository: transaction.beatmaps(),
         };
@@ -146,14 +148,18 @@ impl OsuInstallationService<'_> {
         let audio = AudioSourceService {
             repository: transaction.audio_sources(),
         };
-        sets.delete_for_installation(id).await?;
+        let tags = TagService {
+            repository: transaction.tags(),
+        };
+        BeatmapSetService::delete_for_installation(transaction.beatmap_sets(), id).await?;
         let mut summary = ImportSummary {
             beatmap_sets: imported.len(),
             ..ImportSummary::default()
         };
         let mut audio_ids = HashSet::new();
         for imported_set in imported {
-            let set = sets.add(id, imported_set).await?;
+            let set = BeatmapSetService::add(transaction.beatmap_sets(), id, imported_set).await?;
+            tags.import(set.id, imported_set).await?;
             for imported_beatmap in &imported_set.beatmaps {
                 let metadata_hash = match &imported_beatmap.metadata {
                     Some(imported) => Some(metadata.get_or_insert(imported).await?.hash),
@@ -182,6 +188,7 @@ impl OsuInstallationService<'_> {
             }
             summary.beatmaps = summary.beatmaps.saturating_add(imported_set.beatmaps.len());
         }
+        tags.cleanup().await?;
         metadata.cleanup().await?;
         audio.cleanup().await?;
         installations.mark_scanned(id).await?;

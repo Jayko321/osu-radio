@@ -112,7 +112,7 @@ fn live_session_projects_independent_loads_targeted_media_and_id_selections() {
     assert_eq!(
         requests
             .lines()
-            .filter(|p| *p == "/api/beatmap-sets")
+            .filter(|p| p.starts_with("/api/tracks"))
             .count(),
         5
     );
@@ -122,6 +122,34 @@ fn live_session_projects_independent_loads_targeted_media_and_id_selections() {
             .filter(|p| *p == "/api/user-data/osu-folders")
             .count(),
         3
+    );
+    assert_child_reaped(directory.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn songs_search_debounces_retries_and_clears_through_the_live_adapter() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("isolated search fixture");
+    let server = directory.path().join("fixture-server");
+    std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fixture");
+    assert_probe(&run(&[], "offscreen", directory.path(), &server, "search"));
+    let requests = std::fs::read_to_string(directory.path().join("requests")).expect("requests");
+    assert_eq!(
+        requests
+            .lines()
+            .filter(|line| line.starts_with("/api/tracks"))
+            .collect::<Vec<_>>(),
+        [
+            "/api/tracks?q=",
+            "/api/tracks?q=roc+hard",
+            "/api/tracks?q=missing",
+            "/api/tracks?q=retry",
+            "/api/tracks?q=retry",
+            "/api/tracks?q=",
+        ]
     );
     assert_child_reaped(directory.path());
 }

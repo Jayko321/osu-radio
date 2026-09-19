@@ -2,7 +2,7 @@
 //! every artwork delivery only after decoding and cache installation (or stale-result discard).
 use crate::{
     ApiClient, OsuFolder, RegisterOsuFolder, ServerOptions, Session, Track, describe,
-    view_models::{library_tracks, selection_after_refresh},
+    view_models::selection_after_refresh,
 };
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -14,7 +14,7 @@ use std::{
 use tokio::{
     runtime::Handle,
     sync::{mpsc, watch},
-    task::JoinSet,
+    task::{AbortHandle, JoinSet},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +46,7 @@ pub struct MediaTicket {
 pub enum AppCommand {
     Connect,
     RefreshLibrary,
+    SearchLibrary(String),
     RefreshFolders,
     SelectTrack(Option<i32>),
     SelectFolder(Option<i32>),
@@ -114,7 +115,10 @@ impl AppController {
 
 enum Completed {
     Connected(Result<Session, String>),
-    Library(Result<Vec<Track>, String>),
+    Library {
+        request: u64,
+        result: Result<Vec<Track>, String>,
+    },
     Folders(Result<Vec<OsuFolder>, String>),
     Registered(Result<OsuFolder, String>),
     Media {
@@ -143,6 +147,10 @@ struct Controller {
     folders: Vec<OsuFolder>,
     selected_folder: Option<i32>,
     library: OperationStatus,
+    library_query: String,
+    library_request: u64,
+    library_task: Option<AbortHandle>,
+    library_deadline: Option<tokio::time::Instant>,
     folder_status: OperationStatus,
     picking: bool,
     generation: u64,
@@ -168,6 +176,10 @@ impl Controller {
             folders: Vec::new(),
             selected_folder: None,
             library: OperationStatus::default(),
+            library_query: String::new(),
+            library_request: 0,
+            library_task: None,
+            library_deadline: None,
             folder_status: OperationStatus::default(),
             picking: false,
             generation: 0,
@@ -202,19 +214,25 @@ impl Controller {
             let _ = session.shutdown().await;
         }
     }
-    fn task(&mut self, future: impl Future<Output = Completed> + Send + 'static) {
+    fn task(&mut self, future: impl Future<Output = Completed> + Send + 'static) -> AbortHandle {
         let mut cancel = self.cancel.subscribe();
         self.tasks.spawn(async move {
             tokio::select! {
                 result = future => result,
                 _ = cancel.wait_for(|value| *value) => Completed::Cancelled,
             }
-        });
+        })
     }
     fn command(&mut self, command: AppCommand) {
         match command {
             AppCommand::Connect => self.connect(),
             AppCommand::RefreshLibrary => self.refresh_library(),
+            AppCommand::SearchLibrary(query) => {
+                if self.library_query != query {
+                    self.library_query = query;
+                    self.load_library(Duration::from_millis(200));
+                }
+            }
             AppCommand::RefreshFolders => self.refresh_folders(),
             AppCommand::SelectTrack(id) => {
                 if id.is_none_or(|id| self.track_indices.contains_key(&id)) {
@@ -284,28 +302,38 @@ impl Controller {
         });
     }
     fn refresh_library(&mut self) {
+        self.load_library(Duration::ZERO);
+    }
+    fn load_library(&mut self, delay: Duration) {
+        self.library_deadline = tokio::time::Instant::now().checked_add(delay);
+        self.library_request = self.library_request.wrapping_add(1);
+        if let Some(task) = self.library_task.take() {
+            task.abort();
+        }
         let Some(session) = &self.session else {
             self.connect();
             return;
         };
-        if self.library.loading {
-            return;
-        }
         let api = session.api().clone();
+        let query = self.library_query.clone();
+        let request = self.library_request;
         self.library = OperationStatus {
             loading: true,
             message: "Loading library…".into(),
             ..Default::default()
         };
         (self.emit)(AppUpdate::LibraryStatus(self.library.clone()));
-        self.task(async move {
-            Completed::Library(
-                api.beatmap_sets()
+        self.library_task = Some(self.task(async move {
+            tokio::time::sleep(delay).await;
+            Completed::Library {
+                request,
+                result: api
+                    .search_tracks(&query)
                     .await
-                    .map(|sets| library_tracks(&sets))
+                    .map(|tracks| tracks.into_iter().map(Track::from).collect())
                     .map_err(|error| describe(&error)),
-            )
-        });
+            }
+        }));
     }
     fn refresh_folders(&mut self) {
         let Some(session) = &self.session else {
@@ -374,7 +402,10 @@ impl Controller {
                     Ok(session) => {
                         self.session = Some(session);
                         (self.emit)(AppUpdate::Connection(ConnectionStatus::Connected));
-                        self.refresh_library();
+                        let delay = self.library_deadline.map_or(Duration::ZERO, |deadline| {
+                            deadline.saturating_duration_since(tokio::time::Instant::now())
+                        });
+                        self.load_library(delay);
                         self.refresh_folders();
                     }
                     Err(error) => {
@@ -385,7 +416,11 @@ impl Controller {
                     }
                 }
             }
-            Completed::Library(result) => {
+            Completed::Library { request, result } => {
+                if request != self.library_request {
+                    return;
+                }
+                self.library_task = None;
                 self.library = OperationStatus::default();
                 match result {
                     Ok(tracks) => self.replace_tracks(tracks),
@@ -442,7 +477,12 @@ impl Controller {
             .collect();
         self.tracks = tracks;
         if self.tracks.is_empty() {
-            self.library.message = "No songs yet. Import a registered folder with the CLI.".into();
+            self.library.message = if self.library_query.trim().is_empty() {
+                "No songs yet. Import a registered folder with the CLI."
+            } else {
+                "Nothing found."
+            }
+            .into();
         }
         (self.emit)(AppUpdate::TracksReplaced(self.tracks.clone()));
         self.emit_selection();
@@ -638,6 +678,7 @@ mod tests {
             title: id.to_string(),
             artist: "Artist".into(),
             subtitle: "Artist".into(),
+            difficulties: Vec::new(),
             duration: None,
         }
     }
@@ -717,7 +758,10 @@ mod tests {
         state.start_media();
         assert!(state.jobs.is_empty(), "refresh pauses new media pipelines");
         assert_eq!(state.queue, VecDeque::from([(2, true), (1, true)]));
-        state.complete(Completed::Library(Err("refresh failed".into())));
+        state.complete(Completed::Library {
+            request: state.library_request,
+            result: Err("refresh failed".into()),
+        });
         assert_eq!(state.selected, Some(2));
         assert_eq!(state.tracks, vec![track(1), track(2)]);
         state.start_media();
@@ -732,6 +776,78 @@ mod tests {
         state.tasks.abort_all();
         state.session.take().unwrap().shutdown().await.unwrap();
     }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn search_debounces_cancels_and_ignores_late_success_and_error() {
+        let (_directory, session) = test_session().await;
+        let (mut state, updates) = controller();
+        state.session = Some(session);
+        state.replace_tracks(vec![track(1), track(2)]);
+        state.selected = Some(2);
+        // Paused time lets us check the delay without relying on wall-clock scheduling.
+        tokio::time::pause();
+        state.command(AppCommand::SearchLibrary("r".into()));
+        let old = state.library_request;
+        let old_task = state.library_task.clone().unwrap();
+        tokio::time::advance(Duration::from_millis(100)).await;
+        state.command(AppCommand::SearchLibrary("roc".into()));
+        tokio::task::yield_now().await;
+        assert!(old_task.is_finished(), "superseded task is aborted");
+        while state.tasks.try_join_next().is_some() {}
+        tokio::time::advance(Duration::from_millis(199)).await;
+        assert!(
+            state.tasks.try_join_next().is_none(),
+            "latest request still debouncing"
+        );
+        let notifications = updates.lock().unwrap().len();
+        for result in [Ok(vec![track(99)]), Err("late failure".into())] {
+            state.complete(Completed::Library {
+                request: old,
+                result,
+            });
+            assert_eq!(state.tracks, vec![track(1), track(2)]);
+            assert_eq!(state.selected, Some(2));
+            assert!(state.library.loading);
+            assert_eq!(updates.lock().unwrap().len(), notifications);
+        }
+        // At 200 ms the fake session's refused connection completes the current task.
+        tokio::time::advance(Duration::from_millis(1)).await;
+        let completed = state.tasks.join_next().await.unwrap().unwrap();
+        state.complete(completed);
+        assert!(!state.library.loading);
+        assert_eq!(state.library.retry, Some(SettingsRetry::Load));
+        state.command(AppCommand::RefreshLibrary);
+        assert_eq!(state.library_query, "roc");
+        state.complete(Completed::Library {
+            request: state.library_request,
+            result: Ok(vec![track(2)]),
+        });
+        assert_eq!(state.selected, Some(2));
+        assert_eq!(state.library.retry, None);
+        state.command(AppCommand::SearchLibrary("nothing".into()));
+        state.complete(Completed::Library {
+            request: state.library_request,
+            result: Ok(vec![]),
+        });
+        assert_eq!(state.library.message, "Nothing found.");
+        let before_clear = state.library_request;
+        state.command(AppCommand::SearchLibrary(String::new()));
+        state.complete(Completed::Library {
+            request: before_clear,
+            result: Err("late".into()),
+        });
+        assert!(state.library.loading);
+        state.complete(Completed::Library {
+            request: state.library_request,
+            result: Ok(vec![track(1), track(2)]),
+        });
+        assert_eq!(state.tracks.len(), 2);
+        assert!(state.library.message.is_empty());
+        state.tasks.abort_all();
+        tokio::time::resume();
+        state.session.take().unwrap().shutdown().await.unwrap();
+    }
+
     #[test]
     fn selection_survives_refresh_shrinking_and_empty_library() {
         let (mut state, updates) = controller();
@@ -760,14 +876,20 @@ mod tests {
         state.complete(Completed::Folders(Err("folders failed".into())));
         assert_eq!(state.folder_status.retry, Some(SettingsRetry::Load));
         assert_eq!(state.library.retry, None);
-        state.complete(Completed::Library(Err("library failed".into())));
+        state.complete(Completed::Library {
+            request: state.library_request,
+            result: Err("library failed".into()),
+        });
         assert_eq!(state.tracks, vec![track(1)]);
         assert_eq!(state.selected, Some(1));
         state.complete(Completed::Folders(Ok(vec![folder(3)])));
         assert_eq!(state.selected_folder, Some(3));
         assert_eq!(state.folder_status.retry, None);
         assert_eq!(state.library.retry, Some(SettingsRetry::Load));
-        state.complete(Completed::Library(Ok(vec![track(2)])));
+        state.complete(Completed::Library {
+            request: state.library_request,
+            result: Ok(vec![track(2)]),
+        });
         assert_eq!(state.library.retry, None);
         assert_eq!(state.selected, Some(2));
     }
@@ -944,3 +1066,6 @@ mod tests {
         controller.shutdown().await;
     }
 }
+
+#[cfg(test)]
+mod benchmarks;

@@ -11,3 +11,5 @@ pub use beatmap_metadata::{BeatmapMetadataRepository, metadata_hash};
 pub use beatmap_set::BeatmapSetRepository;
 pub use osu_installation::{OsuInstallationRepository, RegisteredInstallation};
 pub use user_data::UserDataRepository;
+pub mod tag;
+pub use tag::TagRepository;

@@ -139,7 +139,7 @@ supply only its URL in `RADIO_DB_TEST_POSTGRES_URL`:
 
 ```sh
 RADIO_DB_TEST_POSTGRES_URL='postgres://USER@127.0.0.1:PORT/radio_db_test_repositories' cargo test -p radio-db --no-default-features --features postgres --locked -- --include-ignored
-RADIO_DB_TEST_POSTGRES_URL='postgres://USER@127.0.0.1:PORT/radio_db_test_services' cargo test -p radio-services --no-default-features --features postgres --locked -- --include-ignored
+RADIO_DB_TEST_POSTGRES_URL='postgres://USER@127.0.0.1:PORT/radio_db_test_services' cargo test -p radio-services --no-default-features --features postgres --locked -- --include-ignored --skip synthetic_search_timings
 ```
 
 Replace USER and PORT with the disposable cluster's values. The test never reads
@@ -157,6 +157,56 @@ Both commands below **must fail** with the explicit exactly-one-backend error:
 cargo check -p radio-db --no-default-features --locked
 cargo check -p radio-db --no-default-features --features sqlite,postgres --locked
 ```
+
+### Search measurements
+
+The opt-in [service measurements](../../crates/radio-services/src/beatmap_set/benchmarks.rs)
+separate SQL/ORM reads, Rust matching and full result loading. Synthetic runs use
+1,000/10,000/50,000 sets (two audio/four difficulties per set), query `roc hard`,
+a warmup and five measured samples. SQLite creates a temporary database;
+PostgreSQL resets only an explicitly supplied disposable `radio_db_test_*` database.
+
+```sh
+cargo test -p radio-services --locked synthetic_search_timings -- --ignored --nocapture
+```
+
+For a real-library comparison, save the initial working tree (including untracked
+source files) and debug/release server binaries before editing. Use SQLite's backup
+API to create one consistent copy; never copy only the main file from a live WAL
+database. Run each stage on that same backup. The
+[HTTP measurement script](../../tools/search-benchmark/benchmark_http.py) captures exact
+payloads and medians for `rock`, `rock hard`, `星`, no matches and blank input.
+Use stage labels `baseline`, `stage1`, `stage2`, `stage3`; stage 3 uses `tracks`.
+Run from a directory with `.env`, as required by current server startup.
+
+```sh
+python3 tools/search-benchmark/benchmark_http.py --binary /absolute/saved/server-debug --database-backup /absolute/backup.sqlite --output /tmp/search-results --stage baseline --profile debug
+RADIO_SEARCH_BENCH_DB=/absolute/backup.sqlite cargo test -p radio-services --locked snapshot_search_timings -- --ignored --nocapture
+RADIO_SEARCH_BENCH_DB=/absolute/backup.sqlite cargo test -p osu-radio-server --locked snapshot_serialization_timings -- --ignored --nocapture
+RADIO_SEARCH_BENCH_DIR=/tmp/search-results cargo test -p osu-radio-client --locked captured_client_timings -- --ignored --nocapture
+```
+
+Repeat with `--release` and release binary/payload labels. Snapshot service timing
+keeps test-only reference implementations of the original and tag-filtered paths;
+each result is compared exactly against the original. Serialization timing also
+compares full client tracks. Captured client timing measures Rust decoding,
+conversion and controller notification separately, excluding rendering/media.
+The original mapper is retained only in the benchmark to measure the initial
+client behavior (before it retained all difficulties).
+
+`controller_http_timings` measures HTTP through controller completion, with and
+without 200 ms debounce. Set `RADIO_SEARCH_BENCH_BINARY` to the saved server,
+`RADIO_SEARCH_BENCH_WORKDIR` to a directory whose `.env` selects the backup, and
+`RADIO_SEARCH_BENCH_COMPACT=0` for the original endpoint or `1` for the new endpoint.
+Unset inherited `SQLITE_DATABASE_URL` / `POSTGRES_DATABASE_URL` when running it.
+The compact case exercises the actual controller task; the original case replays
+the old request/mapper into the same controller. Child startup, GUI painting,
+media fetching and source import are excluded. Do not run other CPU-intensive
+checks concurrently with measurements. Report medians/variability, not CI thresholds.
+
+PostgreSQL `--include-ignored` contracts must retain `--skip synthetic_search_timings`
+to avoid concurrent resets. Snapshot benchmarks are SQLite-only. Actual measurements
+and executed checks are recorded in [the search report](search-performance.md).
 
 ### Store and schema lifecycle
 

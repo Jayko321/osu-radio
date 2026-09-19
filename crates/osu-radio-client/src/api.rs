@@ -35,6 +35,39 @@ impl ApiClient {
         self.get("/api/beatmap-sets").await
     }
 
+    pub async fn search_beatmap_sets(&self, query: &str) -> Result<Vec<BeatmapSet>, ApiError> {
+        let path = "/api/beatmap-sets";
+        let response = self
+            .http
+            .get(self.url(path))
+            .query(&[("q", query)])
+            .send()
+            .await
+            .map_err(ApiError::Transport)?;
+        if !response.status().is_success() {
+            return Err(Self::failure(path, response).await);
+        }
+        response.json().await.map_err(ApiError::Decode)
+    }
+
+    pub async fn search_tracks(
+        &self,
+        query: &str,
+    ) -> Result<Vec<crate::models::LibraryTrack>, ApiError> {
+        let path = "/api/tracks";
+        let response = self
+            .http
+            .get(self.url(path))
+            .query(&[("q", query)])
+            .send()
+            .await
+            .map_err(ApiError::Transport)?;
+        if !response.status().is_success() {
+            return Err(Self::failure(path, response).await);
+        }
+        response.json().await.map_err(ApiError::Decode)
+    }
+
     pub async fn audio_duration(&self, id: i32) -> Result<crate::models::AudioDuration, ApiError> {
         self.get(&format!("/api/audio-sources/{id}/duration")).await
     }
@@ -217,5 +250,36 @@ impl Error for ApiError {
             Self::Transport(error) | Self::Decode(error) => Some(error),
             Self::Status { .. } => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn search_encodes_query_as_a_single_literal_parameter() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api = ApiClient::new(format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(stream.read_u8().await.unwrap());
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n[]")
+                .await
+                .unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        assert!(api.search_tracks("ЁЖ a+b%_&?#").await.unwrap().is_empty());
+        assert!(
+            server
+                .await
+                .unwrap()
+                .starts_with("GET /api/tracks?q=%D0%81%D0%96+a%2Bb%25_%26%3F%23 HTTP/1.1\r\n")
+        );
     }
 }

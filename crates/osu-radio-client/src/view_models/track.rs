@@ -11,6 +11,7 @@ pub struct Track {
     pub artist: String,
     pub subtitle: String,
     pub duration: Option<Duration>,
+    pub difficulties: Vec<crate::models::TrackDifficulty>,
 }
 
 impl Track {
@@ -23,6 +24,7 @@ impl Track {
             subtitle: artist.clone(),
             artist,
             duration: Some(duration),
+            difficulties: Vec::new(),
         }
     }
 
@@ -47,7 +49,7 @@ impl Track {
 #[must_use]
 pub fn library_tracks(sets: &[BeatmapSet]) -> Vec<Track> {
     let mut order = Vec::new();
-    let mut groups: HashMap<i32, Vec<(&BeatmapDetails, bool)>> = HashMap::new();
+    let mut groups: HashMap<i32, Vec<(&BeatmapDetails, i32, bool)>> = HashMap::new();
     for set in sets {
         for audio in &set.audio_sources {
             if !groups.contains_key(&audio.id) {
@@ -55,12 +57,12 @@ pub fn library_tracks(sets: &[BeatmapSet]) -> Vec<Track> {
             }
             groups.entry(audio.id).or_default();
         }
-        let split = set.audio_sources.len() > 1;
+        let split = set.has_multiple_audio_sources || set.audio_sources.len() > 1;
         for map in &set.beatmaps {
             if let Some(id) = map.audio_source_id
                 && let Some(maps) = groups.get_mut(&id)
             {
-                maps.push((map, split));
+                maps.push((map, set.id, split));
             }
         }
     }
@@ -68,40 +70,28 @@ pub fn library_tracks(sets: &[BeatmapSet]) -> Vec<Track> {
         .into_iter()
         .map(|id| {
             let mut maps = groups.remove(&id).unwrap_or_default();
-            maps.sort_by_key(|(map, _)| map.id);
-            let representative = maps.first().map(|(map, _)| *map);
-            let title = text(
-                representative.and_then(|m| m.title.as_deref()),
-                representative.and_then(|m| m.title_unicode.as_deref()),
-                "Unknown title",
-            );
-            let artist = text(
-                representative.and_then(|m| m.artist.as_deref()),
-                representative.and_then(|m| m.artist_unicode.as_deref()),
-                "Unknown artist",
-            );
-            let mut names = Vec::new();
-            for (map, split) in &maps {
-                if *split {
-                    let name = text(map.difficulty_name.as_deref(), None, "Unknown difficulty");
-                    if !names.contains(&name) {
-                        names.push(name);
-                    }
-                }
-            }
-            let subtitle = if names.is_empty() {
-                artist.clone()
-            } else {
-                format!("{artist} | {}", names.join(", "))
-            };
-            Track {
+            maps.sort_by_key(|(map, _, _)| map.id);
+            let representative = maps.first().map(|(map, _, _)| *map);
+            Track::from(crate::models::LibraryTrack {
                 audio_source_id: id,
-                cover_beatmap_id: maps.iter().find(|(m, _)| m.has_cover).map(|(m, _)| m.id),
-                title,
-                artist,
-                subtitle,
-                duration: None,
-            }
+                title: representative.and_then(|map| map.title.clone()),
+                title_unicode: representative.and_then(|map| map.title_unicode.clone()),
+                artist: representative.and_then(|map| map.artist.clone()),
+                artist_unicode: representative.and_then(|map| map.artist_unicode.clone()),
+                cover_beatmap_id: maps
+                    .iter()
+                    .find(|(map, _, _)| map.has_cover)
+                    .map(|(map, _, _)| map.id),
+                difficulties: maps
+                    .into_iter()
+                    .map(|(map, set_id, split)| crate::models::TrackDifficulty {
+                        beatmap_id: map.id,
+                        beatmap_set_id: set_id,
+                        difficulty_name: map.difficulty_name.clone(),
+                        set_has_multiple_audio_sources: split,
+                    })
+                    .collect(),
+            })
         })
         .collect()
 }
@@ -121,6 +111,44 @@ pub fn selection_after_refresh(tracks: &[Track], selected: Option<i32>) -> Optio
         .or_else(|| tracks.first().map(|track| track.audio_source_id))
 }
 
+impl From<crate::models::LibraryTrack> for Track {
+    fn from(track: crate::models::LibraryTrack) -> Self {
+        let title = text(
+            track.title.as_deref(),
+            track.title_unicode.as_deref(),
+            "Unknown title",
+        );
+        let artist = text(
+            track.artist.as_deref(),
+            track.artist_unicode.as_deref(),
+            "Unknown artist",
+        );
+        let mut names = Vec::new();
+        for map in &track.difficulties {
+            if map.set_has_multiple_audio_sources {
+                let name = text(map.difficulty_name.as_deref(), None, "Unknown difficulty");
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        let subtitle = if names.is_empty() {
+            artist.clone()
+        } else {
+            format!("{artist} | {}", names.join(", "))
+        };
+        Self {
+            audio_source_id: track.audio_source_id,
+            cover_beatmap_id: track.cover_beatmap_id,
+            title,
+            artist,
+            subtitle,
+            duration: None,
+            difficulties: track.difficulties,
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::indexing_slicing)]
 mod tests {
@@ -129,6 +157,7 @@ mod tests {
 
     fn set(ids: &[i32], maps: Vec<BeatmapDetails>) -> BeatmapSet {
         BeatmapSet {
+            has_multiple_audio_sources: ids.len() > 1,
             id: 1,
             online_id: None,
             hash: None,
@@ -175,12 +204,45 @@ mod tests {
             [10, 20, 30]
         );
         assert_eq!(tracks[0].subtitle, "Artist | Easy, Hard");
+        assert_eq!(
+            tracks[0]
+                .difficulties
+                .iter()
+                .map(|map| map.beatmap_id)
+                .collect::<Vec<_>>(),
+            [1, 2, 4, 6]
+        );
+        assert_eq!(
+            tracks[0]
+                .difficulties
+                .iter()
+                .filter(|map| map.difficulty_name.as_deref() == Some("Hard"))
+                .count(),
+            2
+        );
         assert_eq!(tracks[0].cover_beatmap_id, Some(2));
         assert_eq!(tracks[2].subtitle, "Artist");
         assert_eq!(selection_after_refresh(&tracks, Some(20)), Some(20));
         assert_eq!(selection_after_refresh(&tracks, Some(99)), Some(10));
         assert_eq!(selection_after_refresh(&[], Some(10)), None);
     }
+    #[test]
+    fn filtered_audio_keeps_its_title_cover_and_difficulty_annotation() {
+        let mut cover = map(2, 10, "Hard");
+        cover.has_cover = true;
+        cover.title = Some("Alternate".into());
+        let mut original = set(
+            &[10, 20],
+            vec![map(1, 10, "Easy"), cover, map(3, 20, "Insane")],
+        );
+        let before = library_tracks(&[original.clone()]);
+        original.audio_sources.retain(|audio| audio.id == 10);
+        original
+            .beatmaps
+            .retain(|map| map.audio_source_id == Some(10));
+        assert_eq!(library_tracks(&[original]), vec![before[0].clone()]);
+    }
+
     #[test]
     fn missing_metadata_and_duration_are_explicit() {
         let map = BeatmapDetails {

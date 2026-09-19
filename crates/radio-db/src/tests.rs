@@ -47,6 +47,7 @@ async fn repository_contracts(url: &str) {
     database.check_connection().await.unwrap();
     concurrent_schema_changes(&database, url).await;
     native_path_migration(&database).await;
+    tag_migration::contracts(&database, url).await;
     // A fresh database is expected: no configured application database is consulted.
     sql(
         &database,
@@ -75,6 +76,7 @@ async fn repository_contracts(url: &str) {
     native_path_registration(&database, &other_pool).await;
     aggregate_grouping_and_cleanup(&database).await;
     repository_transaction_contracts(&database).await;
+    tag_repository_contracts(&database).await;
     metadata_corruption_is_rejected(&database).await;
 
     database.reset().await.unwrap();
@@ -340,6 +342,8 @@ async fn background_migration_preserves_existing_rows() {
 
 async fn drop_application_tables(database: &Database) {
     for table in [
+        "beatmap_set_tags",
+        "tags",
         "beatmaps",
         "beatmap_sets",
         "beatmap_metadata",
@@ -371,7 +375,7 @@ async fn concurrent_schema_changes(database: &Database, url: &str) {
                 .await
                 .unwrap()
                 .len(),
-            3
+            4
         );
         let (reset, migrate) = tokio::join!(database.reset(), other.migrate());
         reset.unwrap();
@@ -565,4 +569,75 @@ async fn aggregate_grouping_and_cleanup(database: &Database) {
     assert_eq!(grouped[1].beatmaps.len(), 4);
     assert_eq!(grouped[1].audio_sources, [first, second]);
     transaction.rollback().await.unwrap();
+}
+
+#[path = "tests/tag_migration.rs"]
+mod tag_migration;
+
+async fn tag_repository_contracts(database: &Database) {
+    let repository = database.tags();
+    assert_eq!(repository.get_or_insert("\u{2003}\t ").await.unwrap(), None);
+    let rock = repository.get_or_insert(" Rock ").await.unwrap().unwrap();
+    assert_eq!(rock.name, "rock");
+    for name in ["ROCK", "rock", "\tRoCk\n"] {
+        assert_eq!(
+            repository.get_or_insert(name).await.unwrap(),
+            Some(rock.clone())
+        );
+    }
+    let transaction = database.begin().await.unwrap();
+    let installation = transaction
+        .osu_installations()
+        .register(&marker("tag-constraints"), None)
+        .await
+        .unwrap()
+        .into_installation();
+    let imported = snapshot("Tags", "/audio/tags.mp3");
+    let set = transaction
+        .beatmap_sets()
+        .insert(installation.id, &imported[0])
+        .await
+        .unwrap();
+    transaction.tags().link(set.id, rock.id).await.unwrap();
+    transaction.tags().link(set.id, rock.id).await.unwrap();
+    transaction.commit().await.unwrap();
+    assert_eq!(
+        repository.for_set(set.id).await.unwrap(),
+        std::slice::from_ref(&rock)
+    );
+    for name in ["rocket", "ЁЖ", "a+b%_&?#", "quote'\\tail"] {
+        let tag = repository.get_or_insert(name).await.unwrap().unwrap();
+        repository.link(set.id, tag.id).await.unwrap();
+    }
+    for word in ["roc", "ёж", "%", "_", "a+b", "&?#", "'", "\\"] {
+        assert_eq!(
+            repository.matching_set_ids(word).await.unwrap(),
+            [set.id],
+            "{word}"
+        );
+    }
+    for word in ["rock%", ".*", "' OR 1=1 --", "not-present"] {
+        assert!(
+            repository.matching_set_ids(word).await.unwrap().is_empty(),
+            "{word}"
+        );
+    }
+    assert!(repository.link(set.id, i32::MAX).await.is_err());
+    assert!(repository.link(i32::MAX, rock.id).await.is_err());
+    assert!(
+        crate::entities::tag::Entity::delete_by_id(rock.id)
+            .exec(&database.connection)
+            .await
+            .is_err()
+    );
+    repository.cleanup().await.unwrap();
+    assert_eq!(repository.get(rock.id).await.unwrap(), Some(rock.clone()));
+    database
+        .osu_installations()
+        .delete(installation.id)
+        .await
+        .unwrap();
+    assert!(repository.for_set(set.id).await.unwrap().is_empty());
+    repository.cleanup().await.unwrap();
+    assert!(repository.all().await.unwrap().is_empty());
 }

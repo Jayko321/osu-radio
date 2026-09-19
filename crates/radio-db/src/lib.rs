@@ -22,7 +22,7 @@ pub mod repositories;
 use anyhow::Result;
 use repositories::{
     AudioSourceRepository, BeatmapMetadataRepository, BeatmapRepository, BeatmapSetRepository,
-    OsuInstallationRepository, UserDataRepository,
+    OsuInstallationRepository, TagRepository, UserDataRepository,
 };
 pub use repositories::{RegisteredInstallation, metadata_hash};
 use sea_orm::TransactionTrait;
@@ -62,6 +62,22 @@ impl Database {
         })
     }
 
+    /// Keeps bulk library reads on one snapshot while concurrent imports may commit.
+    pub async fn begin_read(&self) -> Result<Transaction> {
+        #[cfg(feature = "postgres")]
+        let connection = self
+            .connection
+            .begin_with_config(
+                Some(sea_orm::IsolationLevel::RepeatableRead),
+                Some(sea_orm::AccessMode::ReadOnly),
+            )
+            .await?;
+        // A SQLite read transaction retains the snapshot established by its first SELECT.
+        #[cfg(feature = "sqlite")]
+        let connection = self.connection.begin().await?;
+        Ok(Transaction { connection })
+    }
+
     #[must_use]
     pub const fn user_data(&self) -> UserDataRepository<'_> {
         UserDataRepository {
@@ -89,6 +105,12 @@ impl Database {
     #[must_use]
     pub const fn beatmap_metadata(&self) -> BeatmapMetadataRepository<'_> {
         BeatmapMetadataRepository {
+            connection: sea_orm::DatabaseExecutor::Connection(&self.connection),
+        }
+    }
+    #[must_use]
+    pub const fn tags(&self) -> TagRepository<'_> {
+        TagRepository {
             connection: sea_orm::DatabaseExecutor::Connection(&self.connection),
         }
     }
@@ -144,6 +166,12 @@ impl Transaction {
     #[must_use]
     pub const fn beatmap_metadata(&self) -> BeatmapMetadataRepository<'_> {
         BeatmapMetadataRepository {
+            connection: sea_orm::DatabaseExecutor::Transaction(&self.connection),
+        }
+    }
+    #[must_use]
+    pub const fn tags(&self) -> TagRepository<'_> {
+        TagRepository {
             connection: sea_orm::DatabaseExecutor::Transaction(&self.connection),
         }
     }

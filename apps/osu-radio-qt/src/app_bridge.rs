@@ -116,6 +116,10 @@ pub mod ffi {
         #[cxx_name = "connectSession"]
         fn connect_session(self: Pin<&mut AppBridge>);
         #[qinvokable]
+        #[cxx_name = "searchLibrary"]
+        fn search_library(self: Pin<&mut AppBridge>, query: &QString);
+
+        #[qinvokable]
         #[cxx_name = "refreshLibrary"]
         fn refresh_library(self: Pin<&mut AppBridge>);
         #[qinvokable]
@@ -415,6 +419,10 @@ impl ffi::AppBridge {
         }
         self.command(AppCommand::Connect);
     }
+    pub fn search_library(self: Pin<&mut Self>, query: &QString) {
+        self.command(AppCommand::SearchLibrary(query.to_string()));
+    }
+
     pub fn refresh_library(self: Pin<&mut Self>) {
         self.command(AppCommand::RefreshLibrary);
     }

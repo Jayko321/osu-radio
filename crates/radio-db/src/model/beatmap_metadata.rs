@@ -7,8 +7,6 @@ pub struct BeatmapMetadata {
     pub artist_unicode: Option<String>,
     pub author: Option<serde_json::Value>,
     pub source: Option<String>,
-    pub tags: Option<String>,
-    pub user_tags: serde_json::Value,
     pub preview_time: Option<i32>,
     pub audio_file: Option<String>,
     pub background_file: Option<String>,

@@ -25,13 +25,16 @@ The [client manifest](../../crates/osu-radio-client/Cargo.toml) contains HTTP/se
 
 `Loading<T>` represents `Idle`, `Pending`, `Ready(T)`, and `Failed(String)` and offers `is_pending`, `value`, `error`, and `from_result`. `describe` walks an error's source chain into a single display message, suppressing cause text already present. These helpers are available to frontends; the current GUI uses a status signal rather than `Loading<T>` for connection status. Unit tests are colocated in [client `lib.rs`](../../crates/osu-radio-client/src/lib.rs).
 
-`library_tracks` groups globally by stored audio-source ID, preserving server set/audio order.
+Songs loads `/api/tracks?q=…` through `ApiClient::search_tracks` and the shared
+`AppController`. The server groups globally by audio ID, preserving legacy
+set/audio order; `Track::from(LibraryTrack)` formats the ready rows.
+`library_tracks` remains available for legacy endpoint equivalence checks.
 The lowest beatmap ID supplies representative metadata; ordinary title/artist text falls
 back to Unicode then explicit unknown labels. The first associated beatmap with a stored
 cover reference supplies the cover ID. For sets with multiple distinct audio rows, unique
 difficulty names are joined in the subtitle (`Artist | Easy, Hard`); shared-audio sets do
-not add difficulty notation. `Track` contains IDs, title, artist, subtitle and optional
-`Duration`, with no toolkit assets. Unknown duration is `--:--`. Selection survives a
+not add difficulty notation. `Track` retains every related difficulty (IDs, nullable name, original set
+multiplicity), plus title, artist, subtitle and optional `Duration`, with no toolkit assets. Unknown duration is `--:--`. Selection survives a
 refresh by audio ID, falling back to the first remaining row. Tests live in
 [track.rs](../../crates/osu-radio-client/src/view_models/track.rs).
 
@@ -60,8 +63,9 @@ Readiness parsing has focused unit tests in [server.rs](../../crates/osu-radio-c
 signals and events. `AppCommand` covers connection/retry, independent library and
 folder refresh, selections by database ID, picker completion and media requests.
 `AppUpdate` distinguishes collection replacement, individual track changes,
-selection, operation status, picker requests and encoded artwork. Tabs, search
-text, focus and window state stay in the views. The launcher retains the
+selection, operation status, picker requests and encoded artwork. Tabs, input
+text, focus and window state stay in the views; the controller retains the current
+Songs query for refresh and retry. The launcher retains the
 controller and runtime until awaited shutdown completes, including close during
 startup. Gallery mode creates no controller or session.
 
@@ -69,6 +73,16 @@ Library refresh errors retain existing rows and selection. Successful replacemen
 preserves the selected audio ID or chooses the first remaining row, with an
 explicit empty selection. Library and folders load independently. Folder selection
 is presentation only and never filters songs.
+
+Songs inputs in both frontends send `AppCommand::SearchLibrary` through the shared
+controller. Each edit cancels the previous client task and starts a 200 ms debounce;
+request numbers reject late successes and errors, including during the debounce.
+Refresh repeats the current query immediately; clearing requests the whole library.
+A query entered during connection retains its debounce deadline. Loading and errors
+use the existing library status, while an empty nonblank search says `Nothing found.`.
+Selection is retained by audio ID when present. The client receives filtered server
+results and does no local Songs filtering. Settings search remains a placeholder;
+component galleries stay offline. See [backend search](backend.md#library-search).
 
 Visible and selected rows request media with the GUI's actual artwork-cache state.
 The controller prioritizes selection, deduplicates work and remembers completed
@@ -97,7 +111,7 @@ These are source-confirmed bindings, not a claim of interactive verification on 
 | --- | --- | --- |
 | Songs/Settings tabs | Change `Tab`; both panes are constructed and visibility follows the tab signal. The player remains visible. | [shell](../../apps/osu-radio-gui-vizia/src/views/mod.rs), [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs) |
 | Track cards | Change the selected audio-source ID, card highlight, cover/backdrop, title, artist, and duration. This does not start audio playback. | [track card](../../apps/osu-radio-gui-vizia/src/views/songs/track_card.rs), [player](../../apps/osu-radio-gui-vizia/src/views/player/mod.rs), [background](../../apps/osu-radio-gui-vizia/src/views/background.rs) |
-| Search fields | Edit independent query signals and toggle placeholder labels. Neither songs nor settings are filtered yet. | [search row](../../apps/osu-radio-gui-vizia/src/views/components/search_row.rs), [track list](../../apps/osu-radio-gui-vizia/src/views/songs/track_list.rs), [settings pane](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) |
+| Search fields | Songs searches the server through the shared controller; Settings only edits its independent placeholder query. | [search row](../../apps/osu-radio-gui-vizia/src/views/components/search_row.rs), [track list](../../apps/osu-radio-gui-vizia/src/views/songs/track_list.rs), [settings pane](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) |
 | Song filter chips | Static labels and visual hover treatment; no filter or picker actions. | [chip](../../apps/osu-radio-gui-vizia/src/views/components/chip.rs) |
 | Folder settings | Display-only dropdown selection, native directory picker with immediate registration, and failure-only retry. No GUI editing/removal, import or output-device selection. | [settings](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) |
 | Transport, volume, add, stack icon | Shared native icon buttons, explicitly disabled while playback/playlist actions are unavailable. | [controls](../../apps/osu-radio-gui-vizia/src/views/player/controls.rs), [icon helpers](../../apps/osu-radio-gui-vizia/src/views/components/icon.rs), [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs) |
@@ -239,7 +253,7 @@ These constraints come from the checked-in implementation and its workaround com
 - **Selectors and property dialect:** `scroll-content` is an element selector in [songs.css](../../apps/osu-radio-gui-vizia/styles/songs.css) and [settings.css](../../apps/osu-radio-gui-vizia/styles/settings.css), not a class. Existing sheets use `corner-radius`, `layout-type`, `size`, `gap`, `alignment`, and `1s` stretch syntax. Do not assume browser CSS or main-branch Vizia examples apply unchanged.
 - **Padding syntax:** Vizia 0.4 accepts one value for `padding`; use `padding-top`, `padding-bottom`, `padding-left` and `padding-right` for different sides. A two-value declaration such as `padding: 10px 12px` clears preceding declarations in that rule during parser recovery, which collapsed the folder dropdown rows. Compilation checks embedded paths but do not validate stylesheet syntax.
 
-Client unit tests cover shared loading/error behavior, track formatting, and readiness parsing. The headless `folder_selection_survives_refresh_and_duplicate_registration` test in [app.rs](../../apps/osu-radio-gui-vizia/src/app.rs) covers empty lists, selection retention, additions and duplicate registrations without opening a window or reading installations. GUI geometry, artwork and folder-state tests do not constitute an interaction test suite. Compilation and stylesheet-path checks do not validate clicks, native pickers, empty-search accessibility, title-bar dragging, OS window-state behavior, layout, audio output, or child cleanup after abrupt process death. Select scoped checks from [development](development.md), and record actual automated and manual results separately.
+Client unit tests cover search debounce/cancellation, stale results/errors, clear/retry, URL encoding, shared loading/error behavior, stable filtered track formatting, and readiness parsing. The Qt offscreen search probe exercises the actual input, adapter, session and HTTP path. The headless `folder_selection_survives_refresh_and_duplicate_registration` test in [app.rs](../../apps/osu-radio-gui-vizia/src/app.rs) covers empty lists, selection retention, additions and duplicate registrations without opening a window or reading installations. GUI geometry, artwork and folder-state tests do not constitute an interaction test suite. Compilation and stylesheet-path checks do not validate clicks, native pickers, empty-search accessibility, title-bar dragging, OS window-state behavior, layout, audio output, or child cleanup after abrupt process death. Select scoped checks from [development](development.md), and record actual automated and manual results separately.
 
 When behavior changes, update the affected paragraph or table here and relevant source links. Keep reusable procedures in the skill and common build commands in the development guide; ordinary UI edits do not require rewriting all agent documentation.
 
