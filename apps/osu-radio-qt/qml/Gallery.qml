@@ -20,6 +20,7 @@ Basic.ApplicationWindow {
     font.pixelSize: 16
     readonly property var demo: store.state.gallery
     Store { id: store }
+    readonly property alias galleryStore: store
     WindowBar { id: titleBar; width: parent.width; window: root; gallery: true }
 
     component Heading: Text {

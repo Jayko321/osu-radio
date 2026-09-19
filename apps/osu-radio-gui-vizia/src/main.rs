@@ -31,9 +31,9 @@ fn main() -> ExitCode {
         }
     };
 
-    // The runtime has to outlive the window: the embedded server is killed when the model holding
-    // it drops, which happens inside `run`, and reaping the child needs a live runtime.
-    let result = app::run(runtime.handle().clone());
+    // `run` retains the controller through window teardown and awaits child cleanup before
+    // returning. Blocking image decoders also finish before this runtime is dropped.
+    let result = app::run(runtime.handle());
 
     finish(result)
 }

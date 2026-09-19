@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LaunchMode {
     Songs,
     ComponentGallery,

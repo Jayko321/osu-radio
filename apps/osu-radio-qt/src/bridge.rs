@@ -1,4 +1,4 @@
-//! Qt-only projection of the shared, memory-only client model.
+//! Qt-only projection of the shared, memory-only component gallery.
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use osu_radio_client::mock::{Action, MockState};
@@ -28,7 +28,7 @@ pub struct MockBridgeRust {
 }
 
 fn snapshot(state: &MockState) -> QString {
-    let mut value = json!(state);
+    let mut value = json!({"gallery": state.gallery});
     let results = json!(
         state
             .gallery
@@ -58,8 +58,6 @@ impl Default for MockBridgeRust {
 
 fn action_from_qml(action: &str, value: String) -> Option<Action> {
     Some(match action {
-        "selectTrack" => Action::SelectTrack(value.parse().ok()?),
-        "search" => Action::Search(value),
         "galleryDisabled" => Action::GalleryDisabled(value.parse().ok()?),
         "press" => Action::Press,
         "field" => Action::Field(value),
@@ -97,7 +95,8 @@ mod tests {
     fn adapter_rejects_unknown_and_malformed_actions() {
         for (action, value) in [
             ("missing", ""),
-            ("selectTrack", "-1"),
+            ("selectTrack", "0"),
+            ("search", "unused"),
             ("selectTab", "abc"),
             ("galleryDisabled", "1"),
         ] {
@@ -112,6 +111,7 @@ mod tests {
         assert!(state.apply(Action::MenuQuery(query.clone())));
         let value: serde_json::Value =
             serde_json::from_str(&String::from(snapshot(&state))).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 1);
         assert_eq!(value["gallery"]["menu_results"][0]["label"], query);
         assert_eq!(
             value["gallery"]["menu_results"][0]["index"],

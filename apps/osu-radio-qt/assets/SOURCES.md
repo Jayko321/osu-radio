@@ -1,8 +1,9 @@
 # Bundled Qt GUI assets
 
 Copied byte-for-byte from `apps/osu-radio-gui-vizia/assets/` on 2026-09-17.
-All runtime asset references use compiled Qt resources; launching either mode
-requires no downloads or files in the working directory.
+Bundled fonts and icons use compiled Qt resources. Production artwork comes
+from the local library server; live launch also needs the server configuration.
+The standalone component gallery needs no server or working-directory assets.
 
 - `fonts/Poppins-{Regular,Medium,SemiBold,Bold}.ttf`: original static fonts from
   [Google Fonts / Poppins](https://github.com/google/fonts/tree/main/ofl/poppins).
@@ -12,7 +13,3 @@ requires no downloads or files in the working directory.
   [Lucide](https://github.com/lucide-icons/lucide/tree/main/icons).
   [LUCIDE-LICENSE](icons/LUCIDE-LICENSE) includes the Lucide and Feather notices.
   QML applies tint at rendering time; the source SVG bytes are unchanged.
-- `covers/karakara.jpg`, `alice.jpg`, `rabbit.jpg`, and `bbbb.png`: existing
-  repository reference artwork, copied for the bundled mock Songs view.
-  Original artist/source/license attribution is not recorded in the existing
-  asset directory; no additional ownership or redistribution license is claimed.

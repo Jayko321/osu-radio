@@ -1,6 +1,7 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::panic, clippy::unwrap_used))]
 
 pub mod api;
+pub mod controller;
 #[cfg(feature = "mock")]
 pub mod mock;
 pub mod models;

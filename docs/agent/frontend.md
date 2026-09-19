@@ -10,6 +10,7 @@ For a GUI task, use the [osu-radio-gui procedure](../../.agents/skills/osu-radio
 | --- | --- | --- |
 | HTTP transport, independent wire DTOs, errors | [client `api.rs`](../../crates/osu-radio-client/src/api.rs), [client `models.rs`](../../crates/osu-radio-client/src/models.rs) | Reusable frontend/backend communication stays in `osu-radio-client`. DTO details are deliberately excluded from this guide. |
 | Session and child lifecycle | [client `session.rs`](../../crates/osu-radio-client/src/session.rs), [client `server.rs`](../../crates/osu-radio-client/src/server.rs) | Change supervision here, coordinating readiness output with the server. |
+| Shared application controller | [client `controller.rs`](../../crates/osu-radio-client/src/controller.rs) | Session lifecycle, independent collection loading, ID selection, registration and bounded media scheduling shared by both frontends. |
 | Toolkit-free UI data | [client `lib.rs`](../../crates/osu-radio-client/src/lib.rs), [view models](../../crates/osu-radio-client/src/view_models/track.rs) | Shared loading/error representation and track formatting belong here, without Vizia signals, CSS classes, or asset names. |
 | Window, UI state, events, async result dispatch | [GUI `app.rs`](../../apps/osu-radio-gui-vizia/src/app.rs), [GUI `main.rs`](../../apps/osu-radio-gui-vizia/src/main.rs) | Keep UI event handling and rendering state in the GUI; send reusable use cases through the client. |
 | View structure and bindings | [GUI `views`](../../apps/osu-radio-gui-vizia/src/views/mod.rs) | Change the smallest existing area or shared component that owns the view. |
@@ -45,7 +46,7 @@ The current [supervisor](../../crates/osu-radio-client/src/server.rs) has these 
 - The child receives `OSU_RADIO_SERVER_ADDRESS` from the options. It inherits the working directory unless overridden. Server configuration currently requires successfully loading a discoverable `.env`; environment variables alone do not bypass a missing `.env`. See [backend configuration](backend.md) and the [server config source](../../apps/osu-radio-server/src/config.rs).
 - Stdin is closed. Stdout and stderr are piped and drained, with `[server]` prefixes. Stderr is forwarded while stdout is inspected for readiness; stdout continues forwarding afterward. Leaving either pipe unread can block the child.
 - Readiness depends on a stdout line containing `listening on ` followed by an `http://` or `https://` URL. The server prints its bound address, so the URL contains the actual port rather than `0`. This is a protocol between [server `main.rs`](../../apps/osu-radio-server/src/main.rs) and `parse_ready_line`, not optional diagnostic wording.
-- Early stdout EOF waits for the child and reports an exit error; read failure and startup timeout have separate errors. The timeout wraps the ready-line reader, not the subsequent child wait after EOF. Post-start stdout/stderr read loops stop on read errors; there is no automatic restart or ongoing health monitor.
+- Early stdout EOF waits for child exit within the startup deadline; a still-running child is killed and reaped on timeout. Read failure, early exit and timeout have separate errors. Cancellation during startup also awaits termination. Post-start stdout/stderr read loops stop on read errors; there is no automatic restart or ongoing health monitor.
 - `shutdown` takes the child once and awaits its termination; repeated shutdown is harmless. `kill_on_drop(true)` and `EmbeddedServer::drop` provide fallback termination, but `Drop` does not await it. A hard kill or crash of the parent cannot be assumed to run destructors or terminate the child.
 
 Readiness parsing has focused unit tests in [server.rs](../../crates/osu-radio-client/src/server.rs). The [ignored embedded-server integration test](../../crates/osu-radio-client/tests/embedded_server.rs) starts a real server and performs database-backed requests; it uses a disposable SQLite database and refuses configured database environment variables. Its prerequisites and scope are recorded in [development](development.md).
@@ -54,13 +55,35 @@ Readiness parsing has focused unit tests in [server.rs](../../crates/osu-radio-c
 
 [main.rs](../../apps/osu-radio-gui-vizia/src/main.rs) parses launch mode before constructing a runtime. Normal player mode owns one Tokio runtime that outlives the window; `--component-gallery` directly builds the memory-only gallery without that runtime, `AppData`, a session, database access or installation discovery. It passes a runtime handle to the app, allowing server shutdown and child reaping during UI teardown. Do not move runtime ownership into a model whose destruction would end it too early.
 
-[app.rs](../../apps/osu-radio-gui-vizia/src/app.rs) builds `AppData`, emits `Connect`, and builds the shell. `AppData` holds an optional `Arc<Session>`, runtime handle, and `UiState`. `UiState` is `Copy` and carries signals for the selected tab, selected audio ID and track, library rows, registered folders and the selected folder ID, independent loading states, artwork revision, two search strings, connection status, and tracked maximize state. Existing builder functions pass it by value.
+[app.rs](../../apps/osu-radio-gui-vizia/src/app.rs) adapts the shared
+[`AppController`](../../crates/osu-radio-client/src/controller.rs) into Vizia
+signals and events. `AppCommand` covers connection/retry, independent library and
+folder refresh, selections by database ID, picker completion and media requests.
+`AppUpdate` distinguishes collection replacement, individual track changes,
+selection, operation status, picker requests and encoded artwork. Tabs, search
+text, focus and window state stay in the views. The launcher retains the
+controller and runtime until awaited shutdown completes, including close during
+startup. Gallery mode creates no controller or session.
 
-Background work reports results through `ContextProxy::emit`. `AppEvent::Connected` installs the session and clears status; `Failed` displays a message. UI-thread event handling writes signals with `set`; views project state with `map`. Follow this signal/event pattern rather than introducing older Vizia lens examples or writing signals from runtime tasks.
+Library refresh errors retain existing rows and selection. Successful replacement
+preserves the selected audio ID or chooses the first remaining row, with an
+explicit empty selection. Library and folders load independently. Folder selection
+is presentation only and never filters songs.
 
-Window-close events call `stop`, taking the session and spawning asynchronous shutdown. Drop-based termination remains the fallback. Startup failure exposes the error and retry controls. Refresh/shutdown invalidates pending media generations; shutdown aborts media jobs.
+Visible and selected rows request media with the GUI's actual artwork-cache state.
+The controller prioritizes selection, deduplicates work and remembers completed
+durations and unavailable covers, without mirroring GUI cache membership. Four
+pipelines remain occupied until decoding and installation are acknowledged;
+refresh cannot release a slot while a non-cancelable decode is still running.
+Generation checks discard stale artwork/results. Evicted covers can reload
+without repeating duration requests. HTTP timeout is 30 seconds and encoded
+cover responses are limited to 16 MiB. Each GUI owns a 64 MiB decoded artwork
+cache, scales proportionally to at most 1280px, and uses neutral artwork and
+`--:--` when media is unavailable.
 
-The songs pane uses Vizia `VirtualList::new_generic` with a checked optional row lookup (the stock indexer can panic while a list shrinks). It uses 106px slots containing 90px cards and 16px spacing. Visible row construction and selection request media. A queue runs at most four tasks; each task fetches cover and duration sequentially. HTTP requests time out after 30 seconds. Image responses are bounded to 16 MiB on both client and server; raster decoding runs in a blocking task, cached covers are scaled proportionally to at most 1280px on the longest side, and the GUI-owned LRU cache is bounded to 64 MiB. Unavailable, corrupt or oversized artwork remains neutral. Duration failures leave `--:--`; refreshing permits another attempt.
+The songs pane retains Vizia's checked `VirtualList::new_generic` row lookup and
+106px slots (90px card plus 16px spacing). Vizia background work reaches signals
+through `ContextProxy::emit`; image decoding and rendering remain Skia-specific.
 
 The General section uses the shared **osu! folders** dropdown with names formatted as `{kind} - {root_path}` and an adjacent plus button. The first returned folder is selected initially; selection is retained by ID on refresh and is session-local presentation only. An empty list shows `No osu! folders`. Long dropdown entries wrap, and the collapsed field has a full-name tooltip. Selecting a folder closes the popup and does not filter songs.
 
@@ -220,44 +243,54 @@ Client unit tests cover shared loading/error behavior, track formatting, and rea
 
 When behavior changes, update the affected paragraph or table here and relevant source links. Keep reusable procedures in the skill and common build commands in the development guide; ordinary UI edits do not require rewriting all agent documentation.
 
-## Qt mock frontend
+## Qt frontend
 
-[osu-radio-qt](../../apps/osu-radio-qt/Cargo.toml) is an additional Qt 6.8+ / CXX-Qt
-0.10 executable. Vizia retains its existing backend-connected behavior. Qt's default
-Songs mode and `--component-gallery` both run from bundled mock content, without
-creating a runtime/session, starting a server, accessing a database or scanning
-installations. Search accepts text without filtering; selection changes presentation
-only. Playback, seeking, volume, sorting, tags, playlists, refresh and Settings are
-disabled in Songs. No data persists.
+[osu-radio-qt](../../apps/osu-radio-qt/Cargo.toml) is a Qt 6.8+ / CXX-Qt 0.10
+frontend using the same client controller as Vizia. Default launch starts a live
+session; build the server and provide its `.env` as described in
+[development](development.md#qt-frontend). `--help` and invalid arguments are
+handled before GUI initialization. `--component-gallery` remains standalone and
+never creates a runtime, session or database. Playback, seeking, filtering,
+playlists and GUI import remain unavailable. Registering a folder does not import it.
 
-The opt-in client [`mock` module](../../crates/osu-radio-client/src/mock.rs) owns
-four sample metadata records, selection/search and gallery demo state/actions.
-It contains no Qt types or resource paths. Its `apply` method reports actual changes,
-ignores invalid/repeated selections, and suppresses gallery actions while disabled
-(except the global disable toggle). Menu search preserves original item indices.
-Qt's [`MockBridge`](../../apps/osu-radio-qt/src/bridge.rs) translates actions and
-publishes a read-only JSON snapshot with one notification per state change.
-[`Store.qml`](../../apps/osu-radio-qt/qml/Store.qml) binds that snapshot to QML.
-This bounded demo uses a small snapshot, not a production library item model.
+The production adapter exposes typed properties and a `QAbstractListModel` with
+`audioId`, `title`, `artist`, `subtitle`, `durationLabel` and `artworkUrl` roles.
+Media arrival changes individual rows; selection uses database IDs, with `-1`
+representing no selected ID at the QML boundary. The small folder collection uses
+typed `{id, label}` entries. Asynchronous controller updates are queued to the
+QObject thread and safely rejected after object destruction. Qt image URLs and
+decoded QImages remain GUI-owned. Provider images use `cache: false` in QML so
+Qt does not add an unbounded cache above the application's bounded cache.
 
-[`Songs.qml`](../../apps/osu-radio-qt/qml/Songs.qml) retains the 1024×640 minimum,
-50px title bar, 480px sidebar, 90px cards and Vizia's adaptive player geometry.
-Artwork uses centered cropping; labels elide. [`WindowBar.qml`](../../apps/osu-radio-qt/qml/WindowBar.qml)
-uses Qt window APIs for drag/resize/minimize/maximize/restore/close and observes
-actual window visibility. Qt 6.8 is the minimum for QML system move/resize methods.
+[`Songs.qml`](../../apps/osu-radio-qt/qml/Songs.qml) owns Songs/Settings tabs,
+independent search strings, list/status presentation and the persistent player.
+It retains the 1024×640 minimum, 50px title bar, 480px sidebar, 90px cards and
+adaptive player geometry. Artwork uses centered cropping. Library refresh remains
+outside the scrolling list. Settings use folder IDs, wrapped options and a full
+label tooltip. Add is disabled during connection, loading, picking and registration;
+Retry reloads a failed collection or reopens the native picker after registration
+failure. Selection updates the card, player and backdrop together.
 
-[`components`](../../apps/osu-radio-qt/qml/components) customizes Qt Quick Controls'
-Basic style and is shared by Songs and [`Gallery.qml`](../../apps/osu-radio-qt/qml/Gallery.qml).
-The dark palette, Poppins fonts and Lucide icons follow Vizia. The gallery contains
-button variants, icon buttons, editable fields/search, switches, exclusive tabs,
-ordinary/three-state tags, searchable/empty/long menus, modal, material surfaces,
-typography and icons. QML owns focus, popups and modal visibility; client actions
-own demo values. The modal creates no playlist. Native controls keep keyboard
-activation; fields and Songs retain focus outlines, buttons/switches do not.
+[`WindowBar.qml`](../../apps/osu-radio-qt/qml/WindowBar.qml) uses Qt window APIs
+for drag/resize/minimize/maximize/restore/close and observes actual window
+visibility. Qt 6.8 is the minimum for QML system move/resize methods.
+Inactive navigation tabs use the standard white text/icon foreground; selected
+tabs use dark text/icons on the white background.
+Qt mouse-wheel scrolling uses twice the platform's default line count in both
+live and gallery modes; touch/drag scrolling retains its native behavior.
 
-[`build.rs`](../../apps/osu-radio-qt/build.rs) embeds QML and assets as resources;
-launch does not depend on the working directory. Asset origins/licenses and the
-limits of known cover provenance are in [`SOURCES.md`](../../apps/osu-radio-qt/assets/SOURCES.md).
-Material blur uses Qt Quick Effects; the software renderer used by smoke tests
-does not validate GPU effects. Desktop visual/input and Windows checks remain
-separate from automated validation; see [development](development.md#qt-mock-frontend).
+The opt-in client [`mock` module](../../crates/osu-radio-client/src/mock.rs),
+[`MockBridge`](../../apps/osu-radio-qt/src/bridge.rs) and
+[`Store.qml`](../../apps/osu-radio-qt/qml/Store.qml) serve the standalone gallery.
+Its bounded JSON snapshot is not used for the production library. Shared
+[`components`](../../apps/osu-radio-qt/qml/components) preserve native control
+keyboard behavior, popup/modal focus handling and disabled demonstrations.
+The menu's configurable value role uses folder IDs in Settings and original
+indices in the gallery. Gallery actions still do not create playlists.
+
+[`build.rs`](../../apps/osu-radio-qt/build.rs) embeds QML and assets; resource
+loading does not depend on the working directory. Server configuration still does.
+Asset origins/licenses are in [`SOURCES.md`](../../apps/osu-radio-qt/assets/SOURCES.md).
+Software-rendered integration probes verify state transitions, not GPU blur,
+native picker interaction, desktop layout or Windows behavior. See the manual
+acceptance matrix in [development](development.md#qt-frontend).

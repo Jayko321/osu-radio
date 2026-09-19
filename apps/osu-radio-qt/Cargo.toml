@@ -13,6 +13,8 @@ cxx-qt = "0.10"
 cxx-qt-lib = { version = "0.10", features = ["qt_full"] }
 osu-radio-client = { path = "../../crates/osu-radio-client", features = ["mock"] }
 serde_json = "1.0"
+tokio.workspace = true
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
 
 [build-dependencies]
 cxx-qt-build = { version = "0.10", features = ["link_qt_object_files"] }

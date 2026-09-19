@@ -8,7 +8,7 @@ Basic.ComboBox {
     property bool searchable: false
     property string query: ""
     signal queryEdited(string value)
-    signal chosen(int index)
+    signal chosen(int value)
     property int focusedRow: 0
     model: entries
     textRole: "label"
@@ -24,7 +24,7 @@ Basic.ComboBox {
 
     function choose(row: int): void {
         if (enabled && row >= 0 && row < entries.length) {
-            chosen(entries[row].index);
+            chosen(entries[row][valueRole]);
             popup.close();
         }
     }

@@ -108,7 +108,7 @@ playback.
 | Scanner change spanning these paths | `cargo test -p radio-scanner --locked` | Combines the preceding scanner checks; helper build prerequisites still apply. |
 | C# helper source | `dotnet build tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj --configuration Release --nologo` | Compiles the producer; no automated C# test project currently exists. Follow the [scanner skill](../../.agents/skills/osu-radio-scanner/SKILL.md) for contract checks. |
 | CLI wiring | `cargo test -p osu-radio-cli --locked` and `cargo clippy -p osu-radio-cli --all-targets --locked` | Argument tests reject removed `store --count` and retain `--clear`; memory SQLite connection check. No real source import. |
-| Client formatting, state, readiness parsing | `cargo test -p osu-radio-client --lib --locked` | [Client tests](../../crates/osu-radio-client/src/lib.rs), [Track tests](../../crates/osu-radio-client/src/view_models/track.rs), [readiness tests](../../crates/osu-radio-client/src/server.rs); launches no server. |
+| Client formatting, state, readiness parsing | `cargo test -p osu-radio-client --lib --locked` | [Client tests](../../crates/osu-radio-client/src/lib.rs), [Track tests](../../crates/osu-radio-client/src/view_models/track.rs), [readiness tests](../../crates/osu-radio-client/src/server.rs) and controller tests; process fixtures are isolated. |
 | GUI code and embedded stylesheet paths | `cargo check -p osu-radio-gui-vizia --release --locked` | Release `include_style!` resolves stylesheet paths at compile time. Debug can defer missing paths to runtime. |
 | Server changes, default docs | `cargo clippy -p osu-radio-server --all-targets --locked` | Compiles the documentation-enabled router; does not launch the server. |
 | Server changes, docs disabled | `cargo clippy -p osu-radio-server --no-default-features --features sqlite --all-targets --locked` | Compiles the other router and checks OpenAPI annotations remain optional. |
@@ -302,7 +302,7 @@ procedure whose steps changed in the same task. Leave unrelated guides alone.
 Keep task-specific actual validation results in the task report rather than
 turning this recommended-command matrix into a stale record of passing checks.
 
-## Qt mock frontend
+## Qt frontend
 
 Prerequisites: Qt **6.8+** development libraries/tools (Core, Gui, Qml, Quick,
 QuickControls2, Network), QML Basic Controls, Layouts and Effects modules, SVG/image
@@ -318,8 +318,9 @@ cargo run -p osu-radio-qt --locked -- --component-gallery
 cargo run -p osu-radio-qt --locked -- --help
 ```
 
-Both GUI modes are mock-only and need no server, `.env`, database or osu!
-installation. `--help` and argument errors are handled before GUI initialization.
+Default launch is live: first build `osu-radio-server` and provide a `.env`
+pointing to the intended database. `--component-gallery` is offline and requires
+no server, `.env`, database or osu! installation. `--help` and argument errors are handled before GUI initialization.
 Recommended automated checks:
 
 ```sh
@@ -331,13 +332,24 @@ cargo clippy -p osu-radio-client --features mock -p osu-radio-qt --all-targets -
 cargo fmt -p osu-radio-client -p osu-radio-qt --check
 ```
 
-The Qt integration test launches both roots with the offscreen/software backend
-from empty temporary working directories, enforces a 15-second timeout, checks
-QML diagnostics and exercises real adapter property notifications using the
-bundled [test probe](../../apps/osu-radio-qt/tests/AdapterProbe.qml). It also runs
-help/error paths with an invalid platform plugin to verify no GUI initialization.
-`OSU_RADIO_QT_SMOKE_TEST=1` is the internal test hook: it loads the adapter probe
-and schedules Qt exit after 300ms. Do not set it for interactive use.
+The Qt integration test launches both roots using the offscreen/software backend
+from temporary working directories. A deterministic executable fixture exercises
+the real Session subprocess and HTTP path, including failed startup/retry,
+independent list errors, media notifications, ID selections, shrinking/empty
+refreshes and child cleanup. Gallery mode uses no backend. The bundled
+[test probe](../../apps/osu-radio-qt/tests/AdapterProbe.qml) exits only after
+explicit assertions complete, with a native watchdog and outer process timeout.
+`OSU_RADIO_QT_SMOKE_TEST=1` is an internal test hook; do not set it interactively.
+Help/error paths run with an invalid platform plugin to verify no GUI initialization.
+The Unix fixture requires Python 3. For real SQLite backend coverage:
+
+```sh
+cargo build -p osu-radio-server -p osu-radio-qt --locked
+cargo test -p osu-radio-qt --locked --test launch_smoke real_backend_uses_a_disposable_database -- --ignored
+```
+
+That test removes inherited database URL variables and uses a temporary `.env`
+and SQLite file. It never opens the workspace database or runs discovery.
 
 Run [`scripts/lint-qml.sh`](../../apps/osu-radio-qt/scripts/lint-qml.sh) after
 building. Set `QMLLINT=/path/to/qmllint` if needed (default `/usr/lib/qt6/bin/qmllint`).

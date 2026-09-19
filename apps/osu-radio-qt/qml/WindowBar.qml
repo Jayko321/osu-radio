@@ -7,6 +7,8 @@ Rectangle {
     id: bar
     required property var window
     property bool gallery: false
+    property int selectedTab: 0
+    signal tabSelected(int index)
     readonly property bool maximized: window.visibility === Window.Maximized
     height: 50
     color: Theme.background
@@ -35,7 +37,9 @@ Rectangle {
             height: 34
             text: bar.gallery ? "Components" : "Songs"
             iconName: "music"
-            variant: "light"
+            variant: bar.selectedTab === 0 ? "light" : "link"
+            foreground: bar.selectedTab === 0 ? Theme.background : Theme.text
+            onClicked: bar.tabSelected(0)
             font.pixelSize: 16
             font.weight: Font.Bold
             Accessible.name: text
@@ -44,11 +48,13 @@ Rectangle {
             height: 34
             text: "Settings"
             iconName: "settings"
-            variant: "link"
-            enabled: false
+            variant: bar.selectedTab === 1 ? "light" : "link"
+            foreground: bar.selectedTab === 1 ? Theme.background : Theme.text
+            enabled: !bar.gallery
+            onClicked: bar.tabSelected(1)
             font.pixelSize: 16
             font.weight: Font.Bold
-            Accessible.name: "Settings (unavailable)"
+            Accessible.name: bar.gallery ? "Settings (unavailable)" : "Settings"
         }
     }
 

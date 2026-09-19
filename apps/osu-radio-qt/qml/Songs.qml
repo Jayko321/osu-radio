@@ -13,29 +13,30 @@ Basic.ApplicationWindow {
     minimumWidth: 1024
     minimumHeight: 640
     visible: true
-    title: "osu! radio — Songs"
+    title: selectedTab === 0 ? "osu! radio — Songs" : "osu! radio — Settings"
     color: Theme.background
     flags: Qt.Window | Qt.FramelessWindowHint
     font.family: Theme.fontFamily
 
-    Store { id: store }
-    readonly property var selectedTrack: store.state.tracks[store.state.selected]
-    readonly property var coverNames: ["karakara.jpg", "alice.jpg", "rabbit.jpg", "bbbb.png"]
-    readonly property var cardTints: ["#eb04061a", "#eb1a1804", "#d11a0415", "#eb1a0404"]
-    function coverFor(index: int): string { return "qrc:/assets/covers/" + coverNames[index]; }
-    function duration(seconds: int): string {
-        return Math.floor(seconds / 60).toString().padStart(2, "0") + ":"
-            + (seconds % 60).toString().padStart(2, "0");
+    property int selectedTab: 0
+    readonly property alias appBridge: bridge
+    AppBridge {
+        id: bridge
+        objectName: "appBridge"
+        Component.onCompleted: connectSession()
+        onSelectedArtworkUrlChanged: if (hasSelection && selectedArtworkUrl.length === 0) requestMedia(selectedAudioId)
     }
 
     component Artwork: Item {
         id: art
         property url source
         property real radius: 8
+        Rectangle { anchors.fill: parent; radius: art.radius; color: Theme.surface }
         Image {
             id: image
             anchors.fill: parent
             source: art.source
+            cache: false
             fillMode: Image.PreserveAspectCrop
             horizontalAlignment: Image.AlignHCenter
             verticalAlignment: Image.AlignVCenter
@@ -60,11 +61,49 @@ Basic.ApplicationWindow {
         }
     }
 
-    WindowBar { id: titleBar; width: parent.width; window: root }
+    WindowBar {
+        id: titleBar
+        width: parent.width
+        window: root
+        selectedTab: root.selectedTab
+        onTabSelected: index => root.selectedTab = index
+    }
+
+    Rectangle {
+        id: connectionBanner
+        anchors.top: titleBar.bottom
+        width: parent.width
+        height: visible ? Math.max(connectionText.implicitHeight + 24, 60) : 0
+        visible: !bridge.connected
+        color: Theme.background
+        Text {
+            id: connectionText
+            objectName: "connectionStatus"
+            x: 20
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width - connectionRetry.width - 60
+            text: bridge.connectionStatus
+            color: Theme.text
+            font.family: Theme.fontFamily
+            font.pixelSize: 14
+            wrapMode: Text.Wrap
+        }
+        AppButton {
+            id: connectionRetry
+            objectName: "retryConnection"
+            anchors.right: parent.right
+            anchors.rightMargin: 20
+            anchors.verticalCenter: parent.verticalCenter
+            text: "Retry"
+            visible: !bridge.connecting
+            enabled: !bridge.connecting
+            onClicked: bridge.connectSession()
+        }
+    }
 
     Item {
         id: body
-        anchors.top: titleBar.bottom
+        anchors.top: connectionBanner.bottom
         anchors.bottom: parent.bottom
         width: parent.width
         clip: true
@@ -75,7 +114,8 @@ Basic.ApplicationWindow {
             Image {
                 id: backdropImage
                 anchors.fill: parent
-                source: root.coverFor(store.state.selected)
+                source: bridge.selectedArtworkUrl
+                cache: false
                 fillMode: Image.PreserveAspectCrop
                 visible: false
             }
@@ -122,117 +162,231 @@ Basic.ApplicationWindow {
             sourceItem: backdrop
             radius: 0
             Rectangle { anchors.fill: parent; color: "transparent"; border.color: Theme.border }
-            AppField {
-                id: search
-                objectName: "songSearch"
-                x: 20
-                y: 32
-                width: parent.width - 40
-                leftPadding: 44
-                placeholderText: "Type to search songs..."
-                text: store.state.search
-                onTextEdited: store.send("search", text)
-                Accessible.name: "Search songs"
-                AppIcon { x: 12; anchors.verticalCenter: parent.verticalCenter; name: "search"; color: Theme.muted }
-            }
-            Row {
-                id: filters
-                x: 20
-                y: search.y + search.height + 16
-                spacing: 10
-                Repeater {
-                    model: ["Title", "All musics", "Tags"]
-                    AppButton {
-                        required property string modelData
-                        height: 32
-                        text: modelData
-                        iconName: "chevron-down"
-                        enabled: false
-                        background: Rectangle { radius: 16; color: "transparent"; border.color: Theme.border }
-                        Accessible.name: modelData + " (unavailable)"
+            Item {
+                id: songsPane
+                anchors.fill: parent
+                visible: root.selectedTab === 0
+                AppField {
+                    id: search
+                    objectName: "songSearch"
+                    x: 20
+                    y: 32
+                    width: parent.width - 40
+                    leftPadding: 44
+                    placeholderText: "Type to search songs..."
+                    Accessible.name: "Search songs"
+                    AppIcon { x: 12; anchors.verticalCenter: parent.verticalCenter; name: "search"; color: Theme.muted }
+                }
+                Row {
+                    id: filters
+                    x: 20
+                    y: search.y + search.height + 16
+                    spacing: 10
+                    Repeater {
+                        model: ["Title", "All musics", "Tags"]
+                        AppButton {
+                            required property string modelData
+                            height: 32
+                            text: modelData
+                            iconName: "chevron-down"
+                            enabled: false
+                            background: Rectangle { radius: 16; color: "transparent"; border.color: Theme.border }
+                            Accessible.name: modelData + " (unavailable)"
+                        }
                     }
                 }
-            }
-            ListView {
-                id: songList
-                objectName: "songList"
-                x: 20
-                y: filters.y + filters.height + 32
-                width: parent.width - 40
-                height: footer.y - y - 12
-                clip: true
-                spacing: 16
-                model: store.state.tracks
-                currentIndex: store.state.selected
-                boundsBehavior: Flickable.StopAtBounds
-                Basic.ScrollBar.vertical: Basic.ScrollBar { }
-                delegate: Basic.Button {
-                    id: card
-                    required property var modelData
-                    required property int index
-                    width: songList.width
-                    height: 90
-                    padding: 0
-                    Accessible.name: modelData.title + ", " + modelData.artist
-                    onClicked: store.send("selectTrack", index)
-                    background: Item {
-                        Artwork { anchors.fill: parent; source: root.coverFor(card.index) }
-                        Rectangle {
-                            anchors.fill: parent
-                            radius: 8
-                            gradient: Gradient {
-                                orientation: Gradient.Horizontal
-                                GradientStop { position: card.index === 2 ? 0 : 0.415; color: root.cardTints[card.index] }
-                                GradientStop { position: 1; color: "transparent" }
+                Text {
+                    id: libraryStatus
+                    objectName: "libraryStatus"
+                    x: 20
+                    y: filters.y + filters.height + 20
+                    width: parent.width - 40
+                    text: bridge.libraryMessage
+                    visible: text.length > 0
+                    color: Theme.text
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 14
+                    wrapMode: Text.Wrap
+                }
+                ListView {
+                    id: songList
+                    objectName: "songList"
+                    x: 20
+                    y: libraryStatus.y + (libraryStatus.visible ? libraryStatus.height : 0) + 12
+                    width: parent.width - 40
+                    height: Math.max(0, footer.y - y - 12)
+                    clip: true
+                    spacing: 16
+                    model: bridge
+                    currentIndex: -1
+                    boundsBehavior: Flickable.StopAtBounds
+                    Basic.ScrollBar.vertical: Basic.ScrollBar { }
+                    delegate: Basic.Button {
+                        id: card
+                        required property int audioId
+                        required property string title
+                        required property string artist
+                        required property string subtitle
+                        required property string durationLabel
+                        required property string artworkUrl
+                        readonly property bool inViewport: songsPane.visible
+                            && y + height >= songList.contentY
+                            && y <= songList.contentY + songList.height
+                        onInViewportChanged: if (inViewport) bridge.requestMedia(audioId)
+                        onArtworkUrlChanged: if (inViewport && artworkUrl.length === 0) bridge.requestMedia(audioId)
+                        Component.onCompleted: if (inViewport) bridge.requestMedia(audioId)
+                        width: songList.width
+                        height: 90
+                        padding: 0
+                        Accessible.name: title + ", " + artist
+                        onClicked: bridge.selectTrack(audioId)
+                        background: Item {
+                            Artwork { anchors.fill: parent; source: card.artworkUrl }
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: 8
+                                gradient: Gradient {
+                                    orientation: Gradient.Horizontal
+                                    GradientStop { position: 0.415; color: "#eb0e0e0e" }
+                                    GradientStop { position: 1; color: "transparent" }
+                                }
+                            }
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: 8
+                                color: "transparent"
+                                border.width: card.activeFocus ? 2 : 1
+                                border.color: bridge.selectedAudioId === card.audioId ? Theme.accent
+                                    : (card.hovered || card.activeFocus ? Theme.border : "transparent")
                             }
                         }
-                        Rectangle {
-                            anchors.fill: parent
-                            radius: 8
-                            color: "transparent"
-                            border.width: card.activeFocus ? 2 : 1
-                            border.color: store.state.selected === card.index ? Theme.accent
-                                : (card.hovered || card.activeFocus ? Theme.border : "transparent")
+                        contentItem: Item {
+                            Text {
+                                x: 20
+                                y: 17
+                                width: parent.width - 40
+                                height: 30
+                                text: card.title
+                                color: Theme.text
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 22
+                                font.weight: Font.Bold
+                                elide: Text.ElideRight
+                            }
+                            Text {
+                                x: 20
+                                y: 49
+                                width: parent.width - 40
+                                height: 22
+                                text: card.subtitle
+                                color: Theme.text
+                                font.family: Theme.fontFamily
+                                font.pixelSize: 16
+                                font.weight: Font.Medium
+                                elide: Text.ElideRight
+                            }
                         }
                     }
-                    contentItem: Item {
+                }
+                AppButton {
+                    id: footer
+                    objectName: "refreshLibrary"
+                    x: 20
+                    y: parent.height - height - 20
+                    height: 36
+                    text: "Refresh library"
+                    iconName: "rotate-cw"
+                    enabled: bridge.connected && !bridge.libraryLoading
+                    onClicked: bridge.refreshLibrary()
+                    Accessible.name: "Refresh library"
+                }
+            }
+
+            Item {
+                id: settingsPane
+                objectName: "settingsPane"
+                anchors.fill: parent
+                visible: root.selectedTab === 1
+                AppField {
+                    id: settingsSearch
+                    objectName: "settingsSearch"
+                    x: 20
+                    y: 32
+                    width: parent.width - 40
+                    leftPadding: 44
+                    placeholderText: "Type to search settings..."
+                    Accessible.name: "Search settings"
+                    AppIcon { x: 12; anchors.verticalCenter: parent.verticalCenter; name: "search"; color: Theme.muted }
+                }
+                Basic.ScrollView {
+                    id: settingsScroll
+                    x: 20
+                    y: settingsSearch.y + settingsSearch.height + 32
+                    width: parent.width - 40
+                    height: parent.height - y - 20
+                    contentWidth: availableWidth
+                    clip: true
+                    Basic.ScrollBar.horizontal.policy: Basic.ScrollBar.AlwaysOff
+                    Column {
+                        width: settingsScroll.availableWidth
+                        spacing: 16
                         Text {
-                            x: 20
-                            y: 17
-                            width: parent.width - 40
-                            height: 30
-                            text: card.modelData.title
+                            text: "General"
                             color: Theme.text
                             font.family: Theme.fontFamily
-                            font.pixelSize: 22
-                            font.weight: Font.Bold
-                            elide: Text.ElideRight
+                            font.pixelSize: 24
+                            font.weight: Font.DemiBold
                         }
                         Text {
-                            x: 20
-                            y: 49
-                            width: parent.width - 40
-                            height: 22
-                            text: card.modelData.subtitle.length > 0
-                                ? card.modelData.artist + " | " + card.modelData.subtitle : card.modelData.artist
+                            text: "osu! folders"
                             color: Theme.text
                             font.family: Theme.fontFamily
                             font.pixelSize: 16
-                            font.weight: Font.Medium
-                            elide: Text.ElideRight
+                        }
+                        Row {
+                            width: parent.width
+                            spacing: 12
+                            AppMenu {
+                                id: folderMenu
+                                objectName: "folderMenu"
+                                width: parent.width - addFolder.width - parent.spacing
+                                entries: bridge.folders
+                                valueRole: "id"
+                                currentIndex: entries.findIndex(entry => entry.id === bridge.selectedFolderId)
+                                displayText: currentIndex >= 0 ? entries[currentIndex].label : "No osu! folders"
+                                enabled: bridge.connected && !bridge.foldersLoading && !bridge.folderBusy && entries.length > 0
+                                Accessible.name: "osu! folders"
+                                Basic.ToolTip.visible: hovered && currentIndex >= 0
+                                onChosen: value => bridge.selectFolder(value)
+                            }
+                            IconButton {
+                                id: addFolder
+                                objectName: "addFolder"
+                                iconName: "plus"
+                                accessibleName: "Add osu! folder"
+                                enabled: bridge.connected && !bridge.connecting && !bridge.foldersLoading && !bridge.folderBusy
+                                onClicked: bridge.addFolder()
+                            }
+                        }
+                        Text {
+                            objectName: "folderStatus"
+                            width: parent.width
+                            text: bridge.folderMessage
+                            visible: text.length > 0
+                            color: Theme.text
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 14
+                            wrapMode: Text.Wrap
+                        }
+                        AppButton {
+                            objectName: "retryFolders"
+                            text: "Retry"
+                            visible: bridge.folderCanRetry
+                            enabled: bridge.connected && !bridge.foldersLoading && !bridge.folderBusy
+                            onClicked: bridge.retryFolders()
                         }
                     }
                 }
-            }
-            AppButton {
-                id: footer
-                x: 20
-                y: parent.height - height - 20
-                height: 36
-                text: "Refresh library"
-                iconName: "rotate-cw"
-                enabled: false
-                Accessible.name: "Refresh library (unavailable)"
             }
         }
 
@@ -256,7 +410,7 @@ Basic.ApplicationWindow {
                     width: player.coverSize
                     height: width
                     radius: 12
-                    source: root.coverFor(store.state.selected)
+                    source: bridge.selectedArtworkUrl
                 }
             }
             Item {
@@ -269,7 +423,7 @@ Basic.ApplicationWindow {
                     objectName: "selectedTitle"
                     width: parent.width
                     height: 38
-                    text: root.selectedTrack.title
+                    text: bridge.hasSelection ? bridge.selectedTitle : "No track selected"
                     color: Theme.text
                     font.family: Theme.fontFamily
                     font.pixelSize: 28
@@ -280,7 +434,7 @@ Basic.ApplicationWindow {
                     y: 44
                     width: parent.width
                     height: 27
-                    text: root.selectedTrack.artist
+                    text: bridge.selectedArtist
                     color: Theme.text
                     font.family: Theme.fontFamily
                     font.pixelSize: 20
@@ -311,7 +465,7 @@ Basic.ApplicationWindow {
                     objectName: "selectedDuration"
                     y: 101
                     anchors.right: parent.right
-                    text: root.duration(root.selectedTrack.duration_seconds)
+                    text: bridge.selectedDurationLabel
                     color: Theme.text
                     font.family: Theme.fontFamily
                     font.pixelSize: 12

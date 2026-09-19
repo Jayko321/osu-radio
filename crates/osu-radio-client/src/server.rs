@@ -52,6 +52,14 @@ pub struct EmbeddedServer {
 
 impl EmbeddedServer {
     pub async fn start(options: ServerOptions) -> Result<Self, ServerError> {
+        let (_cancel, receiver) = tokio::sync::watch::channel(false);
+        Self::start_cancellable(options, receiver).await
+    }
+
+    pub(crate) async fn start_cancellable(
+        options: ServerOptions,
+        mut cancelled: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<Self, ServerError> {
         let binary = resolve_binary(options.binary.as_deref())?;
 
         let mut command = Command::new(&binary);
@@ -89,16 +97,31 @@ impl EmbeddedServer {
         forward(stderr, "server");
 
         let mut lines = BufReader::new(stdout).lines();
-        let base_url =
-            match time::timeout(options.startup_timeout, read_ready_line(&mut lines)).await {
-                Ok(Ok(Some(base_url))) => base_url,
-                Ok(Ok(None)) => {
+        // The deadline includes EOF followed by a still-live child. Cancellation and every
+        // startup failure reap the child while the caller's runtime is still alive.
+        let ready = async {
+            match read_ready_line(&mut lines).await {
+                Ok(Some(url)) => Ok(url),
+                Ok(None) => {
                     let status = child.wait().await.ok();
-                    return Err(ServerError::Exited(status.map(|status| status.to_string())));
+                    Err(ServerError::Exited(status.map(|status| status.to_string())))
                 }
-                Ok(Err(error)) => return Err(ServerError::ReadOutput(error)),
-                Err(_) => return Err(ServerError::StartupTimedOut(options.startup_timeout)),
-            };
+                Err(error) => Err(ServerError::ReadOutput(error)),
+            }
+        };
+        let result = tokio::select! {
+            result = time::timeout(options.startup_timeout, ready) => {
+                result.unwrap_or(Err(ServerError::StartupTimedOut(options.startup_timeout)))
+            }
+            _ = cancelled.wait_for(|value| *value) => Err(ServerError::Cancelled),
+        };
+        let base_url = match result {
+            Ok(url) => url,
+            Err(error) => {
+                let _ = child.kill().await;
+                return Err(error);
+            }
+        };
 
         tokio::spawn(async move {
             while let Ok(Some(line)) = lines.next_line().await {
@@ -212,6 +235,7 @@ pub enum ServerError {
     StartupTimedOut(Duration),
     Exited(Option<String>),
     Shutdown(io::Error),
+    Cancelled,
 }
 
 impl fmt::Display for ServerError {
@@ -249,6 +273,7 @@ impl fmt::Display for ServerError {
                 formatter,
                 "the server stopped before it reported an address. SQLITE_DATABASE_URL must be set in the .env it loads."
             ),
+            Self::Cancelled => write!(formatter, "server startup was cancelled"),
             Self::Shutdown(error) => write!(formatter, "the server could not be stopped: {error}"),
         }
     }
@@ -264,7 +289,8 @@ impl Error for ServerError {
             Self::BinaryNotFound(_)
             | Self::MissingPipe(_)
             | Self::StartupTimedOut(_)
-            | Self::Exited(_) => None,
+            | Self::Exited(_)
+            | Self::Cancelled => None,
         }
     }
 }
@@ -293,5 +319,87 @@ mod tests {
             parse_ready_line("Scalar API reference: http://x/docs"),
             None
         );
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod lifecycle_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn fixture(body: &str) -> (tempfile::TempDir, ServerOptions) {
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("server");
+        std::fs::write(&binary, format!("#!/bin/sh\necho $$ > pid\n{body}\n")).unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let options = ServerOptions {
+            binary: Some(binary),
+            working_directory: Some(directory.path().into()),
+            startup_timeout: Duration::from_millis(120),
+            ..Default::default()
+        };
+        (directory, options)
+    }
+    fn assert_reaped(directory: &Path) {
+        let pid = std::fs::read_to_string(directory.join("pid")).unwrap();
+        assert!(
+            !Path::new(&format!("/proc/{}", pid.trim())).exists(),
+            "child must already be reaped when cleanup completes"
+        );
+    }
+    #[tokio::test]
+    async fn startup_timeout_reaps_silent_child() {
+        let (directory, options) = fixture("exec sleep 30");
+        let result = time::timeout(Duration::from_secs(3), EmbeddedServer::start(options))
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, Err(ServerError::StartupTimedOut(_))),
+            "{result:?}"
+        );
+        assert_reaped(directory.path());
+    }
+    #[tokio::test]
+    async fn stdout_eof_does_not_bypass_startup_timeout() {
+        let (directory, options) = fixture("exec 1>&-\nexec sleep 30");
+        let result = time::timeout(Duration::from_secs(3), EmbeddedServer::start(options))
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, Err(ServerError::StartupTimedOut(_))),
+            "{result:?}"
+        );
+        assert_reaped(directory.path());
+    }
+    #[tokio::test]
+    async fn controller_close_during_startup_awaits_child_cleanup() {
+        let (directory, mut options) = fixture("exec 1>&-\nexec sleep 30");
+        options.startup_timeout = Duration::from_secs(30);
+        let controller = crate::controller::AppController::spawn(
+            &tokio::runtime::Handle::current(),
+            options,
+            |_| {},
+        );
+        controller.send(crate::controller::AppCommand::Connect);
+        time::timeout(Duration::from_secs(3), async {
+            while !directory.path().join("pid").exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        time::timeout(Duration::from_secs(3), controller.shutdown())
+            .await
+            .unwrap();
+        assert_reaped(directory.path());
+    }
+    #[tokio::test]
+    async fn ready_child_is_reaped_before_shutdown_returns() {
+        let (directory, options) =
+            fixture("echo 'listening on http://127.0.0.1:54321'\nexec sleep 30");
+        let server = EmbeddedServer::start(options).await.unwrap();
+        server.shutdown().await.unwrap();
+        server.shutdown().await.unwrap();
+        assert_reaped(directory.path());
     }
 }

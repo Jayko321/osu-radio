@@ -31,10 +31,29 @@ fn main() -> ExitCode {
     };
     if mode == LaunchMode::Help {
         println!(
-            "Usage: osu-radio-qt [--component-gallery] [--help]\n\nSongs and the component gallery use bundled mock content. Playback is unavailable."
+            "Usage: osu-radio-qt [--component-gallery] [--help]\n\nSongs connects to the local library server; the component gallery stays offline. Playback is unavailable."
         );
         return ExitCode::SUCCESS;
     }
+    let live = if mode == LaunchMode::Songs {
+        match runtime::LiveRuntime::new() {
+            Ok(runtime) => Some(runtime),
+            Err(error) => {
+                eprintln!("Could not initialize runtime: {error}");
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        None
+    };
+    let result = run(mode);
+    if let Some(runtime) = live {
+        runtime.shutdown();
+    }
+    result
+}
+
+fn run(mode: LaunchMode) -> ExitCode {
     let mut app = QGuiApplication::new();
     let mut engine = QQmlApplicationEngine::new();
     let (Some(mut app), Some(mut engine)) = (app.as_mut(), engine.as_mut()) else {
@@ -51,11 +70,6 @@ fn main() -> ExitCode {
         .release();
     let smoke = std::env::var_os("OSU_RADIO_QT_SMOKE_TEST").is_some();
     runtime::ffi::configure_engine(engine.as_mut(), smoke);
-    if smoke {
-        engine
-            .as_mut()
-            .load(&QUrl::from("qrc:/qt/qml/OsuRadio/tests/AdapterProbe.qml"));
-    }
     let root = if mode == LaunchMode::Songs {
         "Songs"
     } else {
@@ -67,6 +81,15 @@ fn main() -> ExitCode {
     if !created.load(Ordering::Relaxed) {
         eprintln!("Failed to create the {root} QML root.");
         return ExitCode::FAILURE;
+    }
+    if smoke {
+        runtime::ffi::configure_probe(engine.as_mut(), mode == LaunchMode::ComponentGallery);
+        engine
+            .as_mut()
+            .load(&QUrl::from("qrc:/qt/qml/OsuRadio/tests/AdapterProbe.qml"));
+        if !created.load(Ordering::Relaxed) {
+            return ExitCode::FAILURE;
+        }
     }
     ExitCode::from(u8::try_from(app.as_mut().exec()).unwrap_or(1))
 }

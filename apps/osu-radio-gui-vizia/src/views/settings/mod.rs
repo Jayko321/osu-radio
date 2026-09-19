@@ -45,7 +45,7 @@ pub(crate) fn settings_pane(cx: &mut Context, state: UiState) -> Handle<'_, VSta
                             state.selected_folder,
                             "No osu! folders",
                             false,
-                            move |_, id| state.selected_folder.set(Some(id)),
+                            move |cx, id| cx.emit(AppEvent::SelectFolder(id)),
                         )
                         .disabled(Memo::new(move |_| {
                             unavailable.get() || state.folders.get().is_empty()

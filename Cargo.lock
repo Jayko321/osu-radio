@@ -3502,8 +3502,10 @@ dependencies = [
  "cxx-qt-build",
  "cxx-qt-lib",
  "osu-radio-client",
+ "rfd",
  "serde_json",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

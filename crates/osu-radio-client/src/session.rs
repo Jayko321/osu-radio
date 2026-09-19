@@ -17,9 +17,27 @@ impl Session {
         let server = EmbeddedServer::start(options)
             .await
             .map_err(StartError::Server)?;
-        let api = ApiClient::new(server.base_url()).map_err(StartError::Client)?;
+        Self::with_server(server).await
+    }
 
-        Ok(Self { server, api })
+    pub(crate) async fn start_cancellable(
+        options: ServerOptions,
+        cancelled: tokio::sync::watch::Receiver<bool>,
+    ) -> Result<Self, StartError> {
+        let server = EmbeddedServer::start_cancellable(options, cancelled)
+            .await
+            .map_err(StartError::Server)?;
+        Self::with_server(server).await
+    }
+
+    async fn with_server(server: EmbeddedServer) -> Result<Self, StartError> {
+        match ApiClient::new(server.base_url()) {
+            Ok(api) => Ok(Self { server, api }),
+            Err(error) => {
+                let _ = server.shutdown().await;
+                Err(StartError::Client(error))
+            }
+        }
     }
 
     #[must_use]

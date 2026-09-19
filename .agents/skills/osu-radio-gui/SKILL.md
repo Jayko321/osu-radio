@@ -14,11 +14,13 @@ Read [shared guidance](../../../AGENTS.md) and the [frontend guide](../../../doc
 5. Update only affected guide facts if behavior, ownership or known limitations changed. Keep procedures here and technical detail in the linked guide.
 
 
-For Qt changes, trace the QML root through shared `qml/components` and the Rust
-adapter into the client's opt-in `mock` actions. Keep toolkit/resource paths in
-the Qt app; QML owns focus and popup/window presentation. Preserve both mock-only
-launch modes and the existing Vizia frontend. Use the Qt checks in the development
-guide: client feature off/on tests, Qt tests/build, generated-import `qmllint`,
-scoped Clippy and formatting. Offscreen smoke tests are permitted for this path;
-leave desktop input/visual checks to the user and report Windows separately.
-Do not apply Vizia-specific CSS/textbox workarounds to native QML controls.
+For Qt changes, trace the QML root through shared `qml/components`, the typed
+Rust adapter and the shared client `AppController`. Production launch is live;
+`--component-gallery` remains offline with the opt-in client `mock` actions.
+Keep toolkit/resource paths and decoded artwork caches in the Qt app; QML owns
+focus and popup/window presentation. Preserve Vizia through the same controller.
+Use the Qt checks in the development guide: client feature off/on tests, Qt
+integration probes/build, generated-import `qmllint`, scoped Clippy and formatting.
+Offscreen smoke tests are permitted; leave desktop input/visual checks to the user
+and report Windows separately. Do not apply Vizia-specific CSS/textbox workarounds
+to native QML controls.

@@ -69,7 +69,10 @@ osu-radio server listening on http://127.0.0.1:<bound-port>
 
 The client's `parse_ready_line` finds the substring `listening on `, trims the
 remainder, and accepts a remainder starting with `http://` or `https://`.
-`read_ready_line` waits for this output, with a default 30-second timeout. A
+`read_ready_line` waits for this output, with a default 30-second startup deadline.
+The deadline also covers waiting for child exit after stdout closes; a live child
+that closes stdout cannot bypass it. Startup cancellation and failure kill and
+reap the child before returning. A
 wording change that removes the marker, or text appended to the address, changes
 the protocol. Update producer, parser, and tests together. Readiness means the
 bound address has been announced; it does not mean the client has completed an
@@ -164,7 +167,9 @@ responses are references, not a streaming endpoint.
 Client [`server.rs` tests](../../crates/osu-radio-client/src/server.rs) include
 `the_bound_address_is_read_back_from_the_startup_line` and
 `other_startup_lines_are_not_mistaken_for_the_address`. They exercise parsing
-without launching a server.
+without launching a server. Additional Unix process regressions cover missing
+binaries, a silent child, a live child closing stdout and startup cancellation,
+including awaited child cleanup.
 
 The ignored integration test
 [`the_embedded_server_answers_on_the_port_it_reports`](../../crates/osu-radio-client/tests/embedded_server.rs)
