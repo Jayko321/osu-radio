@@ -4,7 +4,8 @@
   [Google Fonts / Poppins](https://github.com/google/fonts/tree/main/ofl/poppins),
   downloaded 2026-09-17. SIL Open Font License: [Poppins-OFL.txt](fonts/Poppins-OFL.txt).
 - `fonts/Nunito-Variable.ttf`: existing fallback font; [OFL.txt](fonts/OFL.txt).
-- `icons/*.svg`: original, unmodified 24px SVG files from
+- `icons/pause.svg`: project-authored pause glyph using the existing 24px stroke convention.
+- Other `icons/*.svg`: original, unmodified 24px SVG files from
   [Lucide](https://github.com/lucide-icons/lucide/tree/main/icons), downloaded
   2026-09-17. [LUCIDE-LICENSE](icons/LUCIDE-LICENSE) includes Lucide and Feather notices.
   The shared icon component uses Vizia's CSS `fill` tint pass to colour the SVG

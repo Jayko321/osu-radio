@@ -38,11 +38,12 @@ pub(crate) fn player(cx: &mut Context, state: UiState) {
             .class("now-artist");
             gap(cx, 14.0);
 
-            progress_bar(cx);
+            progress_bar(cx, state);
             time_row(cx, state);
             gap(cx, 8.0);
 
-            controls(cx);
+            controls(cx, state);
+            controls::status(cx, state);
         })
         .class("player-info");
     })

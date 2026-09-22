@@ -16,17 +16,16 @@ and the [API skill](../../.agents/skills/osu-radio-api/SKILL.md) when changing c
 | OpenAPI and Scalar | [`docs.rs`](../../apps/osu-radio-server/src/docs.rs), [`Cargo.toml`](../../apps/osu-radio-server/Cargo.toml) | Documentation metadata and its optional dependencies belong here. |
 | Frontend access and process ownership | Client [`api.rs`](../../crates/osu-radio-client/src/api.rs), [`server.rs`](../../crates/osu-radio-client/src/server.rs), [`session.rs`](../../crates/osu-radio-client/src/session.rs) | Keep reusable HTTP calls and supervision in the toolkit-free client. |
 
-The confirmed architectural direction keeps OS access, source reading, and future
-audio serving behind the backend boundary. Discovery and source parsing remain
+The backend owns source-file access, source reading and audio serving. The client
+owns temporary downloads and local audio output. Discovery and source parsing remain
 reusable scanner work; shared installation services compose folder discovery. Domain
 types remain free of I/O. Database queries belong to the persistence component,
 whose concrete repositories are documented in [database](database.md).
 
 The GUI calls `osu-radio-client`, not server internals, scanner functions, or
 local osu! files. `ApiClient` has its own wire DTOs; the client also owns reusable
-view models. See [frontend](frontend.md) for their responsibilities. The current
-server does not yet implement music streaming or playback; those are product
-goals. Neither hosted-source providers nor remote hosting are selected.
+view models. See [frontend](frontend.md) for their responsibilities. The server streams original audio files by ID; playback runs locally in the
+client. Neither hosted-source providers nor remote hosting are selected.
 
 ## Current startup configuration
 
@@ -135,6 +134,7 @@ continues to use its own [API DTOs](../../crates/osu-radio-client/src/api.rs).
 | `GET /api/beatmap-sets` | Optional `q` searches the library; existing contract retained. Array of `{id, online_id, hash, has_multiple_audio_sources, audio_sources, beatmaps}`. Each audio source has `{id, kind, location}`; distinct sources per set, empty arrays allowed. |
 | `GET /api/tracks` | Optional `q`; one record per global audio ID with nullable representative metadata, cover ID and all difficulties. Used by Songs. |
 | `GET /api/beatmaps/{id}/cover` | Stored background reference bytes, at most 16 MiB; absent/unreadable/oversized cover is 404. No path parameter or caller-supplied filesystem location. |
+| `GET /api/audio-sources/{id}/audio` | Original Local/Copied file streamed with `Content-Length` and `application/octet-stream`; 404 for unknown ID or missing/nonregular file, 400 for Online. No caller-supplied paths. |
 | `GET /api/audio-sources/{id}/duration` | `{duration_ms}` with nullable duration; absent audio ID is 404, missing/corrupt/unsupported media is null. Local/copied sources only. |
 | `GET /api/user-data` | `{id, osu_folders}` with singleton `id = 1`. |
 | `GET /api/user-data/osu-folders` | Folder array, including disabled entries. |
@@ -199,7 +199,7 @@ services, then use `spawn_blocking` for filesystem reads and Lofty probing. Loft
 sniffs contents rather than extensions and disables tag reading, supporting lazer
 hash filenames. Files stay in place. Expected media failures yield neutral UI
 states; unexpected database/task failures retain the safe 500 boundary. Both
-router/documentation feature variants register both endpoints.
+router/documentation feature variants register cover, duration and audio endpoints.
 
 Folder paths are display strings; native installation paths remain lossless `PathBuf`
 values in services/storage (see [path encoding](database.md#schema-and-ownership)).
@@ -207,7 +207,10 @@ Folder JSON fields remain `id`, `kind`, `root_path`, `marker_path`, `label`,
 `enabled`, and `last_scanned_at`. Unexpected failures retain the safe 500 error
 boundary described above. Registration does not scan/import a library; the CLI
 `store` workflow performs complete snapshot replacement. Audio locations in these
-responses are references, not a streaming endpoint.
+responses remain references; clients fetch bytes by ID through the audio endpoint.
+The backend owns source-file access and streams bounded chunks without materializing
+the whole file. The client owns downloading, its temporary file and audio output.
+No schema migration is required.
 
 ## Evidence and verification limits
 

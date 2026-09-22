@@ -49,6 +49,12 @@ pub enum AppCommand {
     SearchLibrary(String),
     RefreshFolders,
     SelectTrack(Option<i32>),
+    PlayTrack(i32),
+    Pause,
+    Resume,
+    Stop,
+    Seek(Duration),
+    SetVolume(f32),
     SelectFolder(Option<i32>),
     BeginFolderPick,
     CompleteFolderPick(Option<PathBuf>),
@@ -65,6 +71,7 @@ pub enum AppCommand {
 }
 #[derive(Clone, Debug)]
 pub enum AppUpdate {
+    Playback(crate::playback::Playback),
     Connection(ConnectionStatus),
     LibraryStatus(OperationStatus),
     FolderStatus(OperationStatus),
@@ -127,6 +134,11 @@ enum Completed {
         duration: Option<u64>,
         duration_requested: bool,
     },
+    Audio {
+        generation: u64,
+        id: i32,
+        result: Result<tempfile::NamedTempFile, String>,
+    },
     Cancelled,
 }
 struct MediaJob {
@@ -159,6 +171,10 @@ struct Controller {
     jobs: HashMap<u64, MediaJob>,
     duration_done: HashSet<i32>,
     unavailable: HashSet<i32>,
+    playback: Option<crate::playback::Worker>,
+    downloads: Option<mpsc::UnboundedReceiver<crate::playback::Download>>,
+    audio_task: Option<AbortHandle>,
+    audio_gate: Arc<tokio::sync::Semaphore>,
 }
 impl Controller {
     fn new(options: ServerOptions, emit: Arc<dyn Fn(AppUpdate) + Send + Sync>) -> Self {
@@ -188,6 +204,10 @@ impl Controller {
             jobs: HashMap::new(),
             duration_done: HashSet::new(),
             unavailable: HashSet::new(),
+            playback: None,
+            downloads: None,
+            audio_task: None,
+            audio_gate: Arc::new(tokio::sync::Semaphore::new(1)),
         }
     }
     async fn run(mut self, mut commands: mpsc::UnboundedReceiver<AppCommand>) {
@@ -197,13 +217,26 @@ impl Controller {
                     Some(AppCommand::Shutdown) | None => break,
                     Some(command) => self.command(command),
                 },
+                request = async {
+                    match &mut self.downloads {
+                        Some(downloads) => downloads.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    if let Some(request) = request { self.download(request); }
+                    else { self.downloads = None; }
+                }
                 result = self.tasks.join_next(), if !self.tasks.is_empty() => {
                     if let Some(Ok(result)) = result { self.complete(result); }
                 }
             }
             self.start_media();
         }
+        self.cancel_audio();
         let _ = self.cancel.send(true);
+        if let Some(mut playback) = self.playback.take() {
+            let _ = tokio::task::spawn_blocking(move || playback.shutdown()).await;
+        }
         // Startup owns its child until it either installs a session or awaits cancellation cleanup.
         while let Some(result) = self.tasks.join_next().await {
             if let Ok(Completed::Connected(Ok(session))) = result {
@@ -225,6 +258,35 @@ impl Controller {
     }
     fn command(&mut self, command: AppCommand) {
         match command {
+            AppCommand::PlayTrack(id) => {
+                self.cancel_audio();
+                if self.ensure_playback()
+                    && let Some(worker) = &self.playback
+                {
+                    let generation = worker.invalidate();
+                    worker.send(crate::playback::Command::Request { generation, id });
+                }
+            }
+            AppCommand::Pause => {
+                self.player_command(crate::playback::Command::Pause(self.selected));
+            }
+            AppCommand::Resume => {
+                self.cancel_audio();
+                self.player_command(crate::playback::Command::Resume(self.selected));
+            }
+            AppCommand::Stop => {
+                self.cancel_audio();
+                self.player_command(crate::playback::Command::Stop);
+            }
+            AppCommand::Seek(position) => {
+                self.player_command(crate::playback::Command::Seek {
+                    expected_id: self.selected,
+                    position,
+                });
+            }
+            AppCommand::SetVolume(volume) => {
+                self.player_command(crate::playback::Command::SetVolume(volume));
+            }
             AppCommand::Connect => self.connect(),
             AppCommand::RefreshLibrary => self.refresh_library(),
             AppCommand::SearchLibrary(query) => {
@@ -277,6 +339,72 @@ impl Controller {
             }
             AppCommand::Shutdown => {}
         }
+    }
+    fn ensure_playback(&mut self) -> bool {
+        if self.playback.is_none() {
+            let emit = self.emit.clone();
+            match crate::playback::Worker::spawn(Arc::new(move |state| {
+                emit(AppUpdate::Playback(state));
+            })) {
+                Ok((worker, downloads)) => {
+                    self.playback = Some(worker);
+                    self.downloads = Some(downloads);
+                }
+                Err(error) => {
+                    (self.emit)(AppUpdate::Playback(crate::playback::Playback {
+                        error: Some(error.to_string()),
+                        ..Default::default()
+                    }));
+                    return false;
+                }
+            }
+        }
+        true
+    }
+    fn player_command(&mut self, command: crate::playback::Command) {
+        if self.ensure_playback()
+            && let Some(worker) = &self.playback
+        {
+            worker.send(command);
+        }
+    }
+    fn cancel_audio(&mut self) {
+        if let Some(worker) = &self.playback {
+            worker.invalidate();
+        }
+        if let Some(task) = self.audio_task.take() {
+            task.abort();
+        }
+    }
+    fn download(&mut self, request: crate::playback::Download) {
+        let Some(worker) = &self.playback else {
+            return;
+        };
+        if !worker.is_current(request.generation) {
+            return;
+        }
+        let Some(api) = self.session.as_ref().map(|session| session.api().clone()) else {
+            worker.send(crate::playback::Command::Loaded {
+                generation: request.generation,
+                id: request.id,
+                result: Err("Connect to the server before playing a track.".into()),
+            });
+            return;
+        };
+        let gate = self.audio_gate.clone();
+        self.audio_task = Some(self.task(async move {
+            let Ok(_permit) = gate.acquire_owned().await else {
+                return Completed::Cancelled;
+            };
+            Completed::Audio {
+                generation: request.generation,
+                id: request.id,
+                result: api
+                    .download_audio(request.id)
+                    .await
+                    .map_err(|error| describe(&error)),
+            }
+        }));
     }
     fn connect(&mut self) {
         if self.connecting || self.session.is_some() {
@@ -394,6 +522,22 @@ impl Controller {
     }
     fn complete(&mut self, result: Completed) {
         match result {
+            Completed::Audio {
+                generation,
+                id,
+                result,
+            } => {
+                if let Some(worker) = &self.playback
+                    && worker.is_current(generation)
+                {
+                    self.audio_task = None;
+                    worker.send(crate::playback::Command::Loaded {
+                        generation,
+                        id,
+                        result,
+                    });
+                }
+            }
             Completed::Connected(result) => {
                 self.connecting = false;
                 self.library.loading = false;
@@ -671,6 +815,58 @@ mod tests {
             updates,
         )
     }
+    #[tokio::test]
+    async fn playback_survives_selection_search_refresh_and_shutdown_removes_current_file() {
+        use crate::playback::{Command, PlayerState, Worker};
+        let (mut state, _) = controller();
+        let (sent, mut received) = mpsc::unbounded_channel();
+        let (worker, downloads) = Worker::spawn_fake(Arc::new(move |update| {
+            let _ = sent.send(update);
+        }))
+        .unwrap();
+        let generation = worker.invalidate();
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let path = file.path().to_owned();
+        worker.send(Command::Loaded {
+            generation,
+            id: 1,
+            result: Ok(file),
+        });
+        assert_eq!(
+            received.recv().await.unwrap().snapshot.state,
+            PlayerState::Playing
+        );
+        state.playback = Some(worker);
+        state.downloads = Some(downloads);
+        state.replace_tracks(vec![track(1), track(2)]);
+        state.command(AppCommand::SelectTrack(Some(2)));
+        state.connecting = true; // Search starts no child in this isolated worker test.
+        state.command(AppCommand::SearchLibrary("nothing matches".into()));
+        state.complete(Completed::Library {
+            request: state.library_request,
+            result: Ok(Vec::new()),
+        });
+        assert!(state.playback.as_ref().unwrap().is_current(generation));
+        state.command(AppCommand::Pause);
+        let paused = tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                let update = received.recv().await.unwrap();
+                if update.snapshot.state == PlayerState::Paused {
+                    break update;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(paused.current_audio_id, Some(1));
+        assert_eq!(paused.snapshot.state, PlayerState::Paused);
+        assert!(path.exists());
+        let (commands, shutdown_commands) = mpsc::unbounded_channel();
+        commands.send(AppCommand::Shutdown).unwrap();
+        state.run(shutdown_commands).await;
+        assert!(!path.exists());
+    }
+
     fn track(id: i32) -> Track {
         Track {
             audio_source_id: id,

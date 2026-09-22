@@ -16,14 +16,15 @@ new database or an explicitly requested reset; ordinary startup never resets.
 | `crates/radio-scanner` | Discovery and source readers; returns data, preserves read-only access to osu! sources. |
 | `tools/osu-lazer-realm-parser` | Realm extraction; stdout is NDJSON, diagnostics go to stderr. |
 | `apps/osu-radio-cli` | Thin development harness; reusable behavior belongs in crates. |
-| `apps/osu-radio-server` | Backend startup, HTTP transport and services; backend owns OS access and eventual audio serving. |
+| `apps/osu-radio-server` | Backend startup, HTTP transport and services; backend owns source-file access and streams audio by ID. |
 | `crates/radio-services` | Shared model services and transaction orchestration for server and CLI. |
 | `crates/radio-db` | Persistence boundary; concrete repositories own SQL and constraints; opaque transactions bind repositories. |
-| `crates/osu-radio-client` | Toolkit-free frontend access, session/supervision and reusable view models. |
+| `crates/osu-radio-client` | Toolkit-free frontend access, session/supervision, temporary audio downloads and playback worker. |
+| `crates/osu-radio-player` | Synchronous local-file MP3, Ogg/Vorbis and WAV playback, seek and volume; no HTTP, database or GUI. |
 | `apps/osu-radio-gui-vizia` | Views, signals, events, styles and assets. |
 | `apps/osu-radio-qt` | Qt/QML Songs, Settings and standalone gallery; typed adapters, artwork cache, window interactions and assets. |
 
-Preserve domain/backend/client/GUI boundaries. Vizia and a child-process server are today's implementation, not permanent requirements for future platforms. The GUIs are currently prototypes: track selection changes presentation, not audio playback. Keep UI-only assets and classes out of client view models. Qt and Vizia share the toolkit-free `AppController` for live session, library/media and folder workflows. Their standalone galleries remain offline; Qt uses the opt-in client `mock` module only for gallery demonstrations. Frontends never access persistence directly.
+Preserve domain/backend/client/GUI boundaries. Vizia and a child-process server are today's implementation, not permanent requirements for future platforms. Track selection changes presentation independently of playback; explicit Play starts the selected track through the client-owned audio worker. Keep UI-only assets and classes out of client view models. Qt and Vizia share the toolkit-free `AppController` for live session, library/media, playback and folder workflows. Their standalone galleries remain offline; Qt uses the opt-in client `mock` module only for gallery demonstrations. Frontends never access persistence directly.
 
 Preserve unrelated working-tree changes. Use explicit roots in discovery tests and manual checks; unscoped discovery can walk every mounted root. Scanner import reads source data and returns it; it must not copy audio or decide persistence. Do not use Cargo `--all-features`: the workspace contains incompatible database backend features. Use the scoped [verification matrix](docs/agent/development.md#verification-matrix).
 

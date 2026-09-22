@@ -3,8 +3,12 @@ pub use osu_radio_client::controller::SettingsRetry;
 use osu_radio_client::{
     OsuFolder, ServerOptions, Track,
     controller::{AppCommand, AppController, AppUpdate, ConnectionStatus, MediaTicket},
+    playback::{Playback, PlayerState},
 };
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::runtime::Handle;
 use vizia::prelude::*;
 
@@ -61,7 +65,8 @@ pub enum Tab {
 #[derive(Debug, Clone, Copy)]
 pub struct UiState {
     pub tab: Signal<Tab>,
-    pub playing: Signal<Option<i32>>,
+    pub selected_audio_id: Signal<Option<i32>>,
+    pub playback: Signal<Playback>,
     pub selected: Signal<Option<Track>>,
     pub tracks: Signal<Vec<Track>>,
     pub artwork_revision: Signal<u64>,
@@ -83,10 +88,11 @@ pub struct UiState {
     pub maximized: Signal<bool>,
 }
 impl UiState {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             tab: Signal::new(Tab::Songs),
-            playing: Signal::new(None),
+            selected_audio_id: Signal::new(None),
+            playback: Signal::new(Playback::default()),
             selected: Signal::new(None),
             tracks: Signal::new(Vec::new()),
             artwork_revision: Signal::new(0),
@@ -127,6 +133,9 @@ pub enum AppEvent {
     ArtworkDecoded(MediaTicket, i32, Option<vizia::vg::Image>),
     SelectTab(Tab),
     SelectTrack(i32),
+    PlaySelected,
+    Seek(i32, Duration),
+    SetVolume(f32),
     SelectFolder(i32),
     DragWindow,
     MinimizeWindow,
@@ -151,6 +160,22 @@ impl Model for AppData {
                 AppEvent::SelectTrack(id) => {
                     self.controller.send(AppCommand::SelectTrack(Some(*id)));
                 }
+                AppEvent::PlaySelected => {
+                    if let Some(command) = playback_command(
+                        self.state.selected_audio_id.get(),
+                        &self.state.playback.get(),
+                    ) {
+                        self.controller.send(command);
+                    }
+                }
+                AppEvent::Seek(id, position) => {
+                    if self.state.selected_audio_id.get() == Some(*id)
+                        && self.state.playback.get().current_audio_id == Some(*id)
+                    {
+                        self.controller.send(AppCommand::Seek(*position));
+                    }
+                }
+                AppEvent::SetVolume(volume) => self.controller.send(AppCommand::SetVolume(*volume)),
                 AppEvent::SelectFolder(id) => {
                     self.controller.send(AppCommand::SelectFolder(Some(*id)));
                 }
@@ -208,6 +233,7 @@ impl AppData {
     }
     fn update(&mut self, cx: &EventContext, update: AppUpdate) {
         match update {
+            AppUpdate::Playback(playback) => self.state.playback.set(playback),
             AppUpdate::Connection(status) => {
                 self.state
                     .connected
@@ -249,7 +275,7 @@ impl AppData {
             }
             AppUpdate::TrackSelected(track) => {
                 self.state
-                    .playing
+                    .selected_audio_id
                     .set(track.as_ref().map(|track| track.audio_source_id));
                 self.state.selected.set(track.clone());
                 if let Some(track) = track {
@@ -299,6 +325,53 @@ impl AppData {
                     }
                 });
             }
+        }
+    }
+}
+
+fn playback_command(selected: Option<i32>, playback: &Playback) -> Option<AppCommand> {
+    let id = selected?;
+    Some(if playback.current_audio_id == Some(id) {
+        if playback.snapshot.state == PlayerState::Playing {
+            AppCommand::Pause
+        } else {
+            AppCommand::Resume
+        }
+    } else {
+        AppCommand::PlayTrack(id)
+    })
+}
+
+#[cfg(test)]
+mod playback_tests {
+    use super::*;
+    #[test]
+    fn selected_track_controls_are_independent_of_current_and_pending_audio() {
+        let mut playback = Playback {
+            current_audio_id: Some(1),
+            loading_audio_id: Some(3),
+            ..Playback::default()
+        };
+        playback.snapshot.state = PlayerState::Playing;
+        assert!(matches!(
+            playback_command(Some(1), &playback),
+            Some(AppCommand::Pause)
+        ));
+        assert!(matches!(
+            playback_command(Some(2), &playback),
+            Some(AppCommand::PlayTrack(2))
+        ));
+        assert!(playback_command(None, &playback).is_none());
+        for state in [
+            PlayerState::Paused,
+            PlayerState::Stopped,
+            PlayerState::Ended,
+        ] {
+            playback.snapshot.state = state;
+            assert!(matches!(
+                playback_command(Some(1), &playback),
+                Some(AppCommand::Resume)
+            ));
         }
     }
 }

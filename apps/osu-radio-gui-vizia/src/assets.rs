@@ -4,6 +4,7 @@ pub const SEARCH: &[u8] = include_bytes!("../assets/icons/search.svg");
 pub const CHEVRON: &[u8] = include_bytes!("../assets/icons/chevron-down.svg");
 pub const PENCIL: &[u8] = include_bytes!("../assets/icons/pencil.svg");
 pub const ADD: &[u8] = include_bytes!("../assets/icons/plus.svg");
+pub const PAUSE: &[u8] = include_bytes!("../assets/icons/pause.svg");
 pub const PLAY: &[u8] = include_bytes!("../assets/icons/play.svg");
 pub const SKIP_FORWARD: &[u8] = include_bytes!("../assets/icons/skip-forward.svg");
 pub const SKIP_BACK: &[u8] = include_bytes!("../assets/icons/skip-back.svg");

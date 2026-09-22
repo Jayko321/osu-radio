@@ -34,6 +34,7 @@ Tokio runtime dependency. The helper is a separate .NET project.
 | `osu-radio-server` | [Startup](../../apps/osu-radio-server/src/main.rs), [routes](../../apps/osu-radio-server/src/routes/mod.rs) | Changing backend orchestration, HTTP translation or hosting. See the database and backend contracts. |
 | `radio-services` | [Shared handle and model services](../../crates/radio-services/src/lib.rs) | Persisted-model access and transactional workflows for server and CLI. |
 | `radio-db` | [Package boundary](../../crates/radio-db/Cargo.toml) | [Repositories, SQL and persistence constraints](database.md). |
+| `osu-radio-player` | [Local player](../../crates/osu-radio-player/src/lib.rs) | Local MP3, Ogg/Vorbis and WAV decoding/output, transport, seek and session volume; no source IDs or HTTP. |
 | `osu-radio-client` | [Public facade](../../crates/osu-radio-client/src/lib.rs), [session](../../crates/osu-radio-client/src/session.rs), [view models](../../crates/osu-radio-client/src/view_models/track.rs) | Changing reusable frontend communication, supervision or toolkit-free UI data. |
 | `osu-radio-gui-vizia` | [App state/events](../../apps/osu-radio-gui-vizia/src/app.rs), [view shell](../../apps/osu-radio-gui-vizia/src/views/mod.rs), [assets](../../apps/osu-radio-gui-vizia/src/assets.rs) | Changing desktop presentation and interactions. |
 | `osu-radio-qt` | [Rust launch/adapter](../../apps/osu-radio-qt/src/main.rs), [QML views](../../apps/osu-radio-qt/qml/Songs.qml) | Live Qt Songs/Settings and standalone component gallery; shares the client application controller with Vizia. |
@@ -58,12 +59,13 @@ flowchart LR
     Scanner -->|"launch / NDJSON"| Helper["C# Realm helper"]
     Helper -->|"read Realm and resolve file references"| Local
     Core["radio-core: markers and import types"] --> Scanner
-    Server -.-> Audio["Future audio serving / playback integration"]
+    Server -->|"stream source bytes by ID"| Client
+    Client -->|"temporary file"| Audio["Local audio player and output"]
     Server -.-> Hosted["Future hosted sources: undecided"]
 ```
 
 Persistence workflows are described in [database](database.md). The backend boundary owns
-OS access, source reading, persistence and eventual audio serving; reusable
+source-file access, source reading, persistence and audio serving; reusable
 scanner/domain pieces also support the development CLI. The frontend talks
 through the toolkit-free client. A replacement toolkit or hosting mechanism must
 preserve these responsibilities without inheriting Vizia or subprocess hosting
@@ -85,9 +87,9 @@ Tests and their limits are linked in the component guides.
 | Songs/settings tabs, library selection, window actions | Implemented UI bindings | [Frontend interaction table](frontend.md#implemented-interactions-and-placeholders). Source binding is not cross-platform interaction validation. |
 | Songs search | Implemented | Server substring search through the shared controller, 200 ms debounce; Settings search remains a placeholder. See [frontend](frontend.md). |
 | Library and folder settings | Implemented | [Frontend](frontend.md); server rows, bounded artwork loading, optional durations, folder dropdown and native chooser registration. Selection is presentation only. |
-| Transport, seeking, volume, output-device settings | Placeholder | [Frontend](frontend.md); visual controls, no playback engine or device selection wired. |
-| Qt Songs, Settings and component gallery | Connected client; offline gallery | [Qt frontend](frontend.md#qt-frontend); shared session/controller, library/media and folder registration; no playback. |
-| End-to-end local music playback | Product goal | Not implemented by selecting a track. |
+| Transport, seeking and volume | Implemented for one track | [Frontend](frontend.md); client downloads then plays locally. Device selection remains deferred. |
+| Qt Songs, Settings and component gallery | Connected client; offline gallery | [Qt frontend](frontend.md#qt-frontend); shared session/controller, playback, library/media and folder registration. |
+| Local audio playback | Implemented in source | Explicit Play; deterministic engine/HTTP tests do not establish physical output or Windows behavior. |
 | Hosted sources | Future direction | Provider, protocol and hosting remain undecided. |
 | Database repositories and complete snapshot replacement | Implemented | [Database](database.md); SQLite default, PostgreSQL alternative, explicit reset for legacy databases. |
 
@@ -107,8 +109,8 @@ needs a local installation.
 The shared services coordinate concrete repositories, installation-owned
 snapshots and shared immutable metadata. Read [database](database.md),
 [backend](backend.md) and the [API skill](../../.agents/skills/osu-radio-api/SKILL.md)
-for those contracts. Hosting, providers, mobile implementation and playback
-implementation remain open.
+for those contracts. Hosting, providers, mobile implementation, output-device selection and persisted
+volume remain open. Queue, automatic advance, shuffle and repeat are outside the current playback scope.
 
 ## Evidence and maintenance
 

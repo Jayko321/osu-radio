@@ -8,11 +8,13 @@ use cxx_qt_lib::{
 use osu_radio_client::{
     ServerOptions, Track,
     controller::{AppCommand, AppController, AppUpdate, ConnectionStatus, MediaTicket},
+    playback::{Playback, PlayerState},
 };
 use std::{
     collections::HashMap,
     pin::Pin,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 /// Preserve Qt's canonical list name in generated QML metadata.
@@ -100,6 +102,27 @@ pub mod ffi {
         #[qproperty(bool, folders_loading, cxx_name = "foldersLoading", READ, NOTIFY)]
         #[qproperty(bool, folder_busy, cxx_name = "folderBusy", READ, NOTIFY)]
         #[qproperty(bool, folder_can_retry, cxx_name = "folderCanRetry", READ, NOTIFY)]
+        #[qproperty(i32, current_audio_id, cxx_name = "currentAudioId", READ, NOTIFY)]
+        #[qproperty(i32, loading_audio_id, cxx_name = "loadingAudioId", READ, NOTIFY)]
+        #[qproperty(
+            bool,
+            selected_is_playing,
+            cxx_name = "selectedIsPlaying",
+            READ,
+            NOTIFY
+        )]
+        #[qproperty(bool, can_seek, cxx_name = "canSeek", READ, NOTIFY)]
+        #[qproperty(f64, playback_position, cxx_name = "playbackPosition", READ, NOTIFY)]
+        #[qproperty(f64, playback_duration, cxx_name = "playbackDuration", READ, NOTIFY)]
+        #[qproperty(
+            QString,
+            playback_position_label,
+            cxx_name = "playbackPositionLabel",
+            READ,
+            NOTIFY
+        )]
+        #[qproperty(QString, playback_message, cxx_name = "playbackMessage", READ, NOTIFY)]
+        #[qproperty(f32, volume, cxx_name = "volume", READ, NOTIFY)]
         type AppBridge = super::AppBridgeRust;
         #[qinvokable]
         #[cxx_override]
@@ -128,6 +151,15 @@ pub mod ffi {
         #[qinvokable]
         #[cxx_name = "selectTrack"]
         fn select_track(self: Pin<&mut AppBridge>, id: i32);
+        #[qinvokable]
+        #[cxx_name = "togglePlayback"]
+        fn toggle_playback(self: Pin<&mut AppBridge>);
+        #[qinvokable]
+        #[cxx_name = "seekPlayback"]
+        fn seek_playback(self: Pin<&mut AppBridge>, seconds: f64);
+        #[qinvokable]
+        #[cxx_name = "changeVolume"]
+        fn change_volume(self: Pin<&mut AppBridge>, volume: f32);
         #[qinvokable]
         #[cxx_name = "selectFolder"]
         fn select_folder(self: Pin<&mut AppBridge>, id: i32);
@@ -166,6 +198,17 @@ pub mod ffi {
 // Independent operation flags are exposed as individual typed QML properties.
 #[allow(clippy::struct_excessive_bools)]
 pub struct AppBridgeRust {
+    current_audio_id: i32,
+    loading_audio_id: i32,
+    selected_is_playing: bool,
+    can_seek: bool,
+    playback_position: f64,
+    playback_duration: f64,
+    playback_position_label: QString,
+    playback_message: QString,
+    volume: f32,
+    playback: Playback,
+    selected_track_duration: Option<Duration>,
     track_count: i32,
     selected_audio_id: i32,
     selected_title: QString,
@@ -195,6 +238,17 @@ pub struct AppBridgeRust {
 impl Default for AppBridgeRust {
     fn default() -> Self {
         Self {
+            current_audio_id: -1,
+            loading_audio_id: -1,
+            selected_is_playing: false,
+            can_seek: false,
+            playback_position: 0.0,
+            playback_duration: 0.0,
+            playback_position_label: QString::from("00:00"),
+            playback_message: QString::default(),
+            volume: 1.0,
+            playback: Playback::default(),
+            selected_track_duration: None,
             track_count: Default::default(),
             selected_audio_id: -1,
             selected_title: QString::default(),
@@ -237,6 +291,8 @@ const ROLES: [(i32, &str); 6] = [
 ];
 macro_rules! property_setter {
     ($setter:ident, $field:ident, $notify:ident, $ty:ty) => {
+        // Notify on exact property changes, including directly projected engine floats.
+        #[allow(clippy::float_cmp)]
         fn $setter(mut self: Pin<&mut Self>, value: $ty) {
             if self.rust().$field != value {
                 self.as_mut().rust_mut().$field = value;
@@ -246,6 +302,50 @@ macro_rules! property_setter {
     };
 }
 impl ffi::AppBridge {
+    property_setter!(
+        set_current_audio_id,
+        current_audio_id,
+        current_audio_id_changed,
+        i32
+    );
+    property_setter!(
+        set_loading_audio_id,
+        loading_audio_id,
+        loading_audio_id_changed,
+        i32
+    );
+    property_setter!(
+        set_selected_is_playing,
+        selected_is_playing,
+        selected_is_playing_changed,
+        bool
+    );
+    property_setter!(set_can_seek, can_seek, can_seek_changed, bool);
+    property_setter!(
+        set_playback_position,
+        playback_position,
+        playback_position_changed,
+        f64
+    );
+    property_setter!(
+        set_playback_duration,
+        playback_duration,
+        playback_duration_changed,
+        f64
+    );
+    property_setter!(
+        set_playback_position_label,
+        playback_position_label,
+        playback_position_label_changed,
+        QString
+    );
+    property_setter!(
+        set_playback_message,
+        playback_message,
+        playback_message_changed,
+        QString
+    );
+    property_setter!(set_volume, volume, volume_changed, f32);
     property_setter!(set_track_count, track_count, track_count_changed, i32);
     property_setter!(
         set_selected_audio_id,
@@ -432,6 +532,79 @@ impl ffi::AppBridge {
     pub fn select_track(self: Pin<&mut Self>, id: i32) {
         self.command(AppCommand::SelectTrack((id >= 0).then_some(id)));
     }
+    fn transport_command(&self) -> Option<AppCommand> {
+        if !self.has_selection {
+            return None;
+        }
+        Some(
+            if self.playback.current_audio_id == Some(self.selected_audio_id) {
+                if self.playback.snapshot.state == PlayerState::Playing {
+                    AppCommand::Pause
+                } else {
+                    AppCommand::Resume
+                }
+            } else {
+                AppCommand::PlayTrack(self.selected_audio_id)
+            },
+        )
+    }
+    pub fn toggle_playback(self: Pin<&mut Self>) {
+        if let Some(command) = self.transport_command() {
+            self.command(command);
+        }
+    }
+    pub fn seek_playback(self: Pin<&mut Self>, seconds: f64) {
+        if self.can_seek
+            && let Ok(position) = Duration::try_from_secs_f64(seconds)
+        {
+            self.command(AppCommand::Seek(position));
+        }
+    }
+    pub fn change_volume(self: Pin<&mut Self>, volume: f32) {
+        self.command(AppCommand::SetVolume(volume));
+    }
+    fn project_playback(mut self: Pin<&mut Self>) {
+        let current = self.playback.current_audio_id;
+        let selected_current = self.has_selection && current == Some(self.selected_audio_id);
+        let position = if selected_current {
+            self.playback.snapshot.position
+        } else {
+            Duration::ZERO
+        };
+        let duration = if selected_current {
+            self.playback
+                .snapshot
+                .duration
+                .or(self.selected_track_duration)
+        } else {
+            None
+        };
+        let playing = selected_current && self.playback.snapshot.state == PlayerState::Playing;
+        let loading = self.playback.loading_audio_id;
+        let message = self.playback.error.clone().unwrap_or_else(|| {
+            if loading.is_some() {
+                "Loading audio…".into()
+            } else {
+                String::new()
+            }
+        });
+        let volume = self.playback.snapshot.volume;
+        self.as_mut().set_current_audio_id(current.unwrap_or(-1));
+        self.as_mut().set_loading_audio_id(loading.unwrap_or(-1));
+        self.as_mut().set_selected_is_playing(playing);
+        self.as_mut()
+            .set_can_seek(duration.is_some_and(|d| !d.is_zero()));
+        self.as_mut()
+            .set_playback_duration(duration.map_or(0.0, |d| d.as_secs_f64()));
+        self.as_mut().set_playback_position(position.as_secs_f64());
+        self.as_mut()
+            .set_playback_position_label(QString::from(format_time(position)));
+        self.as_mut().set_playback_message(QString::from(message));
+        self.as_mut().set_volume(volume);
+        if let Some(duration) = duration {
+            self.set_selected_duration_label(QString::from(format_time(duration)));
+        }
+    }
     pub fn select_folder(self: Pin<&mut Self>, id: i32) {
         self.command(AppCommand::SelectFolder((id >= 0).then_some(id)));
     }
@@ -467,6 +640,8 @@ impl ffi::AppBridge {
         self.as_mut().data_changed(&index, &index, &roles);
     }
     fn selection(mut self: Pin<&mut Self>, track: Option<Track>) {
+        self.as_mut().rust_mut().selected_track_duration =
+            track.as_ref().and_then(|track| track.duration);
         let artwork = track
             .as_ref()
             .and_then(|t| t.cover_beatmap_id)
@@ -490,6 +665,7 @@ impl ffi::AppBridge {
                 .map_or_else(|| "--:--".to_owned(), Track::duration_label),
         ));
         self.as_mut().set_selected_artwork_url(artwork);
+        self.as_mut().project_playback();
         if let Some(track) = track {
             self.request_media(track.audio_source_id);
         }
@@ -552,6 +728,10 @@ impl ffi::AppBridge {
     }
     fn apply(mut self: Pin<&mut Self>, update: AppUpdate) {
         match update {
+            AppUpdate::Playback(playback) => {
+                self.as_mut().rust_mut().playback = playback;
+                self.project_playback();
+            }
             AppUpdate::Connection(status) => {
                 self.as_mut()
                     .set_connected(matches!(status, ConnectionStatus::Connected));
@@ -651,6 +831,11 @@ impl ffi::AppBridge {
     }
 }
 
+fn format_time(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    format!("{:02}:{:02}", seconds / 60, seconds % 60)
+}
+
 struct ArtworkAck {
     controller: AppController,
     ticket: MediaTicket,
@@ -688,8 +873,80 @@ mod tests {
         }
     }
 
+    fn playback_projection_keeps_selection_current_track_and_loading_independent() {
+        let mut object = native::new_app_bridge();
+        let mut bridge = object.pin_mut();
+        assert!(bridge.transport_command().is_none());
+        assert_eq!(bridge.volume.to_bits(), 1.0_f32.to_bits());
+        let mut first = Track::new("A", "Artist", Duration::from_secs(90));
+        first.audio_source_id = 7;
+        let mut second = Track::new("B", "Artist", Duration::from_secs(120));
+        second.audio_source_id = 42;
+        bridge.as_mut().selection(Some(first.clone()));
+        assert!(matches!(
+            bridge.transport_command(),
+            Some(AppCommand::PlayTrack(7))
+        ));
+        let mut playback = Playback {
+            current_audio_id: Some(7),
+            loading_audio_id: Some(42),
+            snapshot: osu_radio_client::playback::Snapshot {
+                state: PlayerState::Playing,
+                position: Duration::from_secs(23),
+                duration: Some(Duration::from_secs(91)),
+                volume: 0.5,
+            },
+            error: None,
+        };
+        bridge.as_mut().apply(AppUpdate::Playback(playback.clone()));
+        assert_eq!(bridge.current_audio_id, 7);
+        assert_eq!(bridge.loading_audio_id, 42);
+        assert!(bridge.selected_is_playing && bridge.can_seek);
+        assert_eq!(bridge.playback_position_label, QString::from("00:23"));
+        assert_eq!(bridge.selected_duration_label, QString::from("01:31"));
+        assert!(matches!(
+            bridge.transport_command(),
+            Some(AppCommand::Pause)
+        ));
+        bridge.as_mut().selection(Some(second));
+        assert_eq!(bridge.current_audio_id, 7);
+        assert!(!bridge.selected_is_playing && !bridge.can_seek);
+        assert_eq!(bridge.playback_position_label, QString::from("00:00"));
+        assert_eq!(bridge.selected_duration_label, QString::from("02:00"));
+        assert_eq!(bridge.volume.to_bits(), 0.5_f32.to_bits());
+        assert!(matches!(
+            bridge.transport_command(),
+            Some(AppCommand::PlayTrack(42))
+        ));
+        playback.error = Some("Download failed".into());
+        playback.loading_audio_id = None;
+        bridge.as_mut().apply(AppUpdate::Playback(playback.clone()));
+        assert_eq!(bridge.playback_message, QString::from("Download failed"));
+        assert_eq!(bridge.current_audio_id, 7);
+        bridge.as_mut().selection(Some(first));
+        for state in [
+            PlayerState::Paused,
+            PlayerState::Stopped,
+            PlayerState::Ended,
+        ] {
+            playback.snapshot.state = state;
+            bridge.as_mut().apply(AppUpdate::Playback(playback.clone()));
+            assert!(matches!(
+                bridge.transport_command(),
+                Some(AppCommand::Resume)
+            ));
+            assert!(bridge.can_seek);
+        }
+        bridge.as_mut().apply(AppUpdate::TracksReplaced(Vec::new()));
+        bridge.as_mut().selection(None);
+        assert_eq!(bridge.current_audio_id, 7);
+        assert!(!bridge.can_seek);
+        assert_eq!(bridge.playback_position_label, QString::from("00:00"));
+    }
+
     #[test]
     fn native_model_cache_and_destroyed_object_contracts() {
+        playback_projection_keeps_selection_current_track_and_loading_independent();
         assert!(
             native::check_artwork_cache().is_empty(),
             "{}",

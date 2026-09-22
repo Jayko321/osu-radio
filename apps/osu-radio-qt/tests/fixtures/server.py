@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import threading
+import time
 from urllib.parse import urlsplit, parse_qs
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -50,7 +51,9 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Event().wait(60)
             counts["library"] += 1
             n = counts["library"]
-            if case == "search":
+            if case == "playback":
+                payload = library([7, 42, 103])
+            elif case == "search":
                 query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
                 if query == "retry":
                     counts["retry"] += 1
@@ -70,6 +73,9 @@ class Handler(BaseHTTPRequestHandler):
                 status, payload = 500, {"message": "fixture folders unavailable"}
             else:
                 payload = [folder(31), folder(52)]
+        elif self.path.endswith("/audio"):
+            time.sleep(0.3)
+            status, payload = 404, {"error": "fixture audio unavailable"}
         elif self.path.endswith("/duration"):
             payload = {"duration_ms": 125000}
         elif self.path.endswith("/cover"):

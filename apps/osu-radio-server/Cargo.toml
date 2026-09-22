@@ -22,11 +22,14 @@ radio-core = { path = "../../crates/radio-core/" }
 radio-services = { path = "../../crates/radio-services/", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 tokio.workspace = true
+tokio-util = { version = "0.7", features = ["io"] }
 utoipa = { version = "5.5.0", features = ["axum_extras"], optional = true }
 utoipa-axum = { version = "0.2.0", optional = true }
 utoipa-scalar = { version = "0.3.0", features = ["axum"], optional = true }
 
 [dev-dependencies]
+http-body-util = "0.1"
 osu-radio-client = { path = "../../crates/osu-radio-client" }
 serde_json = { version = "1.0.145" }
 tempfile = { version = "3" }
+tower = { version = "0.5", features = ["util"] }

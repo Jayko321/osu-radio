@@ -11,6 +11,7 @@ QtObject {
     // qmllint enable unqualified
     readonly property var bridge: gallery || !window ? null : window.appBridge
     property int stage: 0
+    onStageChanged: if (testCase === "playback") console.info("Playback probe stage", stage)
     property int notifications: 0
     property int rowChanges: 0
     property int resets: 0
@@ -37,8 +38,14 @@ QtObject {
         Qt.quit();
     }
     function findChild(item: var, name: string): var {
+        if (!item) return null;
         if (item.objectName === name) return item;
-        const children = item.children || [];
+        // Popups are QObject data, and their content is reparented into the overlay.
+        if (item.contentItem && item.contentItem !== item) {
+            const content = findChild(item.contentItem, name);
+            if (content) return content;
+        }
+        const children = item.data && typeof item.data !== "function" ? item.data : (item.children || []);
         for (let i = 0; i < children.length; ++i) {
             const found = findChild(children[i], name);
             if (found) return found;
@@ -106,9 +113,53 @@ QtObject {
             break;
         }
     }
+    function playbackProbe(): void {
+        if (!bridge.connected || bridge.libraryLoading) return;
+        const play = findChild(window.contentItem, "playPauseButton");
+        const progress = findChild(window.contentItem, "playbackProgress");
+        switch (stage) {
+        case 0:
+            if (bridge.trackCount !== 3) return;
+            check(bridge.currentAudioId === -1 && bridge.loadingAudioId === -1, "selection alone does not start audio");
+            check(play.enabled && play.accessibleName === "Play", "selected track can play");
+            check(!progress.enabled && bridge.playbackPositionLabel === "00:00", "noncurrent selection has no seeking");
+            bridge.selectTrack(42);
+            stage = 1;
+            break;
+        case 1:
+            if (bridge.selectedAudioId !== 42) return;
+            findChild(window.contentItem, "volumeButton").clicked();
+            stage = 2;
+            break;
+        case 2: {
+            const volume = findChild(window.contentItem, "volumeSlider");
+            if (!volume || !volume.visible) return;
+            volume.value = 0.25;
+            volume.moved();
+            play.clicked();
+            stage = 3;
+            break;
+        }
+        case 3:
+            if (bridge.loadingAudioId !== 42 || bridge.volume !== 0.25) return;
+            check(bridge.playbackMessage.includes("Loading"), "loading status projects immediately");
+            check(bridge.currentAudioId === -1, "download has not committed a track");
+            bridge.selectTrack(7);
+            stage = 4;
+            break;
+        case 4:
+            if (bridge.selectedAudioId !== 7 || bridge.loadingAudioId !== -1) return;
+            check(bridge.playbackMessage.includes("fixture audio unavailable"), "download error is visible beside controls");
+            check(bridge.currentAudioId === -1 && !progress.enabled, "failed download leaves playback empty");
+            check(bridge.volume === 0.25, "volume survives selection changes and failed download");
+            finish();
+            break;
+        }
+    }
     function step(): void {
         if (passed || gallery) return;
         if (testCase === "search") { searchProbe(); return; }
+        if (testCase === "playback") { playbackProbe(); return; }
         if (testCase === "requests") {
             if (!bridge.connected || bridge.folders.length !== 2) return;
             check(bridge.libraryLoading, "library HTTP request remains pending at close");

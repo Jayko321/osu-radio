@@ -156,6 +156,33 @@ fn songs_search_debounces_retries_and_clears_through_the_live_adapter() {
 
 #[cfg(unix)]
 #[test]
+fn playback_controls_show_loading_errors_and_global_volume_without_a_device() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("isolated playback fixture");
+    let server = directory.path().join("fixture-server");
+    std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fixture");
+    assert_probe(&run(
+        &[],
+        "offscreen",
+        directory.path(),
+        &server,
+        "playback",
+    ));
+    let requests = std::fs::read_to_string(directory.path().join("requests")).expect("requests");
+    assert_eq!(
+        requests
+            .lines()
+            .filter(|line| line.ends_with("/audio"))
+            .collect::<Vec<_>>(),
+        ["/api/audio-sources/42/audio"]
+    );
+    assert_child_reaped(directory.path());
+}
+
+#[cfg(unix)]
+#[test]
 fn closing_with_a_pending_http_request_awaits_child_cleanup() {
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().expect("isolated fixture directory");

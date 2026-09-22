@@ -15,6 +15,7 @@ pub(crate) fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/beatmaps/{id}/cover", get(media::cover))
         .route("/api/audio-sources/{id}/duration", get(media::duration))
+        .route("/api/audio-sources/{id}/audio", get(media::audio))
         .route("/api/tracks", get(tracks::list_tracks))
         .route("/api/beatmap-sets", get(beatmap_sets::list_beatmap_sets))
         .route("/api/user-data", get(user_data::get_user_data))
@@ -42,6 +43,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .routes(routes!(tracks::list_tracks))
         .routes(routes!(media::cover))
         .routes(routes!(media::duration))
+        .routes(routes!(media::audio))
         .routes(routes!(user_data::get_user_data))
         .routes(routes!(
             user_data::list_osu_folders,

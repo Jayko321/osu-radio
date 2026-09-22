@@ -5,6 +5,7 @@ pub mod controller;
 #[cfg(feature = "mock")]
 pub mod mock;
 pub mod models;
+pub mod playback;
 pub mod server;
 pub mod session;
 pub mod view_models;

@@ -108,6 +108,7 @@ playback.
 | Scanner change spanning these paths | `cargo test -p radio-scanner --locked` | Combines the preceding scanner checks; helper build prerequisites still apply. |
 | C# helper source | `dotnet build tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj --configuration Release --nologo` | Compiles the producer; no automated C# test project currently exists. Follow the [scanner skill](../../.agents/skills/osu-radio-scanner/SKILL.md) for contract checks. |
 | CLI wiring | `cargo test -p osu-radio-cli --locked` and `cargo clippy -p osu-radio-cli --all-targets --locked` | Argument tests reject removed `store --count` and retain `--clear`; memory SQLite connection check. No real source import. |
+| Local audio engine | `cargo test -p osu-radio-player --locked` | MP3 CBR/VBR, Ogg/Vorbis and WAV decoding/seek with controlled mixer consumption; no physical device. |
 | Client formatting, state, readiness parsing | `cargo test -p osu-radio-client --lib --locked` | [Client tests](../../crates/osu-radio-client/src/lib.rs), [Track tests](../../crates/osu-radio-client/src/view_models/track.rs), [readiness tests](../../crates/osu-radio-client/src/server.rs) and controller tests; process fixtures are isolated. |
 | GUI code and embedded stylesheet paths | `cargo check -p osu-radio-gui-vizia --release --locked` | Release `include_style!` resolves stylesheet paths at compile time. Debug can defer missing paths to runtime. |
 | Server changes, default docs | `cargo clippy -p osu-radio-server --all-targets --locked` | Compiles the documentation-enabled router; does not launch the server. |
@@ -414,3 +415,44 @@ Check crop/cover changes, typography, blur, scrolling, keyboard navigation,
 menu and modal focus restoration/trapping, disabled controls and native window
 move/resize/minimize/maximize/close. The automated software smoke tests cannot
 establish these results, physical playback or Windows compatibility.
+
+## Audio playback verification
+
+Playback uses the client-owned worker and Rodio 0.22.2 with `playback`, `mp3`, `vorbis` and `wav`.
+Linux builds need the native audio development libraries required by CPAL/ALSA.
+Device initialization occurs on the first Play; galleries and normal startup do
+not require an output device. No database migration or reset is needed.
+
+Run the player tests, client tests with and without `mock`, server tests with and
+without `docs`, and both frontend checks listed above. Scope Clippy to these five
+packages, testing the docs-disabled server separately. Never select all database
+features together. Audio tests must consume decoded data with a controlled mixer,
+not open the machine's physical device. HTTP tests use disposable sources and
+databases. They verify bytes, status codes, bounded downloads and cancellation;
+controller tests cover selection independence, stale requests and cleanup.
+
+Manual acceptance remains separate: play MP3, Ogg/Vorbis and WAV files, select another row while audio
+continues, explicitly play that row, pause/resume, seek forward/backward and after
+EOF, adjust global volume, and close during a download. Test slider dragging
+without tick interference in Qt and Vizia. Repeat physical playback and lifecycle
+checks on Windows. Queue, automatic advance, shuffle, repeat, device selection and
+volume persistence across launches are outside this stage.
+
+Executed on Linux on 2026-09-20 for this playback change: player tests passed
+(6), client library tests passed with `mock` disabled (35) and enabled (41),
+and server tests passed with `docs` enabled (21) and disabled (20). Existing
+benchmark tests stayed ignored. Player/client/server scoped all-target Clippy
+passed with warnings denied. Vizia passed 20 tests, scoped Clippy and the release
+check. Qt passed 11 tests (including six offscreen scenarios), scoped Clippy and
+generated-import `qmllint`; its existing real-backend test stayed ignored. HTTP
+tests required execution outside the sandbox because loopback socket binding is
+blocked inside it. Debug builds of the server and Qt frontend also passed;
+workspace formatting and changed guide links were checked. These are deterministic
+engine, isolated HTTP and controller checks, not physical audio or Windows tests.
+
+Executed on Linux on 2026-09-22 for the format extension: all six player tests
+passed with MP3 CBR/VBR, Ogg/Vorbis and PCM WAV fixtures, including extensionless
+decoding and seek/EOF/replay coverage. Client tests passed without/with `mock`
+(35/41; two benchmarks ignored in each). Scoped player/client all-target Clippy
+with warnings denied and formatting passed. Physical playback and Windows were
+not exercised in this follow-up.

@@ -50,7 +50,7 @@ pub(crate) fn track_card(
         .toggle_class(
             "playing",
             state
-                .playing
+                .selected_audio_id
                 .map(move |id| *id == track.get().as_ref().map(|t| t.audio_source_id)),
         )
         .on_press(move |cx| {

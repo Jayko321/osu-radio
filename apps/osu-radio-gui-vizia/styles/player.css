@@ -115,3 +115,55 @@ button.play-button {
 button.play-button:hover {
     background-color: var(--accent);
 }
+
+slider.audio-slider {
+    width: 1s;
+    height: 16px;
+    alignment: center;
+}
+slider.audio-slider .track {
+    width: 1s;
+    height: 4px;
+    corner-radius: 4px;
+    background-color: var(--text-secondary);
+}
+slider.audio-slider .range {
+    height: 4px;
+    corner-radius: 4px;
+    background-color: var(--accent);
+}
+slider.audio-slider .thumb {
+    width: 16px;
+    height: 16px;
+    corner-radius: 50%;
+    background-color: var(--accent);
+}
+slider.audio-slider:disabled {
+    opacity: 0.45;
+}
+.volume-dropdown {
+    width: 32px;
+    height: 32px;
+}
+.volume-popup {
+    width: 180px;
+    height: auto;
+    padding: 12px;
+    gap: 10px;
+    background-color: #24232d;
+    corner-radius: 8px;
+}
+.volume-popup label {
+    font-size: 12px;
+    color: var(--text);
+}
+.playback-status {
+    position-type: absolute;
+    top: 178px;
+    width: 1s;
+    height: 20px;
+    font-size: 12px;
+    color: var(--text);
+    text-wrap: false;
+    text-overflow: ellipsis;
+}

@@ -10,18 +10,18 @@ For a GUI task, use the [osu-radio-gui procedure](../../.agents/skills/osu-radio
 | --- | --- | --- |
 | HTTP transport, independent wire DTOs, errors | [client `api.rs`](../../crates/osu-radio-client/src/api.rs), [client `models.rs`](../../crates/osu-radio-client/src/models.rs) | Reusable frontend/backend communication stays in `osu-radio-client`. DTO details are deliberately excluded from this guide. |
 | Session and child lifecycle | [client `session.rs`](../../crates/osu-radio-client/src/session.rs), [client `server.rs`](../../crates/osu-radio-client/src/server.rs) | Change supervision here, coordinating readiness output with the server. |
-| Shared application controller | [client `controller.rs`](../../crates/osu-radio-client/src/controller.rs) | Session lifecycle, independent collection loading, ID selection, registration and bounded media scheduling shared by both frontends. |
+| Shared application controller | [client `controller.rs`](../../crates/osu-radio-client/src/controller.rs) | Session lifecycle, playback worker, independent collection loading, ID selection, registration and bounded media scheduling shared by both frontends. |
 | Toolkit-free UI data | [client `lib.rs`](../../crates/osu-radio-client/src/lib.rs), [view models](../../crates/osu-radio-client/src/view_models/track.rs) | Shared loading/error representation and track formatting belong here, without Vizia signals, CSS classes, or asset names. |
 | Window, UI state, events, async result dispatch | [GUI `app.rs`](../../apps/osu-radio-gui-vizia/src/app.rs), [GUI `main.rs`](../../apps/osu-radio-gui-vizia/src/main.rs) | Keep UI event handling and rendering state in the GUI; send reusable use cases through the client. |
 | View structure and bindings | [GUI `views`](../../apps/osu-radio-gui-vizia/src/views/mod.rs) | Change the smallest existing area or shared component that owns the view. |
 | Appearance and bundled visuals | [styles](../../apps/osu-radio-gui-vizia/styles), [asset registration](../../apps/osu-radio-gui-vizia/src/assets.rs) | Use the existing area stylesheet and GUI-owned asset mapping. |
 | Library and folder settings | [GUI events](../../apps/osu-radio-gui-vizia/src/app.rs), [settings](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) | Server data, display selection and picker registration. |
 
-The [client manifest](../../crates/osu-radio-client/Cargo.toml) contains HTTP/serialization/runtime dependencies and no GUI toolkit. The [GUI manifest](../../apps/osu-radio-gui-vizia/Cargo.toml) depends on that client, Tokio, Vizia 0.4.0, and rfd for the native folder chooser. Preserve the domain/backend/client/GUI boundary when replacing today's toolkit or hosting arrangement: a frontend should not start reading osu! installation files directly.
+The [client manifest](../../crates/osu-radio-client/Cargo.toml) contains HTTP/serialization/runtime and local-player dependencies, with no GUI toolkit. The [GUI manifest](../../apps/osu-radio-gui-vizia/Cargo.toml) depends on that client, Tokio, Vizia 0.4.0, and rfd for the native folder chooser. Preserve the domain/backend/client/GUI boundary when replacing today's toolkit or hosting arrangement: a frontend should not start reading osu! installation files directly.
 
 ## Reusable client behavior
 
-`ApiClient` owns a reusable HTTP client and normalized base URL. Transport failures, response decoding failures, and unsuccessful HTTP statuses remain distinct `ApiError` cases. Status errors use the response's message where it can be decoded, with the HTTP status as fallback. Keep this handling out of views; this guide intentionally does not freeze endpoint payloads or persistence-dependent status contracts.
+`ApiClient` owns a reusable HTTP client and normalized base URL. Transport failures, response decoding failures, and unsuccessful HTTP statuses remain distinct `ApiError` cases. Status errors use the response's `error` field where it can be decoded, with the HTTP status as fallback. Keep this handling out of views; this guide intentionally does not freeze endpoint payloads or persistence-dependent status contracts.
 
 `Loading<T>` represents `Idle`, `Pending`, `Ready(T)`, and `Failed(String)` and offers `is_pending`, `value`, `error`, and `from_result`. `describe` walks an error's source chain into a single display message, suppressing cause text already present. These helpers are available to frontends; the current GUI uses a status signal rather than `Loading<T>` for connection status. Unit tests are colocated in [client `lib.rs`](../../crates/osu-radio-client/src/lib.rs).
 
@@ -37,6 +37,51 @@ not add difficulty notation. `Track` retains every related difficulty (IDs, null
 multiplicity), plus title, artist, subtitle and optional `Duration`, with no toolkit assets. Unknown duration is `--:--`. Selection survives a
 refresh by audio ID, falling back to the first remaining row. Tests live in
 [track.rs](../../crates/osu-radio-client/src/view_models/track.rs).
+
+## Local audio playback
+
+[`osu-radio-player`](../../crates/osu-radio-player/src/lib.rs) wraps Rodio 0.22.2
+with `playback`, `mp3`, `vorbis` and `wav` features (defaults disabled). Its synchronous `Player` accepts local
+paths and exposes load/play/pause/stop/seek/volume/snapshot. It has no HTTP, IDs,
+database or toolkit dependencies. Content sniffing supports extensionless lazer
+files. Loading prepares a paused source and preserves the previous source on
+open/decode failure. Stop resets position; Play after EOF restarts; seek clamps to
+known duration and preserves Playing/Paused, restoring EOF in pause. Volume is a
+finite linear coefficient in `0..=1`, initially 1, retained for the session.
+
+Supported audio is MP3, Ogg/Vorbis and PCM WAV, matching the `.mp3`, `.ogg` and
+`.wav` audio extensions in [osu! source](https://github.com/ppy/osu/blob/master/osu.Game/Utils/SupportedExtensions.cs)
+(checked 2026-09-22). The [osu! audio guide](https://osu.ppy.sh/wiki/en/Guides/Compressing_files)
+identifies Vorbis as the OGG codec. Extensionless decoder and seek coverage lives
+in [player tests](../../crates/osu-radio-player/src/tests.rs); adding decoders
+requires no HTTP or GUI changes because both frontends use this shared engine.
+
+The shared [controller](../../crates/osu-radio-client/src/controller.rs) handles
+`PlayTrack`, `Pause`, `Resume`, `Stop`, `Seek` and `SetVolume` and emits typed
+`Playback` updates. Selection, current audio ID and loading audio ID are separate.
+A dedicated client worker owns the engine and opens the device only on first
+Play; missing output hardware cannot prevent startup or offline galleries.
+[`ApiClient`](../../crates/osu-radio-client/src/api.rs) downloads audio by ID into
+a temporary file in chunks, with a 256 MiB limit and the existing 30-second timeout.
+Only the current file and one pending download are retained. Replaying the current
+track reuses its file. A new Play cancels and invalidates the previous request;
+stale results cannot replace current audio. A continues while B downloads, and a
+failure leaves A in place. Selection, search, refresh and disappearance from the
+visible library do not stop playback. Engine position updates arrive every 100 ms
+while playing; state changes are published immediately. Shutdown cancels downloads,
+joins the audio worker and releases files before ending the backend session.
+
+Both frontends keep the selected-track panel. A normal row click only selects.
+The central button toggles Play/Pause for the current selection or explicitly
+loads a different selection. Position/seek apply only to the selected current
+track; volume is global regardless of selection. Worker transport commands verify the
+selected audio ID again when executed, so a delayed seek/pause cannot affect a
+newly committed track. Device callback errors reach the shared playback state;
+decoders are released directly without waiting for further audio callbacks.
+Loading and errors appear beside
+existing controls. Galleries remain offline. Queue, automatic advance, shuffle,
+repeat, device selection and persisted volume are not implemented. Physical
+output, desktop slider interaction and Windows require separate manual checks.
 
 ## Session and server supervision
 
@@ -114,8 +159,8 @@ These are source-confirmed bindings, not a claim of interactive verification on 
 | Search fields | Songs searches the server through the shared controller; Settings only edits its independent placeholder query. | [search row](../../apps/osu-radio-gui-vizia/src/views/components/search_row.rs), [track list](../../apps/osu-radio-gui-vizia/src/views/songs/track_list.rs), [settings pane](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) |
 | Song filter chips | Static labels and visual hover treatment; no filter or picker actions. | [chip](../../apps/osu-radio-gui-vizia/src/views/components/chip.rs) |
 | Folder settings | Display-only dropdown selection, native directory picker with immediate registration, and failure-only retry. No GUI editing/removal, import or output-device selection. | [settings](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) |
-| Transport, volume, add, stack icon | Shared native icon buttons, explicitly disabled while playback/playlist actions are unavailable. | [controls](../../apps/osu-radio-gui-vizia/src/views/player/controls.rs), [icon helpers](../../apps/osu-radio-gui-vizia/src/views/components/icon.rs), [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs) |
-| Progress and elapsed time | Zero progress and `00:00` elapsed; optional duration follows the selected track. No seeking or playback clock. | [progress](../../apps/osu-radio-gui-vizia/src/views/player/progress.rs), [player stylesheet](../../apps/osu-radio-gui-vizia/styles/player.css) |
+| Transport and volume | Central Play/Pause controls the selected track; volume opens a compact session-wide slider. Queue, shuffle, repeat and playlist controls remain disabled. | [controls](../../apps/osu-radio-gui-vizia/src/views/player/controls.rs), [icon helpers](../../apps/osu-radio-gui-vizia/src/views/components/icon.rs), [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs) |
+| Progress and elapsed time | Engine position for the selected current track; seek commits at drag completion and does not follow ticks while dragging. Other selected tracks show zero position with seek disabled. | [progress](../../apps/osu-radio-gui-vizia/src/views/player/progress.rs), [player stylesheet](../../apps/osu-radio-gui-vizia/styles/player.css) |
 | Window controls | Custom minimize/maximize/close actions and title-bar dragging; double-click handler requests maximize toggling. | [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs), [events](../../apps/osu-radio-gui-vizia/src/app.rs) |
 
 The app disables native decorations, so empty title-bar space and custom controls are operational UI. Dragging is guarded by `cx.hovered() == cx.current()` because mouse-down events bubble from children. The double-click handler has the same empty-bar target guard, preventing a control double-click from maximizing the window. The maximize icon follows a local boolean, not an observed OS window state; an OS-side maximize can desynchronize it, and a later button press may only bring the tracked state back into agreement.
@@ -236,7 +281,7 @@ The private `PlayerGeometry` in [player/mod.rs](../../apps/osu-radio-gui-vizia/s
 | 1920 × 1080 | 510px | 960px |
 | 2560 × 1440 | 640px | 960px |
 
-The cover is centered in the flexible region above a 173px metadata/progress/control group, with 52px bottom spacing. Its square size is capped by both available width and height. Player titles/artists, card text and connection status stay on one line and truncate overflowing text. The progress knob is centered on the fill endpoint as width changes; progress remains zero until playback is implemented.
+The cover is centered in the flexible region above a 173px metadata/progress/control group, with 52px bottom spacing. Its square size is capped by both available width and height. Player titles/artists, card text and connection status stay on one line and truncate overflowing text. The progress knob is centered on the fill endpoint as width changes; progress follows the engine only when the selected track is current.
 
 CSS `font-weight` selects the bundled Poppins static face (400/500/600/700); Nunito remains in the fallback family list.
 
@@ -264,8 +309,8 @@ frontend using the same client controller as Vizia. Default launch starts a live
 session; build the server and provide its `.env` as described in
 [development](development.md#qt-frontend). `--help` and invalid arguments are
 handled before GUI initialization. `--component-gallery` remains standalone and
-never creates a runtime, session or database. Playback, seeking, filtering,
-playlists and GUI import remain unavailable. Registering a folder does not import it.
+never creates a runtime, session, audio device or database. Playback and seeking
+use the shared controller; filter chips, playlists and GUI import remain unavailable. Registering a folder does not import it.
 
 The production adapter exposes typed properties and a `QAbstractListModel` with
 `audioId`, `title`, `artist`, `subtitle`, `durationLabel` and `artworkUrl` roles.

@@ -448,16 +448,34 @@ Basic.ApplicationWindow {
                     y: 85
                     width: parent.width
                     height: 16
-                    value: 0
-                    enabled: false
+                    from: 0
+                    to: Math.max(bridge.playbackDuration, 1)
+                    enabled: bridge.canSeek
                     padding: 0
-                    Accessible.name: "Seeking (unavailable)"
+                    property int dragAudioId: -1
+                    Accessible.name: "Playback position"
+                    Component.onCompleted: value = bridge.playbackPosition
+                    onPressedChanged: {
+                        if (pressed) dragAudioId = bridge.selectedAudioId;
+                        else {
+                            if (enabled && dragAudioId === bridge.selectedAudioId) bridge.seekPlayback(value);
+                            value = bridge.playbackPosition;
+                        }
+                    }
+                    onMoved: if (!pressed) bridge.seekPlayback(value)
+                    Connections {
+                        target: bridge
+                        function onPlaybackPositionChanged() { if (!progress.pressed) progress.value = bridge.playbackPosition; }
+                        function onPlaybackDurationChanged() { if (!progress.pressed) progress.value = bridge.playbackPosition; }
+                        function onSelectedAudioIdChanged() { if (!progress.pressed) progress.value = bridge.playbackPosition; }
+                    }
                     background: Rectangle { y: 6; width: progress.width; height: 4; radius: 2; color: Theme.muted }
-                    handle: Rectangle { x: -8; width: 16; height: 16; radius: 8; color: Theme.accent }
+                    handle: Rectangle { x: progress.visualPosition * (progress.width - width); width: 16; height: 16; radius: 8; color: Theme.accent }
                 }
                 Text {
                     y: 101
-                    text: "00:00"
+                    objectName: "playbackPosition"
+                    text: bridge.playbackPositionLabel
                     color: Theme.text
                     font.family: Theme.fontFamily
                     font.pixelSize: 12
@@ -475,7 +493,38 @@ Basic.ApplicationWindow {
                     y: 125
                     width: parent.width
                     height: 48
-                    IconButton { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; iconName: "volume-2"; accessibleName: "Volume (unavailable)"; enabled: false }
+                    IconButton {
+                        id: volumeButton
+                        objectName: "volumeButton"
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        iconName: "volume-2"
+                        accessibleName: "Volume"
+                        onClicked: volumePopup.open()
+                        Basic.Popup {
+                            id: volumePopup
+                            objectName: "volumePopup"
+                            y: -height - 8
+                            width: 180
+                            height: 80
+                            padding: 12
+                            background: Rectangle { radius: 8; color: Theme.surface; border.color: Theme.muted }
+                            contentItem: Column {
+                                spacing: 4
+                                Text { text: Math.round(bridge.volume * 100) + "%"; color: Theme.text; font.family: Theme.fontFamily; font.pixelSize: 12 }
+                                Basic.Slider {
+                                    id: volumeSlider
+                                    objectName: "volumeSlider"
+                                    width: parent.width
+                                    from: 0
+                                    to: 1
+                                    value: bridge.volume
+                                    Accessible.name: "Volume percentage"
+                                    onMoved: bridge.changeVolume(value)
+                                }
+                            }
+                        }
+                    }
                     Row {
                         anchors.centerIn: parent
                         spacing: 28
@@ -484,15 +533,31 @@ Basic.ApplicationWindow {
                         IconButton {
                             width: 48
                             height: 48
-                            iconName: "play"
-                            accessibleName: "Play (unavailable)"
-                            enabled: false
+                            objectName: "playPauseButton"
+                            iconName: bridge.selectedIsPlaying ? "pause" : "play"
+                            accessibleName: bridge.selectedIsPlaying ? "Pause" : "Play"
+                            enabled: bridge.hasSelection && bridge.connected
+                            onClicked: bridge.togglePlayback()
                             background: Rectangle { radius: 24; color: Theme.accent }
                         }
                         IconButton { anchors.verticalCenter: parent.verticalCenter; iconName: "skip-forward"; accessibleName: "Next track (unavailable)"; enabled: false }
                         IconButton { anchors.verticalCenter: parent.verticalCenter; iconName: "repeat-2"; accessibleName: "Repeat (unavailable)"; enabled: false }
                     }
                     IconButton { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; iconName: "circle-plus"; accessibleName: "Add to playlist (unavailable)"; enabled: false }
+                }
+                Text {
+                    objectName: "playbackMessage"
+                    y: 182
+                    width: parent.width
+                    text: bridge.playbackMessage
+                    visible: text.length > 0
+                    color: Theme.text
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 12
+                    elide: Text.ElideRight
+                    Basic.ToolTip.visible: messageHover.hovered
+                    Basic.ToolTip.text: text
+                    HoverHandler { id: messageHover }
                 }
             }
         }
