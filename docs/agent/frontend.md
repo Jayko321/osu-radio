@@ -146,7 +146,7 @@ through `ContextProxy::emit`; image decoding and rendering remain Skia-specific.
 
 The General section uses the shared **osu! folders** dropdown with names formatted as `{kind} - {root_path}` and an adjacent plus button. The first returned folder is selected initially; selection is retained by ID on refresh and is session-local presentation only. An empty list shows `No osu! folders`. Long dropdown entries wrap, and the collapsed field has a full-name tooltip. Selecting a folder closes the popup and does not filter songs.
 
-The plus button opens `rfd::AsyncFileDialog` for a directory and immediately registers the chosen path through the client API with no label. Cancellation leaves folder state unchanged. Adding is disabled during connection, loading, picking and registration. Duplicate registration selects the existing stored folder without adding a duplicate or changing its saved values. Loading/registration errors appear inline; Retry reloads a failed list or reopens the picker after failed registration. Settings have no manual path entry, label editing, enabled toggle, save/delete controls or last-scan display. Existing labels and backend CRUD contracts remain intact. Registration does not import songs; existing libraries obtain cover references after CLI reimport without `--clear`.
+In Vizia, the plus button opens `rfd::AsyncFileDialog` for a directory and immediately registers the chosen path through the client API with no label. Cancellation leaves folder state unchanged. Adding is disabled during connection, loading, picking and registration. Duplicate registration selects the existing stored folder without adding a duplicate or changing its saved values. Loading/registration errors appear inline; Retry reloads a failed list or reopens the picker after failed registration. Settings have no manual path entry, label editing, enabled toggle, save/delete controls or last-scan display. Existing labels and backend CRUD contracts remain intact. Registration does not import songs; existing libraries obtain cover references after CLI reimport without `--clear`.
 
 ## Implemented interactions and placeholders
 
@@ -310,7 +310,7 @@ session; build the server and provide its `.env` as described in
 [development](development.md#qt-frontend). `--help` and invalid arguments are
 handled before GUI initialization. `--component-gallery` remains standalone and
 never creates a runtime, session, audio device or database. Playback and seeking
-use the shared controller; filter chips, playlists and GUI import remain unavailable. Registering a folder does not import it.
+use the shared controller; filter chips and playlists remain unavailable. Qt folder additions now import their source when Apply succeeds; Vizia retains its immediate registration chooser.
 
 The production adapter exposes typed properties and a `QAbstractListModel` with
 `audioId`, `title`, `artist`, `subtitle`, `durationLabel` and `artworkUrl` roles.
@@ -326,9 +326,40 @@ independent search strings, list/status presentation and the persistent player.
 It retains the 1024×640 minimum, 50px title bar, 480px sidebar, 90px cards and
 adaptive player geometry. Artwork uses centered cropping. Library refresh remains
 outside the scrolling list. Settings use folder IDs, wrapped options and a full
-label tooltip. Add is disabled during connection, loading, picking and registration;
-Retry reloads a failed collection or reopens the native picker after registration
-failure. Selection updates the card, player and backdrop together.
+label tooltip. Add is disabled during connection and folder loading; it opens the
+folder selection modal. Retry reloads a failed folder collection. Selection updates
+the card, player and backdrop together.
+
+[`AppModal.qml`](../../apps/osu-radio-qt/qml/components/AppModal.qml) wraps Qt's native
+modal Popup with a centered, window-constrained panel, reusable body/footer, close
+control, Tab containment, Escape/backdrop dismissal and focus restoration. Both
+application roots capture an explicit scene container that excludes the overlay.
+ShaderEffectSource/MultiEffect blur that scene while the popup is visible; capture
+and blur are disabled while closed. The gallery playlist dialog uses the same modal.
+
+[`FolderSelectionModal.qml`](../../apps/osu-radio-qt/qml/components/FolderSelectionModal.qml)
+uses a 740x620 panel constrained to the window, a scrolling list and fixed Apply
+footer. Rows show bundled Figma Stable/Lazer logos, paths, source badges and
+individual beatmap/difficulty counts. Registered rows are green; plus/minus buttons
+stage or undo additions/removals, with outlines for pending actions. Counts animate
+Computing every 400 ms, include zero, and expose a separate count-error retry.
+Need help opens https://www.google.com through Qt.openUrlExternally.
+
+The toolkit-free [`folder workflow`](../../crates/osu-radio-client/src/controller/folders.rs)
+seeds registered rows on each opening, starts Full backend discovery, merges candidates
+incrementally by resolved marker and registered ID, and runs at most two preview
+requests concurrently. Native directory selection starts scoped Known discovery
+and stages a unique new installation; ambiguous results require individual toggles.
+Choosing a directory never saves it. Closing aborts discovery and client preview
+requests, discards pending actions, and invalidates late network/picker results.
+Counts do not gate Apply.
+
+Apply snapshots actions, imports additions before deleting removals, and continues
+sequentially after individual errors. Success clears each action immediately; failed
+rows retain their actions/errors for retry. Successful changes refresh folders and
+the current library query. Complete success closes the modal; partial failure keeps
+it open. Editing and dismissal are disabled during Apply. No metadata cache or
+schema migration was added.
 
 [`WindowBar.qml`](../../apps/osu-radio-qt/qml/WindowBar.qml) uses Qt window APIs
 for drag/resize/minimize/maximize/restore/close and observes actual window
@@ -345,7 +376,7 @@ Its bounded JSON snapshot is not used for the production library. Shared
 [`components`](../../apps/osu-radio-qt/qml/components) preserve native control
 keyboard behavior, popup/modal focus handling and disabled demonstrations.
 The menu's configurable value role uses folder IDs in Settings and original
-indices in the gallery. Gallery actions still do not create playlists.
+indices in the gallery. Gallery actions still do not create playlists. Its folder examples exercise registered/new rows, zero and failed counts, Computing, staged actions and partial-success retry without filesystem or backend access.
 
 [`build.rs`](../../apps/osu-radio-qt/build.rs) embeds QML and assets; resource
 loading does not depend on the working directory. Server configuration still does.

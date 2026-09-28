@@ -21,6 +21,11 @@ if starts == 1 and case == "fixture":
 
 counts = {"library": 0, "folders": 0, "retry": 0}
 library_pending = threading.Event()
+saved_folders = [31, 52]
+imports = {}
+metadata_calls = {}
+metadata_active = 0
+metadata_lock = threading.Lock()
 
 
 def folder(identifier):
@@ -40,6 +45,83 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
+    def reply(self, status, payload):
+        data = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        try:
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def do_POST(self):
+        global metadata_active
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+        marker = body.get("marker_path", "")
+        with (root / "requests").open("a") as log:
+            log.write("POST " + self.path + " " + marker + "\n")
+        if self.path.endswith("/discover"):
+            events = [{"event": "candidate", "kind": "lazer", "root_path": "/fixtures/31",
+                       "marker_path": "/fixtures/31/client.realm", "registered_id": 31}]
+            for i in [101, 101, 102]:
+                events.append({"event": "candidate", "kind": "stable" if i == 101 else "lazer",
+                               "root_path": "/fixtures/" + str(i),
+                               "marker_path": "/fixtures/" + str(i) + "/" + ("osu!.db" if i == 101 else "client.realm"),
+                               "registered_id": i if i in saved_folders else None})
+            events.append({"event": "complete"})
+            data = b"".join(json.dumps(event).encode() + b"\n" for event in events)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            try:
+                for offset in range(0, len(data), 23):
+                    self.wfile.write(data[offset:offset + 23])
+                    self.wfile.flush()
+                    time.sleep(0.003)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        elif self.path.endswith("/metadata"):
+            with metadata_lock:
+                metadata_active += 1
+                maximum = root / "metadata_max"
+                maximum.write_text(str(max(metadata_active, int(maximum.read_text()) if maximum.exists() else 0)))
+                metadata_calls[marker] = metadata_calls.get(marker, 0) + 1
+                n = metadata_calls[marker]
+            time.sleep(0.12)
+            if "/102/" in marker and n == 1:
+                self.reply(500, {"error": "fixture preview unavailable"})
+            else:
+                self.reply(200, {"beatmap_count": 0 if "/102/" in marker else 17})
+            with metadata_lock:
+                metadata_active -= 1
+        elif self.path.endswith("/import"):
+            i = int(marker.split("/")[2])
+            imports[i] = imports.get(i, 0) + 1
+            time.sleep(0.08)
+            if i == 102 and imports[i] == 1:
+                self.reply(500, {"error": "fixture import unavailable"})
+            else:
+                if i not in saved_folders:
+                    saved_folders.append(i)
+                result = folder(i)
+                result["kind"] = "stable" if i == 101 else "lazer"
+                result["marker_path"] = marker
+                self.reply(200, result)
+        else:
+            self.reply(404, {"error": "Unknown fixture operation"})
+
+    def do_DELETE(self):
+        with (root / "requests").open("a") as log:
+            log.write("DELETE " + self.path + "\n")
+        i = int(self.path.rsplit("/", 1)[1])
+        if i in saved_folders:
+            saved_folders.remove(i)
+        self.send_response(204)
+        self.end_headers()
+
     def do_GET(self):
         with (root / "requests").open("a") as log:
             log.write(self.path + "\n")
@@ -51,7 +133,7 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Event().wait(60)
             counts["library"] += 1
             n = counts["library"]
-            if case == "playback":
+            if case in ("playback", "folders"):
                 payload = library([7, 42, 103])
             elif case == "search":
                 query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
@@ -69,7 +151,9 @@ class Handler(BaseHTTPRequestHandler):
             if case == "requests":
                 library_pending.wait(10)
             counts["folders"] += 1
-            if counts["folders"] == 2:
+            if case == "folders":
+                payload = [folder(i) for i in saved_folders]
+            elif counts["folders"] == 2:
                 status, payload = 500, {"message": "fixture folders unavailable"}
             else:
                 payload = [folder(31), folder(52)]

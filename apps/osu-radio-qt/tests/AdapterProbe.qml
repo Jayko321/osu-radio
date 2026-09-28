@@ -1,5 +1,6 @@
 pragma ComponentBehavior: Bound
 import QtQuick
+import QtTest
 
 QtObject {
     id: probe
@@ -8,6 +9,7 @@ QtObject {
     readonly property var window: probeWindow
     readonly property bool gallery: probeGallery
     readonly property string testCase: probeCase
+    readonly property string screenshotPath: probeScreenshotPath
     // qmllint enable unqualified
     readonly property var bridge: gallery || !window ? null : window.appBridge
     property int stage: 0
@@ -17,6 +19,7 @@ QtObject {
     property int resets: 0
     property int retainedResets: 0
     property bool passed: false
+    readonly property TestCase input: TestCase { parent: probe.window ? probe.window.contentItem : null; when: false }
     readonly property var mock: gallery && window ? window.galleryStore.bridge : null
     readonly property Connections mockConnection: Connections {
         target: probe.mock
@@ -72,7 +75,145 @@ QtObject {
         menu.choose(0);
         check(JSON.parse(mock.stateJson).gallery.menu_selected === last, "gallery menu value role uses original index");
         check(window.objectName === "galleryWindow", "standalone gallery root");
-        finish();
+        const opener = findChild(window.contentItem, "openModal");
+        opener.forceActiveFocus();
+        opener.clicked();
+        stage = 10;
+    }
+    function contained(content: var, item: var): bool {
+        while (item) { if (item === content) return true; item = item.parent; }
+        return false;
+    }
+    function galleryModalProbe(): void {
+        const dialog = findChild(window.contentItem, "playlistDialog");
+        const folderDialog = findChild(window.contentItem, "folderSelectionDialog");
+        switch (stage) {
+        case 10:
+            if (!dialog.opened) return;
+            check(contained(dialog.contentItem, window.activeFocusItem), "modal initial focus");
+            for (let i = 0; i < 10; ++i) {
+                input.keyClick(Qt.Key_Tab, Qt.NoModifier, 0);
+                check(contained(dialog.contentItem, window.activeFocusItem), "Tab contained in modal");
+                input.keyClick(Qt.Key_Tab, Qt.ShiftModifier, 0);
+                check(contained(dialog.contentItem, window.activeFocusItem), "Shift+Tab contained in modal");
+            }
+            input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0);
+            stage = 11;
+            break;
+        case 11:
+            if (dialog.visible) return;
+            check(findChild(window.contentItem, "openModal").activeFocus, "modal restores opener focus");
+            dialog.open();
+            stage = 12;
+            break;
+        case 12:
+            if (!dialog.opened) return;
+            input.mouseClick(window.contentItem, 4, 120, Qt.LeftButton, Qt.NoModifier, 0);
+            stage = 13;
+            break;
+        case 13:
+            if (dialog.visible) return;
+            findChild(window.contentItem, "openFolderModal").clicked();
+            stage = 14;
+            break;
+        case 14:
+            if (!folderDialog.opened) return;
+            check(folderDialog.width === 740 && folderDialog.height === 620, "reference modal proportions");
+            window.width = 1024;
+            window.height = 640;
+            mock.dispatch("folderToggle", "/demo/osu/1/marker");
+            mock.dispatch("folderToggle", "/demo/osu/2/marker");
+            mock.dispatch("folderApply", "");
+            stage = 15;
+            break;
+        case 15:
+            check(folderDialog.width <= window.width - 48 && folderDialog.height <= window.height - 48, "responsive modal fits window");
+            check(folderDialog.rows[1].registered && folderDialog.rows[1].action === "", "gallery successful sibling saved");
+            check(folderDialog.rows[2].action === "add" && folderDialog.rows[2].error.length > 0, "gallery failed sibling retained");
+            if (screenshotPath.length > 0) {
+                input.grabImage(window.contentItem).save(screenshotPath);
+            }
+            mock.dispatch("folderApply", "");
+            folderDialog.close();
+            stage = 16;
+            break;
+        case 16:
+            if (folderDialog.visible) return;
+            finish();
+            break;
+        }
+    }
+    function folderProbe(): void {
+        if (!bridge.connected || bridge.foldersLoading || bridge.libraryLoading) return;
+        const dialog = findChild(window.contentItem, "folderSelectionDialog");
+        const fresh = "/fixtures/101/osu!.db";
+        const failed = "/fixtures/102/client.realm";
+        switch (stage) {
+        case 0:
+            bridge.addFolder();
+            stage = 1;
+            break;
+        case 1:
+            if (bridge.folderSelectionDiscovering || bridge.folderSelectionRows.length !== 4 || !dialog.opened) return;
+            if (bridge.folderSelectionRows.some(row => row.countPending)) return;
+            check(bridge.folderSelectionRows[3].countError.includes("fixture preview"), "count failure is separate from staging");
+            bridge.retryFolderCount(failed);
+            stage = 2;
+            break;
+        case 2:
+            if (bridge.folderSelectionRows[3].countPending) return;
+            check(bridge.folderSelectionRows[3].count === "0", "zero is a real count");
+            bridge.toggleFolderSelection(fresh);
+            bridge.toggleFolderSelection(fresh);
+            stage = 3;
+            break;
+        case 3:
+            if (bridge.folderSelectionRows[2].action !== "") return;
+            check(bridge.folders.length === 2, "choosing and staging do not save");
+            bridge.toggleFolderSelection(fresh);
+            bridge.toggleFolderSelection(failed);
+            bridge.toggleFolderSelection("/fixtures/31/client.realm");
+            stage = 4;
+            break;
+        case 4:
+            if (bridge.folderSelectionRows[2].action !== "add" || bridge.folderSelectionRows[0].action !== "remove") return;
+            bridge.applyFolderSelection();
+            stage = 5;
+            break;
+        case 5:
+            if (!bridge.folderSelectionApplying) return;
+            check(!dialog.dismissible && !findChild(dialog.contentItem, "applyFolders").enabled, "Apply disables editing and dismissal");
+            input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0);
+            bridge.closeFolderSelection();
+            stage = 6;
+            break;
+        case 6:
+            if (bridge.folderSelectionApplying) return;
+            check(bridge.folderSelectionOpen && dialog.visible, "partial failure remains open");
+            check(bridge.folderSelectionRows[2].registered && bridge.folderSelectionRows[2].action === "", "successful addition clears immediately");
+            check(!bridge.folderSelectionRows[0].registered && bridge.folderSelectionRows[0].action === "", "successful removal clears immediately");
+            check(bridge.folderSelectionRows[3].action === "add" && bridge.folderSelectionRows[3].error.includes("fixture import"), "failed action retained");
+            check(bridge.folders.length === 2, "saved folders refreshed after partial success");
+            bridge.applyFolderSelection();
+            stage = 7;
+            break;
+        case 7:
+            if (bridge.folderSelectionOpen || bridge.folderSelectionApplying) return;
+            check(bridge.folders.length === 3, "retry saves remaining action");
+            bridge.addFolder();
+            stage = 8;
+            break;
+        case 8:
+            if (!bridge.folderSelectionOpen) return;
+            bridge.closeFolderSelection();
+            stage = 9;
+            break;
+        case 9:
+            if (bridge.folderSelectionOpen) return;
+            check(bridge.folderSelectionRows.length === 0, "closing cancels and discards preview state");
+            finish();
+            break;
+        }
     }
     function searchProbe(): void {
         if (!bridge.connected || bridge.libraryLoading) return;
@@ -157,7 +298,9 @@ QtObject {
         }
     }
     function step(): void {
-        if (passed || gallery) return;
+        if (passed) return;
+        if (gallery) { galleryModalProbe(); return; }
+        if (testCase === "folders") { folderProbe(); return; }
         if (testCase === "search") { searchProbe(); return; }
         if (testCase === "playback") { playbackProbe(); return; }
         if (testCase === "requests") {
@@ -256,7 +399,7 @@ QtObject {
     readonly property Timer poll: Timer {
         interval: 10
         repeat: true
-        running: !probe.passed && !probe.gallery
+        running: !probe.passed
         onTriggered: probe.step()
     }
     Component.onCompleted: {

@@ -16,6 +16,8 @@ use tokio::{
     sync::{mpsc, watch},
     task::{AbortHandle, JoinSet},
 };
+mod folders;
+pub use folders::{FolderAction, FolderSelection, FolderSelectionRow};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsRetry {
@@ -59,6 +61,16 @@ pub enum AppCommand {
     BeginFolderPick,
     CompleteFolderPick(Option<PathBuf>),
     RetryFolders,
+    OpenFolderSelection,
+    CloseFolderSelection,
+    BrowseFolderSelection,
+    CompleteFolderSelectionPick {
+        epoch: u64,
+        path: Option<PathBuf>,
+    },
+    ToggleFolderSelection(String),
+    RetryFolderCount(String),
+    ApplyFolderSelection,
     RequestMedia {
         audio_id: i32,
         artwork_missing: bool,
@@ -81,6 +93,8 @@ pub enum AppUpdate {
     FoldersReplaced(Vec<OsuFolder>),
     FolderSelected(Option<i32>),
     FolderPickerRequested,
+    FolderSelection(FolderSelection),
+    FolderSelectionPickerRequested(u64),
     Artwork {
         ticket: MediaTicket,
         cover_id: i32,
@@ -121,6 +135,7 @@ impl AppController {
 }
 
 enum Completed {
+    FolderSelection(folders::FolderEvent),
     Connected(Result<Session, String>),
     Library {
         request: u64,
@@ -147,6 +162,9 @@ struct MediaJob {
     decoding: bool,
 }
 struct Controller {
+    selection: folders::SelectionWork,
+    folder_events: mpsc::UnboundedReceiver<folders::FolderEvent>,
+    folder_sender: mpsc::UnboundedSender<folders::FolderEvent>,
     options: ServerOptions,
     emit: Arc<dyn Fn(AppUpdate) + Send + Sync>,
     session: Option<Session>,
@@ -179,7 +197,11 @@ struct Controller {
 impl Controller {
     fn new(options: ServerOptions, emit: Arc<dyn Fn(AppUpdate) + Send + Sync>) -> Self {
         let (cancel, _) = watch::channel(false);
+        let (folder_sender, folder_events) = mpsc::unbounded_channel();
         Self {
+            selection: folders::SelectionWork::default(),
+            folder_sender,
+            folder_events,
             options,
             emit,
             session: None,
@@ -217,6 +239,7 @@ impl Controller {
                     Some(AppCommand::Shutdown) | None => break,
                     Some(command) => self.command(command),
                 },
+                Some(event) = self.folder_events.recv() => self.selection_event(event),
                 request = async {
                     match &mut self.downloads {
                         Some(downloads) => downloads.recv().await,
@@ -231,8 +254,10 @@ impl Controller {
                 }
             }
             self.start_media();
+            self.start_counts();
         }
         self.cancel_audio();
+        self.cancel_selection();
         let _ = self.cancel.send(true);
         if let Some(mut playback) = self.playback.take() {
             let _ = tokio::task::spawn_blocking(move || playback.shutdown()).await;
@@ -258,6 +283,15 @@ impl Controller {
     }
     fn command(&mut self, command: AppCommand) {
         match command {
+            AppCommand::OpenFolderSelection => self.open_selection(),
+            AppCommand::CloseFolderSelection => self.close_selection(),
+            AppCommand::BrowseFolderSelection => self.browse_selection(),
+            AppCommand::CompleteFolderSelectionPick { epoch, path } => {
+                self.selection_picked(epoch, path);
+            }
+            AppCommand::ToggleFolderSelection(path) => self.toggle_selection(&path),
+            AppCommand::RetryFolderCount(path) => self.retry_count(&path),
+            AppCommand::ApplyFolderSelection => self.apply_selection(),
             AppCommand::PlayTrack(id) => {
                 self.cancel_audio();
                 if self.ensure_playback()
@@ -522,6 +556,7 @@ impl Controller {
     }
     fn complete(&mut self, result: Completed) {
         match result {
+            Completed::FolderSelection(event) => self.selection_event(event),
             Completed::Audio {
                 generation,
                 id,
@@ -622,7 +657,7 @@ impl Controller {
         self.tracks = tracks;
         if self.tracks.is_empty() {
             self.library.message = if self.library_query.trim().is_empty() {
-                "No songs yet. Import a registered folder with the CLI."
+                "No songs yet. Import an osu! folder to populate your library."
             } else {
                 "Nothing found."
             }
@@ -637,6 +672,7 @@ impl Controller {
             .filter(|id| folders.iter().any(|folder| folder.id == *id))
             .or_else(|| folders.first().map(|folder| folder.id));
         self.folders = folders;
+        self.reconcile_selection();
         (self.emit)(AppUpdate::FoldersReplaced(self.folders.clone()));
         (self.emit)(AppUpdate::FolderSelected(self.selected_folder));
     }

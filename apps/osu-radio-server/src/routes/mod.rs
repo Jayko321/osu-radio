@@ -1,4 +1,5 @@
 pub(crate) mod beatmap_sets;
+pub(crate) mod folder_selection;
 pub(crate) mod media;
 pub(crate) mod tracks;
 pub(crate) mod user_data;
@@ -10,7 +11,7 @@ use crate::state::AppState;
 /// Kept in lockstep with the `docs` variant below: a route added to one belongs in both.
 #[cfg(not(feature = "docs"))]
 pub(crate) fn router(state: AppState) -> Router {
-    use axum::routing::{get, patch};
+    use axum::routing::{get, patch, post};
 
     Router::new()
         .route("/api/beatmaps/{id}/cover", get(media::cover))
@@ -19,6 +20,18 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/api/tracks", get(tracks::list_tracks))
         .route("/api/beatmap-sets", get(beatmap_sets::list_beatmap_sets))
         .route("/api/user-data", get(user_data::get_user_data))
+        .route(
+            "/api/user-data/osu-folders/discover",
+            post(folder_selection::discover),
+        )
+        .route(
+            "/api/user-data/osu-folders/metadata",
+            post(folder_selection::metadata),
+        )
+        .route(
+            "/api/user-data/osu-folders/import",
+            post(folder_selection::import),
+        )
         .route(
             "/api/user-data/osu-folders",
             get(user_data::list_osu_folders).post(user_data::register_osu_folder),
@@ -45,6 +58,9 @@ pub(crate) fn router(state: AppState) -> Router {
         .routes(routes!(media::duration))
         .routes(routes!(media::audio))
         .routes(routes!(user_data::get_user_data))
+        .routes(routes!(folder_selection::discover))
+        .routes(routes!(folder_selection::metadata))
+        .routes(routes!(folder_selection::import))
         .routes(routes!(
             user_data::list_osu_folders,
             user_data::register_osu_folder

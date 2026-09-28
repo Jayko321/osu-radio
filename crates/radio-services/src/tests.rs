@@ -7,6 +7,8 @@ use radio_core::{
     },
 };
 use sea_orm::ConnectionTrait;
+#[cfg(feature = "sqlite")]
+mod folder_selection;
 
 struct TestDatabase {
     services: Services,

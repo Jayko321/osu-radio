@@ -28,7 +28,7 @@ Tokio runtime dependency. The helper is a separate .NET project.
 | Component | Responsibility and source entry | Change here when |
 | --- | --- | --- |
 | `radio-core` | [Source markers](../../crates/radio-core/src/lib.rs) and [import types](../../crates/radio-core/src/import_types.rs) | Changing source-neutral data without I/O or persistence. |
-| `radio-scanner` | [Reader dispatch](../../crates/radio-scanner/src/lib.rs), [discovery](../../crates/radio-scanner/src/discovery/mod.rs), [lazer reader](../../crates/radio-scanner/src/lazer/scanner.rs) | Changing discovery or transforming a source into domain output. |
+| `radio-scanner` | [Reader dispatch](../../crates/radio-scanner/src/lib.rs), [discovery](../../crates/radio-scanner/src/discovery/mod.rs), [lazer reader](../../crates/radio-scanner/src/lazer/scanner.rs), [stable reader](../../crates/radio-scanner/src/stable/mod.rs) | Changing discovery or transforming a source into domain output. |
 | Realm helper | [.NET producer](../../tools/osu-lazer-realm-parser/Program.cs) | Changing Realm extraction or its NDJSON protocol. Coordinate with parser/domain types. |
 | `osu-radio-cli` | [Commands](../../apps/osu-radio-cli/src/commands/mod.rs), [arguments](../../apps/osu-radio-cli/src/types.rs) | Changing development-harness argument/output wiring. Keep reusable behavior in crates. |
 | `osu-radio-server` | [Startup](../../apps/osu-radio-server/src/main.rs), [routes](../../apps/osu-radio-server/src/routes/mod.rs) | Changing backend orchestration, HTTP translation or hosting. See the database and backend contracts. |
@@ -80,15 +80,15 @@ Tests and their limits are linked in the component guides.
 | --- | --- | --- |
 | Stable and lazer installation discovery | Implemented | [Scanner tiers/options](scanner.md); scoped roots, filters, limits, relocation and cancellation limitations. |
 | Lazer metadata import through Realm | Implemented | [Scanner/helper protocol](scanner.md); output is materialized, source audio is referenced. Real-library compatibility is separate from fake-helper tests. |
-| Stable metadata import | Unsupported today | [Dispatch](../../crates/radio-scanner/src/lib.rs) returns `UnsupportedSourceError`. No delivery decision is implied. |
-| Local audio file resolution | Implemented as references | [Helper](../../tools/osu-lazer-realm-parser/Program.cs); resolving a path is not playback or serving audio. |
+| Stable metadata import | Implemented | [Native reader](../../crates/radio-scanner/src/stable/mod.rs), [format/media tests](../../crates/radio-scanner/src/stable/tests.rs); current and legacy layouts, configured Songs directories and artwork. Real-library and Windows validation remain separate. |
+| Local audio file resolution | Implemented as references | [Lazer helper](../../tools/osu-lazer-realm-parser/Program.cs), [stable media mapping](../../crates/radio-scanner/src/stable/media.rs); resolving a path is not playback or serving audio. |
 | Client session, child supervision, HTTP wrappers | Implemented | [Frontend](frontend.md), [backend](backend.md); readiness output is a protocol, see backend API contracts. |
 | Optional OpenAPI/Scalar build | Implemented | [Backend](backend.md); both documentation feature states need verification. |
 | Songs/settings tabs, library selection, window actions | Implemented UI bindings | [Frontend interaction table](frontend.md#implemented-interactions-and-placeholders). Source binding is not cross-platform interaction validation. |
 | Songs search | Implemented | Server substring search through the shared controller, 200 ms debounce; Settings search remains a placeholder. See [frontend](frontend.md). |
-| Library and folder settings | Implemented | [Frontend](frontend.md); server rows, bounded artwork loading, optional durations, folder dropdown and native chooser registration. Selection is presentation only. |
+| Library and folder settings | Implemented | [Frontend](frontend.md); server rows, bounded artwork loading, optional durations, folder dropdown, Qt staged discovery/import/removal and Vizia native chooser registration. Selection is presentation only. |
 | Transport, seeking and volume | Implemented for one track | [Frontend](frontend.md); client downloads then plays locally. Device selection remains deferred. |
-| Qt Songs, Settings and component gallery | Connected client; offline gallery | [Qt frontend](frontend.md#qt-frontend); shared session/controller, playback, library/media and folder registration. |
+| Qt Songs, Settings and component gallery | Connected client; offline gallery | [Qt frontend](frontend.md#qt-frontend); shared session/controller, playback, library/media and staged folder selection/import/removal. |
 | Local audio playback | Implemented in source | Explicit Play; deterministic engine/HTTP tests do not establish physical output or Windows behavior. |
 | Hosted sources | Future direction | Provider, protocol and hosting remain undecided. |
 | Database repositories and complete snapshot replacement | Implemented | [Database](database.md); SQLite default, PostgreSQL alternative, explicit reset for legacy databases. |

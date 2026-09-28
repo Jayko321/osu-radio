@@ -7,7 +7,10 @@ use cxx_qt_lib::{
 };
 use osu_radio_client::{
     ServerOptions, Track,
-    controller::{AppCommand, AppController, AppUpdate, ConnectionStatus, MediaTicket},
+    controller::{
+        AppCommand, AppController, AppUpdate, ConnectionStatus, FolderAction, FolderSelection,
+        MediaTicket,
+    },
     playback::{Playback, PlayerState},
 };
 use std::{
@@ -86,6 +89,48 @@ pub mod ffi {
         )]
         #[qproperty(bool, has_selection, cxx_name = "hasSelection", READ, NOTIFY)]
         #[qproperty(QVariantList, folders, cxx_name = "folders", READ, NOTIFY)]
+        #[qproperty(
+            QVariantList,
+            folder_selection_rows,
+            cxx_name = "folderSelectionRows",
+            READ,
+            NOTIFY
+        )]
+        #[qproperty(
+            bool,
+            folder_selection_open,
+            cxx_name = "folderSelectionOpen",
+            READ,
+            NOTIFY
+        )]
+        #[qproperty(
+            bool,
+            folder_selection_applying,
+            cxx_name = "folderSelectionApplying",
+            READ,
+            NOTIFY
+        )]
+        #[qproperty(
+            bool,
+            folder_selection_discovering,
+            cxx_name = "folderSelectionDiscovering",
+            READ,
+            NOTIFY
+        )]
+        #[qproperty(
+            bool,
+            folder_selection_picking,
+            cxx_name = "folderSelectionPicking",
+            READ,
+            NOTIFY
+        )]
+        #[qproperty(
+            QString,
+            folder_selection_message,
+            cxx_name = "folderSelectionMessage",
+            READ,
+            NOTIFY
+        )]
         #[qproperty(i32, selected_folder_id, cxx_name = "selectedFolderId", READ, NOTIFY)]
         #[qproperty(
             QString,
@@ -167,6 +212,21 @@ pub mod ffi {
         #[cxx_name = "addFolder"]
         fn add_folder(self: Pin<&mut AppBridge>);
         #[qinvokable]
+        #[cxx_name = "closeFolderSelection"]
+        fn close_folder_selection(self: Pin<&mut AppBridge>);
+        #[qinvokable]
+        #[cxx_name = "browseFolderSelection"]
+        fn browse_folder_selection(self: Pin<&mut AppBridge>);
+        #[qinvokable]
+        #[cxx_name = "toggleFolderSelection"]
+        fn toggle_folder_selection(self: Pin<&mut AppBridge>, path: &QString);
+        #[qinvokable]
+        #[cxx_name = "retryFolderCount"]
+        fn retry_folder_count(self: Pin<&mut AppBridge>, path: &QString);
+        #[qinvokable]
+        #[cxx_name = "applyFolderSelection"]
+        fn apply_folder_selection(self: Pin<&mut AppBridge>);
+        #[qinvokable]
         #[cxx_name = "retryFolders"]
         fn retry_folders(self: Pin<&mut AppBridge>);
         #[qinvokable]
@@ -198,6 +258,12 @@ pub mod ffi {
 // Independent operation flags are exposed as individual typed QML properties.
 #[allow(clippy::struct_excessive_bools)]
 pub struct AppBridgeRust {
+    folder_selection_rows: VariantList,
+    folder_selection_open: bool,
+    folder_selection_applying: bool,
+    folder_selection_discovering: bool,
+    folder_selection_picking: bool,
+    folder_selection_message: QString,
     current_audio_id: i32,
     loading_audio_id: i32,
     selected_is_playing: bool,
@@ -238,6 +304,12 @@ pub struct AppBridgeRust {
 impl Default for AppBridgeRust {
     fn default() -> Self {
         Self {
+            folder_selection_rows: VariantList::default(),
+            folder_selection_open: false,
+            folder_selection_applying: false,
+            folder_selection_discovering: false,
+            folder_selection_picking: false,
+            folder_selection_message: QString::default(),
             current_audio_id: -1,
             loading_audio_id: -1,
             selected_is_playing: false,
@@ -302,6 +374,42 @@ macro_rules! property_setter {
     };
 }
 impl ffi::AppBridge {
+    property_setter!(
+        set_folder_selection_rows,
+        folder_selection_rows,
+        folder_selection_rows_changed,
+        VariantList
+    );
+    property_setter!(
+        set_folder_selection_open,
+        folder_selection_open,
+        folder_selection_open_changed,
+        bool
+    );
+    property_setter!(
+        set_folder_selection_applying,
+        folder_selection_applying,
+        folder_selection_applying_changed,
+        bool
+    );
+    property_setter!(
+        set_folder_selection_discovering,
+        folder_selection_discovering,
+        folder_selection_discovering_changed,
+        bool
+    );
+    property_setter!(
+        set_folder_selection_picking,
+        folder_selection_picking,
+        folder_selection_picking_changed,
+        bool
+    );
+    property_setter!(
+        set_folder_selection_message,
+        folder_selection_message,
+        folder_selection_message_changed,
+        QString
+    );
     property_setter!(
         set_current_audio_id,
         current_audio_id,
@@ -609,7 +717,72 @@ impl ffi::AppBridge {
         self.command(AppCommand::SelectFolder((id >= 0).then_some(id)));
     }
     pub fn add_folder(self: Pin<&mut Self>) {
-        self.command(AppCommand::BeginFolderPick);
+        self.command(AppCommand::OpenFolderSelection);
+    }
+    pub fn close_folder_selection(self: Pin<&mut Self>) {
+        self.command(AppCommand::CloseFolderSelection);
+    }
+    pub fn browse_folder_selection(self: Pin<&mut Self>) {
+        self.command(AppCommand::BrowseFolderSelection);
+    }
+    pub fn toggle_folder_selection(self: Pin<&mut Self>, path: &QString) {
+        self.command(AppCommand::ToggleFolderSelection(path.to_string()));
+    }
+    pub fn retry_folder_count(self: Pin<&mut Self>, path: &QString) {
+        self.command(AppCommand::RetryFolderCount(path.to_string()));
+    }
+    pub fn apply_folder_selection(self: Pin<&mut Self>) {
+        self.command(AppCommand::ApplyFolderSelection);
+    }
+    fn project_folder_selection(mut self: Pin<&mut Self>, selection: FolderSelection) {
+        let rows = selection
+            .rows
+            .into_iter()
+            .map(|row| {
+                let mut map = QMap::<QMapPair_QString_QVariant>::default();
+                for (key, value) in [
+                    ("kind", row.kind),
+                    ("path", row.root_path),
+                    ("markerPath", row.marker_path),
+                    (
+                        "action",
+                        match row.pending {
+                            Some(FolderAction::Add) => "add",
+                            Some(FolderAction::Remove) => "remove",
+                            None => "",
+                        }
+                        .into(),
+                    ),
+                    (
+                        "count",
+                        row.count.value().map_or_else(String::new, u64::to_string),
+                    ),
+                    ("countError", row.count.error().unwrap_or_default().into()),
+                    ("error", row.error.unwrap_or_default()),
+                ] {
+                    map.insert(QString::from(key), QVariant::from(&QString::from(value)));
+                }
+                map.insert(
+                    QString::from("registered"),
+                    QVariant::from(&row.registered_id.is_some()),
+                );
+                map.insert(
+                    QString::from("countPending"),
+                    QVariant::from(&row.count.is_pending()),
+                );
+                QVariant::from(&map)
+            })
+            .collect();
+        self.as_mut().set_folder_selection_rows(rows);
+        self.as_mut()
+            .set_folder_selection_applying(selection.applying);
+        self.as_mut()
+            .set_folder_selection_discovering(selection.discovering);
+        self.as_mut()
+            .set_folder_selection_picking(selection.picking);
+        self.as_mut()
+            .set_folder_selection_message(QString::from(selection.message));
+        self.set_folder_selection_open(selection.open);
     }
     pub fn retry_folders(self: Pin<&mut Self>) {
         self.command(AppCommand::RetryFolders);
@@ -728,6 +901,22 @@ impl ffi::AppBridge {
     }
     fn apply(mut self: Pin<&mut Self>, update: AppUpdate) {
         match update {
+            AppUpdate::FolderSelection(selection) => self.project_folder_selection(selection),
+            AppUpdate::FolderSelectionPickerRequested(epoch) => {
+                if let (Some(context), Some(controller)) =
+                    (RuntimeContext::current(), self.controller.clone())
+                {
+                    let task = context.handle.spawn(async move {
+                        let path = rfd::AsyncFileDialog::new()
+                            .set_title("Select osu! installation")
+                            .pick_folder()
+                            .await
+                            .map(|file| file.path().to_path_buf());
+                        controller.send(AppCommand::CompleteFolderSelectionPick { epoch, path });
+                    });
+                    context.track(task);
+                }
+            }
             AppUpdate::Playback(playback) => {
                 self.as_mut().rust_mut().playback = playback;
                 self.project_playback();

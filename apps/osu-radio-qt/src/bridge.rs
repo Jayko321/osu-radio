@@ -58,6 +58,11 @@ impl Default for MockBridgeRust {
 
 fn action_from_qml(action: &str, value: String) -> Option<Action> {
     Some(match action {
+        "folderReset" => Action::FolderReset,
+        "folderToggle" => Action::FolderToggle(value),
+        "folderCount" => Action::FolderCount(value),
+        "folderBrowse" => Action::FolderBrowse,
+        "folderApply" => Action::FolderApply,
         "galleryDisabled" => Action::GalleryDisabled(value.parse().ok()?),
         "press" => Action::Press,
         "field" => Action::Field(value),

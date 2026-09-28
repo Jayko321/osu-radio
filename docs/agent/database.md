@@ -171,6 +171,16 @@ commit roll back the old snapshot, shared rows and timestamp together. Empty sna
 that installation's library. Other installations remain intact; shared rows still
 referenced elsewhere retain their identities. Snapshot set/beatmap IDs may change.
 
+[`register_snapshot` / `import_folder`](../../crates/radio-services/src/folder_selection.rs)
+add atomic registration plus replacement for Qt Apply. Source reading finishes
+before the transaction opens. The transaction locks the singleton, matches resolved
+marker identity, registers a new installation and calls the existing replacement
+workflow through the same transaction. Only the outer workflow commits; any error
+rolls back registration as well as snapshot/shared rows. Already registered sources
+return their stored row without reading/replacing their metadata or changing settings.
+Identity matching repeats under the writer lock so concurrent imports are idempotent.
+Preview metadata reads never write. No schema migration is needed.
+
 Deletion takes the same lock and performs cascade deletion plus cleanup in one
 transaction. The lock coordinates processes and independent pools; it does not
 rely on a server mutex. This serializes snapshot writers globally. Reads remain

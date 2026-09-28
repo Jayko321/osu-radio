@@ -99,13 +99,6 @@ pub(crate) async fn select_marker(
 
 pub(crate) fn import_error(marker: &OsuMarker, error: anyhow::Error) -> anyhow::Error {
     match error.downcast_ref::<UnsupportedSourceError>() {
-        Some(UnsupportedSourceError {
-            kind: OsuKind::Stable,
-        }) => {
-            anyhow::anyhow!(
-                "Stable osu! installations are detected, but stable importing is not supported yet. Try a lazer source or run `osu-radio-cli scan --source lazer`."
-            )
-        }
         Some(UnsupportedSourceError { kind }) => {
             anyhow::anyhow!("The selected osu! source is not supported yet: {kind:?}.")
         }

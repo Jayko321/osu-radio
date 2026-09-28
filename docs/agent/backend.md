@@ -139,6 +139,9 @@ continues to use its own [API DTOs](../../crates/osu-radio-client/src/api.rs).
 | `GET /api/user-data` | `{id, osu_folders}` with singleton `id = 1`. |
 | `GET /api/user-data/osu-folders` | Folder array, including disabled entries. |
 | `POST /api/user-data/osu-folders` | Body `{path, label?}`. Discovery validates an absolute path. New folder: 201; duplicate marker: 409 with the existing folder body, leaving its label unchanged. Invalid/ambiguous folder: 400. |
+| `POST /api/user-data/osu-folders/discover` | Optional `{roots, depth}`; depth is `known`, `shallow`, or default `full`. Absolute explicit roots only; omitted/empty roots use scanner defaults. Streams NDJSON candidates and an explicit completion event. Dropping the body drops the scanner stream. |
+| `POST /api/user-data/osu-folders/metadata` | `{marker_path}` validates an absolute Stable/Lazer marker, reads through the existing scanner reader and returns `{beatmap_count}` for individual difficulties, including zero. Preview never persists data. |
+| `POST /api/user-data/osu-folders/import` | `{marker_path}` validates and fully reads a new source, then saves registration and snapshot in one transaction. Returns 200 with the stored folder, including already registered sources without changing their snapshot/settings. |
 | `PATCH /api/user-data/osu-folders/{id}` | Optional `label` and `enabled`; 200 with folder, or 404. Omitted fields remain unchanged; explicit null clears label. Supplied non-null labels are trimmed by the service. |
 | `DELETE /api/user-data/osu-folders/{id}` | 204 when removed, 404 when absent. Transactional cascade and shared cleanup; no file deletion. |
 
@@ -147,6 +150,26 @@ Each `beatmaps` entry adds `id`, `audio_source_id`, `difficulty_name`, `title`,
 means a stored reference exists, not that the file is currently readable. The
 single repository aggregate joins difficulties and metadata while retaining a
 distinct, ID-ordered audio-source list per set. Existing fields remain unchanged.
+
+### Folder discovery and selection
+
+The [folder routes](../../apps/osu-radio-server/src/routes/folder_selection.rs) are
+registered in both router variants and the OpenAPI document. Candidate lines are
+`{"event":"candidate","kind":"stable","root_path":"/osu","marker_path":"/osu/osu!.db","registered_id":null}`;
+completion is `{"event":"complete"}` followed by a newline. Resolved marker paths
+deduplicate aliases, and registered IDs match existing folders even when their
+stored path is an alias. The response owns the cancellable scanner stream directly.
+
+Metadata and import share server-side marker validation. Relative paths, unsupported
+filenames and missing/nonregular markers return 400; source-reading or storage
+failures use the existing safe 500 boundary. Stable and Lazer readers supply preview
+counts without importing into the database. The client gives discovery, metadata
+and import a one-hour request timeout instead of its ordinary 30 seconds.
+
+Apply orchestration belongs to the client, with one independent import/deletion
+transaction per action. A failed row cannot roll back successful sibling actions.
+See the [database registration/import contract](database.md#snapshot-replacement)
+and [client folder workflow](frontend.md#qt-frontend).
 
 ### Library search
 

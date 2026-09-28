@@ -16,11 +16,13 @@ docs = ["dep:utoipa", "dep:utoipa-axum", "dep:utoipa-scalar"]
 [dependencies]
 anyhow.workspace = true
 axum = { version = "0.8" }
+futures-util = "0.3"
 dotenvy.workspace = true
 lofty = "0.25.1"
 radio-core = { path = "../../crates/radio-core/" }
 radio-services = { path = "../../crates/radio-services/", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
 tokio.workspace = true
 tokio-util = { version = "0.7", features = ["io"] }
 utoipa = { version = "5.5.0", features = ["axum_extras"], optional = true }

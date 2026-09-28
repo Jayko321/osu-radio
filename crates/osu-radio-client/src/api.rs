@@ -14,6 +14,80 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
+    /// Calls the sink incrementally. Dropping this future closes the response and cancels discovery.
+    pub async fn discover_osu_folders(
+        &self,
+        request: &crate::models::DiscoverFolders,
+        mut emit: impl FnMut(crate::models::FolderDiscoveryEvent) + Send,
+    ) -> Result<(), ApiError> {
+        let path = "/api/user-data/osu-folders/discover";
+        let mut response = self
+            .http
+            .post(self.url(path))
+            .timeout(std::time::Duration::from_secs(3600))
+            .json(request)
+            .send()
+            .await
+            .map_err(ApiError::Transport)?;
+        if !response.status().is_success() {
+            return Err(Self::failure(path, response).await);
+        }
+        let mut buffer = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(ApiError::Transport)? {
+            for part in chunk.split_inclusive(|byte| *byte == b'\n') {
+                buffer.extend_from_slice(part);
+                if buffer.len() > 1024 * 1024 {
+                    return Err(ApiError::Protocol("Discovery event exceeds 1 MiB.".into()));
+                }
+                if buffer.last() == Some(&b'\n') {
+                    if buffer.iter().any(|byte| !byte.is_ascii_whitespace()) {
+                        let event =
+                            serde_json::from_slice(&buffer).map_err(ApiError::StreamDecode)?;
+                        let complete =
+                            matches!(event, crate::models::FolderDiscoveryEvent::Complete);
+                        emit(event);
+                        if complete {
+                            return Ok(());
+                        }
+                    }
+                    buffer.clear();
+                }
+            }
+        }
+        Err(ApiError::Protocol(
+            "Discovery ended without a completion event.".into(),
+        ))
+    }
+    pub async fn osu_folder_metadata(
+        &self,
+        marker_path: &str,
+    ) -> Result<crate::models::FolderMetadata, ApiError> {
+        self.folder_post("metadata", marker_path).await
+    }
+    pub async fn import_osu_folder(&self, marker_path: &str) -> Result<OsuFolder, ApiError> {
+        self.folder_post("import", marker_path).await
+    }
+    async fn folder_post<T: serde::de::DeserializeOwned>(
+        &self,
+        operation: &str,
+        marker_path: &str,
+    ) -> Result<T, ApiError> {
+        let path = format!("/api/user-data/osu-folders/{operation}");
+        let response = self
+            .http
+            .post(self.url(&path))
+            .timeout(std::time::Duration::from_secs(3600))
+            .json(&crate::models::FolderMarker {
+                marker_path: marker_path.into(),
+            })
+            .send()
+            .await
+            .map_err(ApiError::Transport)?;
+        if !response.status().is_success() {
+            return Err(Self::failure(&path, response).await);
+        }
+        response.json().await.map_err(ApiError::Decode)
+    }
     pub fn new(base_url: impl Into<String>) -> Result<Self, ApiError> {
         let http = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
@@ -258,6 +332,10 @@ impl ApiClient {
     }
 }
 
+#[cfg(test)]
+#[path = "api/folder_tests.rs"]
+mod folder_tests;
+
 #[derive(Debug, serde::Deserialize)]
 struct ErrorBody {
     #[serde(rename = "error", alias = "message")]
@@ -266,6 +344,8 @@ struct ErrorBody {
 
 #[derive(Debug)]
 pub enum ApiError {
+    StreamDecode(serde_json::Error),
+    Protocol(String),
     File(std::io::Error),
     AudioTooLarge,
     Transport(reqwest::Error),
@@ -280,6 +360,8 @@ pub enum ApiError {
 impl fmt::Display for ApiError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::StreamDecode(error) => write!(formatter, "Invalid discovery event: {error}"),
+            Self::Protocol(message) => formatter.write_str(message),
             Self::File(error) => write!(formatter, "could not save downloaded audio: {error}"),
             Self::AudioTooLarge => formatter.write_str("audio exceeds the 256 MiB download limit"),
             Self::Transport(error) => write!(formatter, "the server could not be reached: {error}"),
@@ -298,9 +380,10 @@ impl fmt::Display for ApiError {
 impl Error for ApiError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::StreamDecode(error) => Some(error),
             Self::Transport(error) | Self::Decode(error) => Some(error),
             Self::File(error) => Some(error),
-            Self::Status { .. } | Self::AudioTooLarge => None,
+            Self::Protocol(_) | Self::Status { .. } | Self::AudioTooLarge => None,
         }
     }
 }

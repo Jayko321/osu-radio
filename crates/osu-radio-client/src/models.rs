@@ -2,6 +2,39 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DiscoverFolders {
+    pub roots: Vec<PathBuf>,
+    pub depth: DiscoveryDepth,
+}
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryDepth {
+    Known,
+    Shallow,
+    #[default]
+    Full,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum FolderDiscoveryEvent {
+    Candidate {
+        kind: String,
+        root_path: String,
+        marker_path: String,
+        registered_id: Option<i32>,
+    },
+    Complete,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct FolderMarker {
+    pub marker_path: String,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct FolderMetadata {
+    pub beatmap_count: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct BeatmapSet {
     #[serde(default)]

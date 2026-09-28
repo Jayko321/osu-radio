@@ -195,6 +195,38 @@ fn closing_with_a_pending_http_request_awaits_child_cleanup() {
     assert_child_reaped(directory.path());
 }
 
+#[cfg(unix)]
+#[test]
+fn folder_modal_stages_counts_applies_partial_success_and_retries_only_failures() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("isolated folder fixture");
+    let server = directory.path().join("fixture-server");
+    std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fixture");
+    assert_probe(&run(&[], "offscreen", directory.path(), &server, "folders"));
+    let requests = std::fs::read_to_string(directory.path().join("requests")).expect("requests");
+    let actions: Vec<_> = requests
+        .lines()
+        .filter(|line| line.contains("/import ") || line.starts_with("DELETE"))
+        .collect();
+    assert_eq!(
+        actions,
+        [
+            "POST /api/user-data/osu-folders/import /fixtures/101/osu!.db",
+            "POST /api/user-data/osu-folders/import /fixtures/102/client.realm",
+            "DELETE /api/user-data/osu-folders/31",
+            "POST /api/user-data/osu-folders/import /fixtures/102/client.realm",
+        ]
+    );
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("metadata_max"))
+            .expect("metadata concurrency"),
+        "2"
+    );
+    assert_child_reaped(directory.path());
+}
+
 #[cfg(target_os = "linux")]
 fn assert_child_reaped(directory: &Path) {
     let pid = std::fs::read_to_string(directory.join("child.pid")).expect("fixture child pid");

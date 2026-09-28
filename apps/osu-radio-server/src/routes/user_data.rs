@@ -81,7 +81,7 @@ impl From<UserDataOverview> for UserDataResponse {
     }
 }
 
-fn registration_error(error: RegisterFolderError) -> ApiError {
+pub(super) fn registration_error(error: RegisterFolderError) -> ApiError {
     match error {
         RegisterFolderError::RelativePath(path) => ApiError::bad_request(format!(
             "`{}` is not an absolute path. Register an osu! folder by its full path.",

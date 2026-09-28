@@ -14,8 +14,10 @@ use radio_core::{OsuKind, OsuMarker, import_types::ImportedBeatmapSet};
 
 pub mod discovery;
 pub mod lazer;
+pub mod stable;
 
 pub use lazer::{import_from_lazer_realm, import_from_lazer_realm_with_helper};
+pub use stable::import_from_stable_db;
 
 #[async_trait::async_trait]
 pub(crate) trait BeatmapSetScanner {
@@ -38,10 +40,7 @@ impl Error for UnsupportedSourceError {}
 pub async fn get_beatmap_sets(marker: OsuMarker) -> anyhow::Result<Vec<ImportedBeatmapSet>> {
     let scanner: Box<dyn BeatmapSetScanner + Send> = match marker.kind {
         OsuKind::Stable => {
-            return Err(UnsupportedSourceError {
-                kind: OsuKind::Stable,
-            }
-            .into());
+            return import_from_stable_db(&marker.marker_path).await;
         }
         OsuKind::Lazer => Box::new(lazer::scanner::LazerBeatmapScanner::new(
             &marker.marker_path,
@@ -49,31 +48,4 @@ pub async fn get_beatmap_sets(marker: OsuMarker) -> anyhow::Result<Vec<ImportedB
     };
 
     scanner.get_beatmap_sets().await
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use radio_core::{OsuKind, OsuMarker};
-
-    use super::{UnsupportedSourceError, get_beatmap_sets};
-
-    #[tokio::test]
-    async fn reports_unsupported_scanner_sources() {
-        let error = get_beatmap_sets(OsuMarker {
-            kind: OsuKind::Stable,
-            marker_path: PathBuf::from("osu!.db"),
-            root_path: PathBuf::from("."),
-        })
-        .await
-        .unwrap_err();
-
-        assert!(matches!(
-            error.downcast_ref::<UnsupportedSourceError>(),
-            Some(UnsupportedSourceError {
-                kind: OsuKind::Stable
-            })
-        ));
-    }
 }

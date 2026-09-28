@@ -12,8 +12,8 @@ pub mod view_models;
 
 pub use api::{ApiClient, ApiError};
 pub use models::{
-    AudioSource, BeatmapSet, OsuFolder, OsuFolderChanges, RegisterOsuFolder, RegisteredFolder,
-    UserData,
+    AudioSource, BeatmapSet, DiscoverFolders, DiscoveryDepth, FolderDiscoveryEvent, FolderMarker,
+    FolderMetadata, OsuFolder, OsuFolderChanges, RegisterOsuFolder, RegisteredFolder, UserData,
 };
 pub use server::{EmbeddedServer, ServerError, ServerOptions};
 pub use session::{Session, StartError};

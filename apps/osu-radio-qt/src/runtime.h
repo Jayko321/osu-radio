@@ -20,6 +20,7 @@ inline void configureEngine(QQmlApplicationEngine &engine, bool smoke) {
     });
 }
 inline void configureProbe(QQmlApplicationEngine &engine, bool gallery) {
+    engine.rootContext()->setContextProperty(QStringLiteral("probeScreenshotPath"), qEnvironmentVariable("OSU_RADIO_QT_PROBE_SCREENSHOT"));
     engine.rootContext()->setContextProperty(QStringLiteral("probeWindow"),
         engine.rootObjects().isEmpty() ? nullptr : engine.rootObjects().first());
     engine.rootContext()->setContextProperty(QStringLiteral("probeGallery"), gallery);

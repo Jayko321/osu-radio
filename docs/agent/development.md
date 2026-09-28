@@ -89,7 +89,15 @@ An explicit `import --marker` avoids discovery. Without it, marker selection
 runs full discovery, possibly across OS defaults; do not omit it casually.
 `import --limit` limits printed beatmaps, not Realm reads or the number imported
 into memory. The `import` command reads and displays source metadata; it does not
-persist it. Stable markers are discoverable but stable imports remain unsupported.
+persist it. Stable imports use the native database reader; both source kinds use
+the same snapshot storage contract. For stable fixtures, pass an explicit
+`--marker "/temporary/installation/osu!.db"`; custom `BeatmapDirectory` values
+come from that fixture installation's `osu!.*.cfg`. Never use the workspace `.env`
+or database for a storage smoke check: run the built CLI from a temporary working
+directory with its own `.env` and disposable SQLite file, and remove inherited
+database URL variables. Run `store` twice without `--clear` to check snapshot
+replacement and shared audio references. Binary fixtures do not establish real
+stable-library or Windows compatibility.
 
 ## Verification matrix
 
@@ -104,7 +112,7 @@ playback.
 | Core type behavior | `cargo test -p radio-core --locked` | [Core tests](../../crates/radio-core/src/lib.rs); no installation reads. |
 | Discovery roots, filters, tiers | `cargo test -p radio-scanner --locked discovery::` | [Discovery tests](../../crates/radio-scanner/src/discovery/mod.rs), [known-path tests](../../crates/radio-scanner/src/discovery/known.rs), [pruning tests](../../crates/radio-scanner/src/discovery/sweep.rs) use explicit temporary roots. |
 | Lazer mapping or process handling | `cargo test -p radio-scanner --locked lazer::` | [Parser and fake-helper tests](../../crates/radio-scanner/src/lazer/tests.rs); helper-process tests are Unix-only and do not validate real Realm data. |
-| Unsupported-source behavior | `cargo test -p radio-scanner --locked reports_unsupported_scanner_sources` | [Scanner entry-point test](../../crates/radio-scanner/src/lib.rs). |
+| Stable binary layouts, mapping, dispatch and media | `cargo test -p radio-scanner --locked stable::` | [Stable fixtures](../../crates/radio-scanner/src/stable/tests.rs): legacy/current boundaries, malformed input, grouping/IDs, BPM, custom paths and artwork. Wine mapping tests are Linux-only; real-library and Windows validation remain separate. |
 | Scanner change spanning these paths | `cargo test -p radio-scanner --locked` | Combines the preceding scanner checks; helper build prerequisites still apply. |
 | C# helper source | `dotnet build tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj --configuration Release --nologo` | Compiles the producer; no automated C# test project currently exists. Follow the [scanner skill](../../.agents/skills/osu-radio-scanner/SKILL.md) for contract checks. |
 | CLI wiring | `cargo test -p osu-radio-cli --locked` and `cargo clippy -p osu-radio-cli --all-targets --locked` | Argument tests reject removed `store --count` and retain `--clear`; memory SQLite connection check. No real source import. |
@@ -392,7 +400,7 @@ refreshes and child cleanup. Gallery mode uses no backend. The bundled
 explicit assertions complete, with a native watchdog and outer process timeout.
 `OSU_RADIO_QT_SMOKE_TEST=1` is an internal test hook; do not set it interactively.
 Help/error paths run with an invalid platform plugin to verify no GUI initialization.
-The Unix fixture requires Python 3. For real SQLite backend coverage:
+The Unix fixture requires Python 3; keyboard/backdrop probes also require the QtTest QML module. For real SQLite backend coverage:
 
 ```sh
 cargo build -p osu-radio-server -p osu-radio-qt --locked
@@ -456,3 +464,36 @@ decoding and seek/EOF/replay coverage. Client tests passed without/with `mock`
 (35/41; two benchmarks ignored in each). Scoped player/client all-target Clippy
 with warnings denied and formatting passed. Physical playback and Windows were
 not exercised in this follow-up.
+
+## Qt folder modal verification
+
+The folder-selection change adds isolated tests in
+[client stream tests](../../crates/osu-radio-client/src/api/folder_tests.rs),
+[controller tests](../../crates/osu-radio-client/src/controller/folders_tests.rs),
+[service tests](../../crates/radio-services/src/tests/folder_selection.rs),
+[route tests](../../apps/osu-radio-server/src/routes/folder_selection_tests.rs),
+and the [Qt probe](../../apps/osu-radio-qt/tests/AdapterProbe.qml). They use explicit
+discovery roots, temporary source files/databases, and an isolated fixture process.
+The Qt gallery remains offline. No application database is used for these checks.
+
+Manual acceptance remains separate: check live GPU scene blur, native chooser and
+browser launch, long real installation paths, desktop input/scaling and Windows.
+Automated Qt software rendering verifies modal focus/dismissal, responsive geometry,
+registered/pending/error row states and sequential partial-success retry, not those
+platform integrations. Counts read metadata only; real Lazer Realm compatibility is
+separate from fixture tests.
+
+Executed on Linux on 2026-09-28: client tests without/with `mock`, SQLite
+service tests, server tests with and without `docs`, Qt tests/build, the actual
+backend Qt startup probe on a disposable SQLite database, Vizia tests, generated-import
+QML lint, scoped all-target Clippy and formatting passed. The folder tests cover
+byte/chunk-split NDJSON, incremental delivery and response cancellation, per-opening
+stale-result rejection, unique versus ambiguous scoped selection, alias/ID matching,
+zero and individual-difficulty counts, count errors/retry, staged toggles, one-hour
+timeout overrides, duplicate imports, forced mid-import rollback, shared-row removal,
+and sequential partial-success retry. The gallery keyboard probes cover Tab/Shift+Tab
+containment, focus restoration, Escape and backdrop dismissal, row states and
+1024x640 geometry. A software-rendered folder-modal screenshot was inspected; this
+does not verify live GPU blur, native picker/browser behavior, actual Lazer Realm
+reading, Windows interaction or PostgreSQL execution. Existing benchmark tests
+remained ignored.

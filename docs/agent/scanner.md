@@ -14,7 +14,9 @@ The confirmed product direction is desktop music playback from local osu! instal
 | Discovery policy, streaming, filtering, limits | [`discovery/mod.rs`](../../crates/radio-scanner/src/discovery/mod.rs) | `find_osu_markers_with` is the synchronous callback core; `discover` adapts it for async callers. |
 | Known installation locations and relocation | [`discovery/known.rs`](../../crates/radio-scanner/src/discovery/known.rs) | OS-specific candidate generation and `storage.ini` reading. |
 | Walking and pruning | [`discovery/sweep.rs`](../../crates/radio-scanner/src/discovery/sweep.rs) | Marker names, OS scan roots, directory exclusion policy. |
-| Source dispatch | [`radio-scanner/src/lib.rs`](../../crates/radio-scanner/src/lib.rs) | `get_beatmap_sets` selects the source reader or returns `UnsupportedSourceError`. |
+| Source dispatch | [`radio-scanner/src/lib.rs`](../../crates/radio-scanner/src/lib.rs) | `get_beatmap_sets` selects the stable or lazer reader; `UnsupportedSourceError` remains available for API compatibility. |
+| Stable database decoding and mapping | [`stable/reader.rs`](../../crates/radio-scanner/src/stable/reader.rs), [`stable/mod.rs`](../../crates/radio-scanner/src/stable/mod.rs) | Checked binary layout, timing conversion, folder grouping and source-neutral output. |
+| Stable Songs and artwork references | [`stable/media.rs`](../../crates/radio-scanner/src/stable/media.rs) | Installation-local configuration, Wine drive mapping, safe relative paths and background events. |
 | Helper invocation and cleanup | [`lazer/scanner.rs`](../../crates/radio-scanner/src/lazer/scanner.rs) | Process lifetime, pipes, parsing loop, diagnostic propagation. |
 | Helper output mapping | [`lazer/types.rs`](../../crates/radio-scanner/src/lazer/types.rs) | Private wire records map into public core values. |
 | Realm extraction | [`Program.cs`](../../tools/osu-lazer-realm-parser/Program.cs) | Dynamic, read-only Realm access and NDJSON production. |
@@ -63,13 +65,62 @@ Dropping `Discovery` sets the shared worker stop flag and closes the receiver, r
 
 ## Supported imports and CLI behavior
 
-`get_beatmap_sets` currently imports only lazer; stable discovery returns useful markers but selecting one for import produces the typed `UnsupportedSourceError`. The CLI maps that error into an explanation that stable import is not yet supported. Adding stable import would require a reader and dispatch change, not merely changing discovery.
+`get_beatmap_sets` imports both stable and lazer. `import_from_stable_db(&Path)` is exported alongside the lazer entry points. Both readers return complete snapshots; failed decoding never returns partial imports. CLI `import` and `store` use this shared dispatch. Stable storage uses the existing snapshot contract without a schema change.
 
 `import_from_lazer_realm` selects the configured helper; `import_from_lazer_realm_with_helper` accepts an executable explicitly and is the process-test seam. Both return a fully materialized `Vec<ImportedBeatmapSet>`. Line-by-line decoding does not make the public import result streaming, and a CLI output limit does not reduce helper extraction or memory use.
 
 The CLI's `scan --root` constrains discovery, resolving a relative root against the working directory. `--source` becomes the walk's kind filter; `--first` and `--limit` stop marker discovery and conflict with each other. A scan limit of zero is rejected. Text output renders arrivals as they are received; JSON output collects first.
 
-For inspection, prefer `import --marker <explicit-client.realm>`: it bypasses discovery. The source is inferred from the filename unless `--source` is supplied; marker construction itself does not verify the file. Without a marker, selection runs `Full` discovery using the supplied root/filter. It collects at most two markers when no index is supplied to detect ambiguity; selecting by index reruns discovery, whose ordering can vary. `import --limit` limits printed **beatmaps**, defaults to the value in [`consts.rs`](../../apps/osu-radio-cli/src/consts.rs), and may show only part of a set in the CLI JSON preview. It does not truncate the imported values returned by the scanner. See [scoped examples](development.md) before running commands.
+For inspection, prefer `import --marker <explicit-client.realm-or-osu!.db>`: it bypasses discovery. The source is inferred from the filename unless `--source` is supplied; marker construction itself does not verify the file. Without a marker, selection runs `Full` discovery using the supplied root/filter. It collects at most two markers when no index is supplied to detect ambiguity; selecting by index reruns discovery, whose ordering can vary. `import --limit` limits printed **beatmaps**, defaults to the value in [`consts.rs`](../../apps/osu-radio-cli/src/consts.rs), and may show only part of a set in the CLI JSON preview. It does not truncate the imported values returned by the scanner. See [scoped examples](development.md) before running commands.
+
+## Stable database and media mapping
+
+The [native reader](../../crates/radio-scanner/src/stable/reader.rs) follows the
+[official database specification](https://github.com/ppy/osu/wiki/Legacy-database-file-structure),
+checked against [McOsu's reader](https://github.com/McKay42/McOsu/blob/master/src/App/Osu/OsuDatabase.cpp).
+It reads little-endian fields, tagged UTF-8 strings with checked ULEB128 lengths,
+and nonnegative counts bounded by remaining bytes. Pre-`20140609` difficulty
+values are bytes, star blocks are absent, and the legacy trailing short is read.
+From that version onward, difficulties are floats and each star value's encoded
+`0x0c`/`0x0d` tag decides its float/double width, including the newer 2025 layout.
+Pre-`20191106` records require exact entry sizes; later records omit sizes.
+For the disputed `20191106` version, both layouts are tried and a complete decode
+including the permissions footer is required. Invalid tags, counts, lengths,
+UTF-8, booleans, footer flags and trailing bytes fail with the database path,
+zero-based record index (or header/footer) and byte offset.
+
+Filesystem reads and parsing run together in `spawn_blocking`. The entire
+database is decoded before configuration or artwork is read. Dropping the async
+caller does not interrupt an already running blocking import.
+Difficulties group by normalized source folder, preserving first encounter and
+difficulty order; folders with the same online ID remain separate. A set ID is
+retained only if every record in that folder has the same positive ID. Cached MD5,
+names, creator, source, tags and preview time are mapped into the existing types.
+Unavailable set/media hashes, author ID/country and user tags remain absent.
+Representative BPM uses `60000 / milliseconds_per_beat` for positive, finite,
+uninherited timings with finite offsets. Sections extend through cached total
+duration, the first starts at zero, repeated BPM durations accumulate, and higher
+BPM wins ties. No valid timing yields `None`.
+
+Installation-local `osu!.*.cfg` files supply `BeatmapDirectory`; absent or empty
+values default to `Songs`. Relative values resolve against the installation,
+equivalent values are accepted, and conflicting directories fail explicitly.
+Windows separators are normalized. On Linux, drive-qualified values resolve
+through the nearest enclosing Wine prefix's `dosdevices` mappings; absent prefixes,
+unmapped drives and Windows network paths fail rather than guessing a location.
+On Windows, native absolute drive/network paths are used.
+
+Audio and backgrounds use existing named-file usages with paths into the source
+Songs directory. Folder, audio, `.osu` and artwork references must be nonempty
+relative paths that do not escape their base; absolute, rooted, drive-qualified,
+NUL and colon references fail. References do not establish media readability.
+The [background reader](../../crates/radio-scanner/src/stable/media.rs) reads only
+the `.osu` `[Events]` section using the
+[background event format](https://osu.ppy.sh/wiki/en/Client/File_formats/osu_(file_format)),
+including quoted filenames, embedded commas and optional offsets. Missing,
+unreadable or malformed `.osu` files emit diagnostics to stderr and leave artwork
+absent while retaining cached metadata and audio. Invalid artwork paths fail the
+snapshot. No source file is modified or copied.
 
 ## C# helper protocol and failure handling
 
@@ -95,8 +146,9 @@ These are source-linked checks to select for a change, not a claim that they wer
 | Overlapping roots and Git ignore isolation | [`discovery/sweep.rs`](../../crates/radio-scanner/src/discovery/sweep.rs): `full_sweep_visits_overlapping_roots_once_in_either_order`, `shallow_sweep_preserves_depth_relative_to_each_root`, `full_sweep_preserves_explicit_roots_inside_pruned_directories`, `git_exclude_rules_do_not_hide_markers`, `git_global_ignores_do_not_hide_markers`. Visits are counted before marker deduplication; global Git configuration is isolated in a child test process. |
 | Relocation parsing and absent candidates | [`discovery/known.rs`](../../crates/radio-scanner/src/discovery/known.rs): `parses_the_full_path_key`, `rejects_missing_malformed_and_commented_entries`, `follows_a_relocated_lazer_data_directory`, `ignores_known_candidates_that_do_not_exist`. |
 | Pruning and marker names | Platform-gated tests in [`discovery/sweep.rs`](../../crates/radio-scanner/src/discovery/sweep.rs), including `recognizes_marker_file_names`, `keeps_unix_plausible_osu_locations`, and `keeps_windows_plausible_osu_locations`. |
-| Unsupported stable import | [`radio-scanner/src/lib.rs`](../../crates/radio-scanner/src/lib.rs): `reports_unsupported_scanner_sources`. |
+| Stable layouts, mapping and dispatch | [`stable/tests.rs`](../../crates/radio-scanner/src/stable/tests.rs): transition fixtures, tagged star widths, Unicode/long/empty strings, grouping/IDs, shared audio, BPM duration/ties, configured directories and native Stable dispatch. |
+| Stable malformed inputs and media | [`stable/tests.rs`](../../crates/radio-scanner/src/stable/tests.rs): every truncation of legacy/current two-record snapshots, invalid counts/tags/lengths/UTF-8/booleans, entry sizes/footer, unsafe references, quoted artwork and missing/unreadable `.osu`. Linux-only Wine fixtures cover relative/absolute drive links and nearest-prefix selection. |
 | NDJSON mapping and wrong record shape | [`lazer/tests.rs`](../../crates/radio-scanner/src/lazer/tests.rs): `parses_lazer_beatmap_set_json_into_core_type`, `rejects_beatmap_first_json`. |
 | Child process success and failure diagnostics | Unix-only fake-helper tests in [`lazer/tests.rs`](../../crates/radio-scanner/src/lazer/tests.rs): `accepts_a_fake_ndjson_helper`, `includes_helper_stderr_in_failure`. |
 
-Existing tests do not establish a discovery shutdown-latency bound, malformed-output child cleanup, Windows helper execution, or live Realm compatibility. There is no separate C# test project. Passing Rust fake-helper tests does not prove a real osu! library imports correctly. Use the [verification matrix](development.md) and add a focused regression check for behavior changed; do not run broad filesystem discovery or a real import as an automatic documentation check.
+Existing tests do not establish a discovery shutdown-latency bound, malformed-output child cleanup, Windows helper execution, real stable-library compatibility, or live Realm compatibility. There is no separate C# test project. Passing Rust binary fixtures and fake-helper tests does not prove a real osu! library imports correctly. Use the [verification matrix](development.md) and add a focused regression check for behavior changed; do not run broad filesystem discovery or a real import as an automatic documentation check.

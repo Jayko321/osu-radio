@@ -24,6 +24,8 @@ pub struct MockState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GalleryState {
+    pub folder_rows: Vec<MockFolderRow>,
+    pub folder_message: String,
     pub disabled: bool,
     pub presses: u32,
     pub field: String,
@@ -41,9 +43,51 @@ pub struct GalleryState {
     pub menu_items: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MockFolderRow {
+    pub kind: String,
+    pub path: String,
+    pub marker_path: String,
+    pub registered: bool,
+    pub action: String,
+    pub count: String,
+    pub count_pending: bool,
+    pub count_error: String,
+    pub error: String,
+}
+fn folder_rows() -> Vec<MockFolderRow> {
+    [
+        ("stable", true, "5324", ""),
+        ("lazer", false, "0", ""),
+        ("stable", false, "", "Preview failed"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(
+        |(index, (kind, registered, count, count_error))| MockFolderRow {
+            kind: kind.into(),
+            path: format!("/demo/osu/{index}"),
+            marker_path: format!("/demo/osu/{index}/marker"),
+            registered,
+            action: String::new(),
+            count: count.into(),
+            count_pending: false,
+            count_error: count_error.into(),
+            error: String::new(),
+        },
+    )
+    .collect()
+}
+
 /// Frontends translate their events to these toolkit-independent actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    FolderReset,
+    FolderToggle(String),
+    FolderCount(String),
+    FolderBrowse,
+    FolderApply,
     SelectTrack(usize),
     Search(String),
     GalleryDisabled(bool),
@@ -90,6 +134,8 @@ impl Default for MockState {
 impl Default for GalleryState {
     fn default() -> Self {
         Self {
+            folder_rows: folder_rows(),
+            folder_message: String::new(),
             disabled: false,
             presses: 0,
             field: String::new(),
@@ -116,6 +162,25 @@ impl Default for GalleryState {
 }
 
 impl GalleryState {
+    fn apply_folders(&mut self) {
+        for row in &mut self.folder_rows {
+            if row.action.is_empty() {
+                continue;
+            }
+            if row.path == "/demo/osu/2" && row.error.is_empty() {
+                row.error = "Demo import failed. Apply again to retry.".into();
+            } else {
+                row.registered = row.action == "add";
+                row.action.clear();
+                row.error.clear();
+            }
+        }
+        self.folder_message = if self.folder_rows.iter().any(|row| !row.action.is_empty()) {
+            "Some changes failed. Successful changes are saved.".into()
+        } else {
+            String::new()
+        };
+    }
     /// Search results retain original indices, including after Unicode case conversion.
     #[must_use]
     pub fn filtered_menu(&self) -> Vec<(usize, &str)> {
@@ -143,6 +208,56 @@ impl MockState {
             Action::Search(value) => replace(&mut self.search, value),
             Action::GalleryDisabled(value) => replace(&mut self.gallery.disabled, value),
             _ if self.gallery.disabled => false,
+            Action::FolderReset => {
+                self.gallery.folder_rows = folder_rows();
+                self.gallery.folder_message.clear();
+                true
+            }
+            Action::FolderToggle(path) => self
+                .gallery
+                .folder_rows
+                .iter_mut()
+                .find(|row| row.marker_path == path)
+                .is_some_and(|row| {
+                    row.action = if row.action.is_empty() {
+                        if row.registered { "remove" } else { "add" }.into()
+                    } else {
+                        String::new()
+                    };
+                    row.error.clear();
+                    true
+                }),
+            Action::FolderCount(path) => self
+                .gallery
+                .folder_rows
+                .iter_mut()
+                .find(|row| row.marker_path == path)
+                .is_some_and(|row| {
+                    row.count = "42".into();
+                    row.count_error.clear();
+                    true
+                }),
+            Action::FolderBrowse => {
+                if self.gallery.folder_rows.iter().any(|row| row.count_pending) {
+                    return false;
+                }
+                self.gallery.folder_rows.push(MockFolderRow {
+                    kind: "lazer".into(),
+                    path: "/demo/selected/osu".into(),
+                    marker_path: "/demo/selected/osu/client.realm".into(),
+                    registered: false,
+                    action: "add".into(),
+                    count: String::new(),
+                    count_pending: true,
+                    count_error: String::new(),
+                    error: String::new(),
+                });
+                true
+            }
+            Action::FolderApply => {
+                self.gallery.apply_folders();
+                true
+            }
             Action::Press => {
                 let next = self.gallery.presses.saturating_add(1);
                 replace(&mut self.gallery.presses, next)
