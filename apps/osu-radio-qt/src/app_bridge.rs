@@ -157,6 +157,8 @@ pub mod ffi {
             NOTIFY
         )]
         #[qproperty(bool, can_seek, cxx_name = "canSeek", READ, NOTIFY)]
+        #[qproperty(bool, can_next, cxx_name = "canNext", READ, NOTIFY)]
+        #[qproperty(bool, can_previous, cxx_name = "canPrevious", READ, NOTIFY)]
         #[qproperty(f64, playback_position, cxx_name = "playbackPosition", READ, NOTIFY)]
         #[qproperty(f64, playback_duration, cxx_name = "playbackDuration", READ, NOTIFY)]
         #[qproperty(
@@ -199,6 +201,12 @@ pub mod ffi {
         #[qinvokable]
         #[cxx_name = "togglePlayback"]
         fn toggle_playback(self: Pin<&mut AppBridge>);
+        #[qinvokable]
+        #[cxx_name = "nextTrack"]
+        fn next_track(self: Pin<&mut AppBridge>);
+        #[qinvokable]
+        #[cxx_name = "previousTrack"]
+        fn previous_track(self: Pin<&mut AppBridge>);
         #[qinvokable]
         #[cxx_name = "seekPlayback"]
         fn seek_playback(self: Pin<&mut AppBridge>, seconds: f64);
@@ -268,6 +276,8 @@ pub struct AppBridgeRust {
     loading_audio_id: i32,
     selected_is_playing: bool,
     can_seek: bool,
+    can_next: bool,
+    can_previous: bool,
     playback_position: f64,
     playback_duration: f64,
     playback_position_label: QString,
@@ -275,6 +285,7 @@ pub struct AppBridgeRust {
     volume: f32,
     playback: Playback,
     selected_track_duration: Option<Duration>,
+    selected_cover_id: Option<i32>,
     track_count: i32,
     selected_audio_id: i32,
     selected_title: QString,
@@ -314,6 +325,8 @@ impl Default for AppBridgeRust {
             loading_audio_id: -1,
             selected_is_playing: false,
             can_seek: false,
+            can_next: false,
+            can_previous: false,
             playback_position: 0.0,
             playback_duration: 0.0,
             playback_position_label: QString::from("00:00"),
@@ -321,6 +334,7 @@ impl Default for AppBridgeRust {
             volume: 1.0,
             playback: Playback::default(),
             selected_track_duration: None,
+            selected_cover_id: None,
             track_count: Default::default(),
             selected_audio_id: -1,
             selected_title: QString::default(),
@@ -429,6 +443,8 @@ impl ffi::AppBridge {
         bool
     );
     property_setter!(set_can_seek, can_seek, can_seek_changed, bool);
+    property_setter!(set_can_next, can_next, can_next_changed, bool);
+    property_setter!(set_can_previous, can_previous, can_previous_changed, bool);
     property_setter!(
         set_playback_position,
         playback_position,
@@ -661,6 +677,16 @@ impl ffi::AppBridge {
             self.command(command);
         }
     }
+    pub fn next_track(self: Pin<&mut Self>) {
+        if self.can_next {
+            self.command(AppCommand::Next);
+        }
+    }
+    pub fn previous_track(self: Pin<&mut Self>) {
+        if self.can_previous {
+            self.command(AppCommand::Previous);
+        }
+    }
     pub fn seek_playback(self: Pin<&mut Self>, seconds: f64) {
         if self.can_seek
             && let Ok(position) = Duration::try_from_secs_f64(seconds)
@@ -697,11 +723,15 @@ impl ffi::AppBridge {
             }
         });
         let volume = self.playback.snapshot.volume;
+        let can_seek = self.playback.has_source && duration.is_some_and(|d| !d.is_zero());
+        let can_next = self.playback.can_next;
+        let can_previous = self.playback.can_previous;
         self.as_mut().set_current_audio_id(current.unwrap_or(-1));
         self.as_mut().set_loading_audio_id(loading.unwrap_or(-1));
         self.as_mut().set_selected_is_playing(playing);
-        self.as_mut()
-            .set_can_seek(duration.is_some_and(|d| !d.is_zero()));
+        self.as_mut().set_can_seek(can_seek);
+        self.as_mut().set_can_next(can_next);
+        self.as_mut().set_can_previous(can_previous);
         self.as_mut()
             .set_playback_duration(duration.map_or(0.0, |d| d.as_secs_f64()));
         self.as_mut().set_playback_position(position.as_secs_f64());
@@ -788,17 +818,19 @@ impl ffi::AppBridge {
         self.command(AppCommand::RetryFolders);
     }
     pub fn request_media(self: Pin<&mut Self>, id: i32) {
-        let Some(row) = self
+        let cover = if let Some(row) = self
             .audio_rows
             .get(&id)
             .and_then(|index| self.rows.get(*index))
-        else {
+        {
+            row.track.cover_beatmap_id
+        } else if self.has_selection && id == self.selected_audio_id {
+            self.selected_cover_id
+        } else {
             return;
         };
-        let missing = row
-            .track
-            .cover_beatmap_id
-            .is_some_and(|cover| native::artwork_url(self.cache_epoch, cover).is_empty());
+        let missing =
+            cover.is_some_and(|cover| native::artwork_url(self.cache_epoch, cover).is_empty());
         self.command(AppCommand::RequestMedia {
             audio_id: id,
             artwork_missing: missing,
@@ -813,6 +845,8 @@ impl ffi::AppBridge {
         self.as_mut().data_changed(&index, &index, &roles);
     }
     fn selection(mut self: Pin<&mut Self>, track: Option<Track>) {
+        self.as_mut().rust_mut().selected_cover_id =
+            track.as_ref().and_then(|track| track.cover_beatmap_id);
         self.as_mut().rust_mut().selected_track_duration =
             track.as_ref().and_then(|track| track.duration);
         let artwork = track
@@ -854,13 +888,12 @@ impl ffi::AppBridge {
                 self.as_mut().notify_row(index, &[261]);
             }
         }
-        let selected = self
-            .audio_rows
-            .get(&self.selected_audio_id)
-            .and_then(|index| self.rows.get(*index))
-            .map(|r| r.artwork.clone())
-            .unwrap_or_default();
-        self.set_selected_artwork_url(selected);
+        if let Some(cover) = self.selected_cover_id
+            && affected.contains(&cover)
+        {
+            let url = native::artwork_url(self.cache_epoch, cover);
+            self.set_selected_artwork_url(url);
+        }
     }
     fn replace_tracks(mut self: Pin<&mut Self>, tracks: Vec<Track>) {
         let generation = self.generation.saturating_add(1);
@@ -1086,6 +1119,10 @@ mod tests {
                 volume: 0.5,
             },
             error: None,
+            has_source: true,
+            can_next: true,
+            can_previous: true,
+            ..Playback::default()
         };
         bridge.as_mut().apply(AppUpdate::Playback(playback.clone()));
         assert_eq!(bridge.current_audio_id, 7);

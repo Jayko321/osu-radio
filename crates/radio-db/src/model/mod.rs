@@ -15,3 +15,6 @@ pub use osu_installation::{OsuInstallation, OsuInstallationChanges};
 pub use user_data::{USER_DATA_ID, UserData};
 mod tag;
 pub use tag::{SetTag, Tag};
+
+mod queue;
+pub use queue::{PlaybackMode, QueueState};

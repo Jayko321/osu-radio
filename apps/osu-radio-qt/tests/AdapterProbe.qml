@@ -284,7 +284,7 @@ QtObject {
         case 3:
             if (bridge.loadingAudioId !== 42 || bridge.volume !== 0.25) return;
             check(bridge.playbackMessage.includes("Loading"), "loading status projects immediately");
-            check(bridge.currentAudioId === -1, "download has not committed a track");
+            check(bridge.currentAudioId === 42 && !progress.enabled, "assignment selects current before audio finishes loading");
             bridge.selectTrack(7);
             stage = 4;
             break;
@@ -297,12 +297,41 @@ QtObject {
             break;
         }
     }
+    function queueProbe(): void {
+        if (!bridge.connected || bridge.libraryLoading) return;
+        const next = findChild(window.contentItem, "nextTrackButton");
+        const previous = findChild(window.contentItem, "previousTrackButton");
+        switch (stage) {
+        case 0:
+            if (bridge.currentAudioId !== 7 || !next.enabled || !previous.enabled) return;
+            check(bridge.selectedAudioId === 7 && !bridge.selectedIsPlaying, "restored queue selects current and stays paused");
+            next.clicked(); stage = 1; break;
+        case 1:
+            if (bridge.currentAudioId !== 42) return;
+            check(bridge.selectedAudioId === 42 && !bridge.selectedIsPlaying, "Next changes current and preserves pause");
+            previous.clicked(); stage = 2; break;
+        case 2:
+            if (bridge.currentAudioId !== 7) return;
+            check(bridge.selectedAudioId === 7 && !bridge.selectedIsPlaying, "Previous changes current and preserves pause");
+            next.clicked(); stage = 3; break;
+        case 3:
+            if (bridge.currentAudioId !== 42) return;
+            bridge.searchLibrary("missing"); stage = 4; break;
+        case 4:
+            if (bridge.trackCount !== 0 || bridge.libraryLoading || bridge.selectedArtworkUrl.length === 0) return;
+            check(bridge.currentAudioId === 42 && bridge.selectedAudioId === 42, "search does not discard current selection");
+            check(bridge.selectedTitle === "Track 42" && bridge.selectedDurationLabel === "02:05", "current metadata survives empty search");
+            check(next.enabled && previous.enabled && !bridge.selectedIsPlaying, "queue controls survive empty search on pause");
+            finish(); break;
+        }
+    }
     function step(): void {
         if (passed) return;
         if (gallery) { galleryModalProbe(); return; }
         if (testCase === "folders") { folderProbe(); return; }
         if (testCase === "search") { searchProbe(); return; }
         if (testCase === "playback") { playbackProbe(); return; }
+        if (testCase === "queue") { queueProbe(); return; }
         if (testCase === "requests") {
             if (!bridge.connected || bridge.folders.length !== 2) return;
             check(bridge.libraryLoading, "library HTTP request remains pending at close");

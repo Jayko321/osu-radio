@@ -30,6 +30,7 @@ migration for subsequent changes.
 | `tags` | Generated `i32` ID; globally unique normalized name, SQLite `BINARY` / PostgreSQL `C` collation. |
 | `beatmap_set_tags` | Composite primary key `(beatmap_set_id, tag_id)`; set cascade, restrictive tag reference, index on `tag_id`. |
 | `audio_sources` | Generated `i32` ID; globally unique `(kind, location)`; `local`, `copied`, or `online`. |
+| `playback_queue` | Singleton `id = 1`; JSON audio-ID history, nullable current index, playback mode and monotonic revision/token counters. |
 
 Installation deletion cascades through sets, beatmaps and set-tag links. Shared references use
 restrictive foreign keys. Repository cleanup deletes only unreferenced metadata
@@ -118,6 +119,7 @@ there are no new standalone beatmap or set creation workflows.
 | `beatmap_metadata()` | `get`, `get_or_insert`; the pure `metadata_hash` helper is re-exported. |
 | `tags()` | `all`, `get`, `for_set`; lists use `ORDER BY name ASC` with SQLite `BINARY` / PostgreSQL `C`. |
 | `audio_sources()` | `get`, `find`, `get_or_insert`. |
+| `queue()` | `get`, `playback`, `append`, `clear`, `command`, `recover`; one persistent server queue. |
 
 [Installation services](../../crates/radio-services/src/osu_installation.rs) own
 folder discovery validation, label trimming, snapshot replacement and deletion.
@@ -157,6 +159,64 @@ symbols, cross-reference matches, 70 unique words, three ID chunks, and a commit
 replacement from a second pool between projections and full result loading.
 Both backends must retain the old snapshot. The existing tag migration is unchanged;
 this optimization adds no schema or persistent index.
+
+## Playback queue
+
+The additive [queue migration](../../crates/radio-db/src/migrations/m20261001_000005_playback_queue.rs)
+creates one empty state row without changing the library. The concrete
+[repository](../../crates/radio-db/src/repositories/queue.rs) stores the ordered
+JSON ID array, including duplicates and played history. Empty queues have a null
+index; exhaustion retains the history with an index equal to its length. No
+foreign key binds history to audio rows, so source cleanup can remove deleted
+library sources while retaining the queue's previous positions.
+
+[QueueService](../../crates/radio-services/src/queue.rs) opens one transaction,
+locks the existing settings singleton before reads, validates every new Local/Copied
+ID, applies the transition, saves and commits once. Invalid input leaves the
+entire queue unchanged. The same lock coordinates queue changes with snapshot
+replacement/deletion across independent pools and processes. Reads assemble the
+queue and current metadata within one consistent read transaction.
+
+First append to empty/exhausted history starts the first new entry. Append with
+an active current entry retains its mode, including pause. Explicit Play of a
+different audio ID inserts immediately after current, before pending items. Play
+of the paused current track resumes with its token; Stop followed by Play restarts
+with a new token. Next/Previous preserve pause, and select a paused entry when
+starting from Stop. Previous at the first playable entry restarts it; from
+exhaustion it returns the last playable entry. Transitions skip deleted/Online
+IDs while keeping their history entries. Decode/download failure advances via
+the client's Failed callback; exhaustion stops. Seek and volume stay local.
+
+Revision increases once for a persisted change; no-op commands and stale callbacks
+retain it. Every new launch, restart, Stop, clear, exhaustion and active-state
+recovery of a current entry invalidates the prior playback token. Pause/resume retains it. Finished
+requires the current token and Playing mode; Failed requires the current token
+and Playing/Paused mode, preserving pause on its transition. `PauseIfCurrent`
+requires the current token for retriable device-failure feedback; ordinary user
+Pause remains global. Duplicate callbacks
+cannot advance twice. Counters use checked arithmetic and checked BIGINT conversion.
+Server startup explicitly calls `recover` once after migration: a current entry
+becomes Paused with a new token/revision, retaining history and index, including
+an entry stopped before shutdown. Already-paused states also invalidate
+old-process callbacks; empty/exhausted queues remain stopped. The next Play
+begins recovered audio from the start.
+
+Assignments contain only the current audio ID, `LibraryTrack`, mode, revision,
+token and transition availability. Metadata loads only that audio's references,
+preserving the same lowest-beatmap representative/cover, complete difficulty
+list and unfiltered set multiplicity as Songs. It does not depend on a search
+result or materialize the complete library. ID validation reads queue IDs in
+batches of 500. Physical source availability remains the client's download/
+decoding responsibility; extensionless imported locations remain valid.
+
+[Repository queue contracts](../../crates/radio-db/src/tests/queue.rs) cover a
+populated pre-queue upgrade, concurrent migration, reopen, rollback, position
+validation and explicit reset. [Service queue contracts](../../crates/radio-services/src/tests/queue.rs)
+cover atomic validation, copied/Online inputs, insertion/history, duplicate IDs,
+EOF/failure, pause/resume/Stop, boundaries, stale/duplicate callbacks across pools,
+concurrent append/clear, recovery, removed sources and search-independent metadata.
+Both run through the ordinary disposable SQLite/PostgreSQL contract harnesses.
+These deterministic storage/transition checks do not establish physical output.
 
 ## Snapshot replacement
 
@@ -203,7 +263,7 @@ its lock. Independent pools/processes therefore cannot select the same pending w
 
 Application tables without applied SeaORM migration history produce an actionable
 legacy-database error. There is no legacy data migration: choose a new database or
-explicit reset. Reset drops only the eight application tables and their SeaORM/
+explicit reset. Reset drops only the nine application tables and their SeaORM/
 Diesel migration history, in child-first order, then recreates the schema in the
 same transaction. Unrelated tables are preserved; reset does not use a broad
 schema refresh or drop external objects.

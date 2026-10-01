@@ -1,6 +1,7 @@
 pub(crate) mod beatmap_sets;
 pub(crate) mod folder_selection;
 pub(crate) mod media;
+pub(crate) mod playback;
 pub(crate) mod tracks;
 pub(crate) mod user_data;
 
@@ -18,6 +19,14 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/api/audio-sources/{id}/duration", get(media::duration))
         .route("/api/audio-sources/{id}/audio", get(media::audio))
         .route("/api/tracks", get(tracks::list_tracks))
+        .route(
+            "/api/queue",
+            get(playback::get_queue).delete(playback::clear_queue),
+        )
+        .route("/api/queue/items", post(playback::append_items))
+        .route("/api/playback", get(playback::get_playback))
+        .route("/api/playback/events", get(playback::events))
+        .route("/api/playback/commands", post(playback::command))
         .route("/api/beatmap-sets", get(beatmap_sets::list_beatmap_sets))
         .route("/api/user-data", get(user_data::get_user_data))
         .route(
@@ -54,6 +63,11 @@ pub(crate) fn router(state: AppState) -> Router {
     let (router, api) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(beatmap_sets::list_beatmap_sets))
         .routes(routes!(tracks::list_tracks))
+        .routes(routes!(playback::get_queue, playback::clear_queue))
+        .routes(routes!(playback::append_items))
+        .routes(routes!(playback::get_playback))
+        .routes(routes!(playback::events))
+        .routes(routes!(playback::command))
         .routes(routes!(media::cover))
         .routes(routes!(media::duration))
         .routes(routes!(media::audio))

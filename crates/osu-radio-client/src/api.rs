@@ -105,6 +105,83 @@ impl ApiClient {
         &self.base_url
     }
 
+    pub async fn queue(&self) -> Result<crate::models::QueueState, ApiError> {
+        self.get("/api/queue").await
+    }
+    pub async fn playback(&self) -> Result<crate::models::PlaybackAssignment, ApiError> {
+        self.get("/api/playback").await
+    }
+    pub async fn append_queue(
+        &self,
+        audio_source_ids: &[i32],
+    ) -> Result<crate::models::PlaybackAssignment, ApiError> {
+        self.playback_response(
+            "/api/queue/items",
+            self.http
+                .post(self.url("/api/queue/items"))
+                .json(&serde_json::json!({"audio_source_ids": audio_source_ids})),
+        )
+        .await
+    }
+    pub async fn clear_queue(&self) -> Result<crate::models::PlaybackAssignment, ApiError> {
+        self.playback_response("/api/queue", self.http.delete(self.url("/api/queue")))
+            .await
+    }
+    pub async fn playback_command(
+        &self,
+        command: &crate::models::PlaybackCommand,
+    ) -> Result<crate::models::PlaybackAssignment, ApiError> {
+        let path = "/api/playback/commands";
+        self.playback_response(path, self.http.post(self.url(path)).json(command))
+            .await
+    }
+    async fn playback_response(
+        &self,
+        path: &str,
+        request: reqwest::RequestBuilder,
+    ) -> Result<crate::models::PlaybackAssignment, ApiError> {
+        let response = request.send().await.map_err(ApiError::Transport)?;
+        if !response.status().is_success() {
+            return Err(Self::failure(path, response).await);
+        }
+        response.json().await.map_err(ApiError::Decode)
+    }
+    /// Incremental assignment stream. Blank lines are heartbeats; cancellation closes the response.
+    pub async fn playback_events(
+        &self,
+        mut emit: impl FnMut(crate::models::PlaybackAssignment) + Send,
+    ) -> Result<(), ApiError> {
+        let path = "/api/playback/events";
+        let mut response = self
+            .http
+            .get(self.url(path))
+            .timeout(std::time::Duration::from_secs(3600))
+            .send()
+            .await
+            .map_err(ApiError::Transport)?;
+        if !response.status().is_success() {
+            return Err(Self::failure(path, response).await);
+        }
+        let mut buffer = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(ApiError::Transport)? {
+            for part in chunk.split_inclusive(|byte| *byte == b'\n') {
+                buffer.extend_from_slice(part);
+                if buffer.len() > 1024 * 1024 {
+                    return Err(ApiError::Protocol("Playback event exceeds 1 MiB.".into()));
+                }
+                if buffer.last() == Some(&b'\n') {
+                    if buffer.iter().any(|byte| !byte.is_ascii_whitespace()) {
+                        emit(serde_json::from_slice(&buffer).map_err(ApiError::StreamDecode)?);
+                    }
+                    buffer.clear();
+                }
+            }
+        }
+        Err(ApiError::Protocol(
+            "Playback stream ended; reconnecting.".into(),
+        ))
+    }
+
     pub async fn beatmap_sets(&self) -> Result<Vec<BeatmapSet>, ApiError> {
         self.get("/api/beatmap-sets").await
     }
@@ -336,6 +413,10 @@ impl ApiClient {
 #[path = "api/folder_tests.rs"]
 mod folder_tests;
 
+#[cfg(test)]
+#[path = "api/playback_tests.rs"]
+mod playback_tests;
+
 #[derive(Debug, serde::Deserialize)]
 struct ErrorBody {
     #[serde(rename = "error", alias = "message")]
@@ -360,7 +441,7 @@ pub enum ApiError {
 impl fmt::Display for ApiError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::StreamDecode(error) => write!(formatter, "Invalid discovery event: {error}"),
+            Self::StreamDecode(error) => write!(formatter, "Invalid stream event: {error}"),
             Self::Protocol(message) => formatter.write_str(message),
             Self::File(error) => write!(formatter, "could not save downloaded audio: {error}"),
             Self::AudioTooLarge => formatter.write_str("audio exceeds the 256 MiB download limit"),

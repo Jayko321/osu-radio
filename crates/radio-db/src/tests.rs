@@ -48,6 +48,7 @@ async fn repository_contracts(url: &str) {
     concurrent_schema_changes(&database, url).await;
     native_path_migration(&database).await;
     tag_migration::contracts(&database, url).await;
+    queue::migration_contracts(&database, url).await;
     // A fresh database is expected: no configured application database is consulted.
     sql(
         &database,
@@ -342,6 +343,7 @@ async fn background_migration_preserves_existing_rows() {
 
 async fn drop_application_tables(database: &Database) {
     for table in [
+        "playback_queue",
         "beatmap_set_tags",
         "tags",
         "beatmaps",
@@ -375,7 +377,7 @@ async fn concurrent_schema_changes(database: &Database, url: &str) {
                 .await
                 .unwrap()
                 .len(),
-            4
+            5
         );
         let (reset, migrate) = tokio::join!(database.reset(), other.migrate());
         reset.unwrap();
@@ -641,3 +643,5 @@ async fn tag_repository_contracts(database: &Database) {
     repository.cleanup().await.unwrap();
     assert!(repository.all().await.unwrap().is_empty());
 }
+
+mod queue;

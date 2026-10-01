@@ -22,7 +22,7 @@ pub mod repositories;
 use anyhow::Result;
 use repositories::{
     AudioSourceRepository, BeatmapMetadataRepository, BeatmapRepository, BeatmapSetRepository,
-    OsuInstallationRepository, TagRepository, UserDataRepository,
+    OsuInstallationRepository, QueueRepository, TagRepository, UserDataRepository,
 };
 pub use repositories::{RegisteredInstallation, metadata_hash};
 use sea_orm::TransactionTrait;
@@ -115,6 +115,12 @@ impl Database {
         }
     }
     #[must_use]
+    pub const fn queue(&self) -> QueueRepository<'_> {
+        QueueRepository {
+            connection: sea_orm::DatabaseExecutor::Connection(&self.connection),
+        }
+    }
+    #[must_use]
     pub const fn audio_sources(&self) -> AudioSourceRepository<'_> {
         AudioSourceRepository {
             connection: sea_orm::DatabaseExecutor::Connection(&self.connection),
@@ -172,6 +178,12 @@ impl Transaction {
     #[must_use]
     pub const fn tags(&self) -> TagRepository<'_> {
         TagRepository {
+            connection: sea_orm::DatabaseExecutor::Transaction(&self.connection),
+        }
+    }
+    #[must_use]
+    pub const fn queue(&self) -> QueueRepository<'_> {
+        QueueRepository {
             connection: sea_orm::DatabaseExecutor::Transaction(&self.connection),
         }
     }

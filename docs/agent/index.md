@@ -59,7 +59,7 @@ flowchart LR
     Scanner -->|"launch / NDJSON"| Helper["C# Realm helper"]
     Helper -->|"read Realm and resolve file references"| Local
     Core["radio-core: markers and import types"] --> Scanner
-    Server -->|"stream source bytes by ID"| Client
+    Server -->|"playback assignments; source bytes by ID"| Client
     Client -->|"temporary file"| Audio["Local audio player and output"]
     Server -.-> Hosted["Future hosted sources: undecided"]
 ```
@@ -87,7 +87,7 @@ Tests and their limits are linked in the component guides.
 | Songs/settings tabs, library selection, window actions | Implemented UI bindings | [Frontend interaction table](frontend.md#implemented-interactions-and-placeholders). Source binding is not cross-platform interaction validation. |
 | Songs search | Implemented | Server substring search through the shared controller, 200 ms debounce; Settings search remains a placeholder. See [frontend](frontend.md). |
 | Library and folder settings | Implemented | [Frontend](frontend.md); server rows, bounded artwork loading, optional durations, folder dropdown, Qt staged discovery/import/removal and Vizia native chooser registration. Selection is presentation only. |
-| Transport, seeking and volume | Implemented for one track | [Frontend](frontend.md); client downloads then plays locally. Device selection remains deferred. |
+| Server playback queue, transport, seeking and volume | Implemented | [Database](database.md), [backend](backend.md), [frontend](frontend.md); persisted queue and token-bound assignments, client downloads and plays locally. Seek and volume remain local. |
 | Qt Songs, Settings and component gallery | Connected client; offline gallery | [Qt frontend](frontend.md#qt-frontend); shared session/controller, playback, library/media and staged folder selection/import/removal. |
 | Local audio playback | Implemented in source | Explicit Play; deterministic engine/HTTP tests do not establish physical output or Windows behavior. |
 | Hosted sources | Future direction | Provider, protocol and hosting remain undecided. |
@@ -110,7 +110,8 @@ The shared services coordinate concrete repositories, installation-owned
 snapshots and shared immutable metadata. Read [database](database.md),
 [backend](backend.md) and the [API skill](../../.agents/skills/osu-radio-api/SKILL.md)
 for those contracts. Hosting, providers, mobile implementation, output-device selection and persisted
-volume remain open. Queue, automatic advance, shuffle and repeat are outside the current playback scope.
+volume remain open. One shared server queue and automatic advance are implemented;
+queue-list UI, shuffle and repeat remain deferred.
 
 ## Evidence and maintenance
 

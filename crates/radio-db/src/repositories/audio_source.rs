@@ -34,6 +34,24 @@ impl AudioSourceRepository<'_> {
         Ok(())
     }
 
+    /// Fetch only playable queue IDs; removed/online items remain in queue history.
+    pub async fn playable_ids(&self, ids: &[i32]) -> Result<std::collections::HashSet<i32>> {
+        let mut playable = std::collections::HashSet::new();
+        for chunk in ids.chunks(500) {
+            playable.extend(
+                audio_source::Entity::find()
+                    .select_only()
+                    .column(audio_source::Column::Id)
+                    .filter(audio_source::Column::Id.is_in(chunk.iter().copied()))
+                    .filter(audio_source::Column::Kind.is_in(["local", "copied"]))
+                    .into_tuple::<i32>()
+                    .all(&self.connection)
+                    .await?,
+            );
+        }
+        Ok(playable)
+    }
+
     pub async fn get(&self, id: i32) -> Result<Option<AudioSource>> {
         audio_source::Entity::find_by_id(id)
             .one(&self.connection)

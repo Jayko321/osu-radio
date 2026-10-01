@@ -41,6 +41,53 @@ def library(ids):
                                "set_has_multiple_audio_sources": True}]} for i in ids]
 
 
+queue = [7, 42, 103] if case == "queue" else []
+queue_index = 0
+playback_condition = threading.Condition()
+playback = {"current_audio_source_id": 7 if queue else None,
+            "track": library([7])[0] if queue else None,
+            "duration_ms": 125000 if queue else None,
+            "mode": "paused" if queue else "stopped", "revision": 1 if queue else 0,
+            "playback_token": 1 if queue else 0, "can_next": bool(queue), "can_previous": bool(queue)}
+
+
+def playback_command(body):
+    global queue_index
+    command = body["command"]
+    with playback_condition:
+        if (command in ("finished", "failed") or command == "pause" and "playback_token" in body) and body["playback_token"] != playback["playback_token"]:
+            return dict(playback)
+        if command == "play":
+            identifier = body.get("audio_source_id", playback["current_audio_source_id"])
+            if identifier is not None and identifier != playback["current_audio_source_id"]:
+                queue.insert(min(queue_index + 1, len(queue)), identifier)
+                queue_index = queue.index(identifier)
+                playback["playback_token"] += 1
+            playback["mode"] = "playing"
+        elif command == "pause":
+            playback["mode"] = "paused"
+        elif command == "stop":
+            playback["mode"] = "stopped"
+            playback["playback_token"] += 1
+        elif command == "previous":
+            queue_index = max(0, queue_index - 1)
+            playback["playback_token"] += 1
+        elif command in ("next", "finished", "failed"):
+            queue_index += 1
+            playback["playback_token"] += 1
+        identifier = queue[queue_index] if queue_index < len(queue) else None
+        playback["current_audio_source_id"] = identifier
+        playback["track"] = library([identifier])[0] if identifier is not None else None
+        playback["duration_ms"] = 125000 if identifier is not None else None
+        playback["can_next"] = queue_index + 1 < len(queue)
+        playback["can_previous"] = bool(queue)
+        if identifier is None:
+            playback["mode"] = "stopped"
+        playback["revision"] += 1
+        playback_condition.notify_all()
+        return dict(playback)
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
@@ -62,7 +109,11 @@ class Handler(BaseHTTPRequestHandler):
         marker = body.get("marker_path", "")
         with (root / "requests").open("a") as log:
             log.write("POST " + self.path + " " + marker + "\n")
-        if self.path.endswith("/discover"):
+        if self.path == "/api/playback/commands":
+            with (root / "playback_commands").open("a") as log:
+                log.write(json.dumps(body) + "\n")
+            self.reply(200, playback_command(body))
+        elif self.path.endswith("/discover"):
             events = [{"event": "candidate", "kind": "lazer", "root_path": "/fixtures/31",
                        "marker_path": "/fixtures/31/client.realm", "registered_id": 31}]
             for i in [101, 101, 102]:
@@ -127,13 +178,39 @@ class Handler(BaseHTTPRequestHandler):
             log.write(self.path + "\n")
         status = 200
         content_type = "application/json"
-        if urlsplit(self.path).path == "/api/tracks":
+        if self.path == "/api/playback":
+            with playback_condition:
+                payload = dict(playback)
+        elif self.path == "/api/playback/events":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            revision = -1
+            try:
+                while True:
+                    with playback_condition:
+                        if revision == playback["revision"]:
+                            playback_condition.wait(timeout=0.1)
+                        payload = dict(playback)
+                    if payload["revision"] != revision:
+                        self.wfile.write(json.dumps(payload).encode() + b"\n")
+                        revision = payload["revision"]
+                    else:
+                        self.wfile.write(b"\n")
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+        elif urlsplit(self.path).path == "/api/tracks":
             if case == "requests":
                 library_pending.set()
                 threading.Event().wait(60)
             counts["library"] += 1
             n = counts["library"]
-            if case in ("playback", "folders"):
+            if case == "queue":
+                query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
+                payload = library([] if query == "missing" else [7, 42, 103])
+            elif case in ("playback", "folders"):
                 payload = library([7, 42, 103])
             elif case == "search":
                 query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]

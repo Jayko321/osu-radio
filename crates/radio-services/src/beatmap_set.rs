@@ -5,7 +5,7 @@ use radio_core::import_types::ImportedBeatmapSet;
 use radio_db::{Database, repositories::BeatmapSetRepository};
 use std::collections::{HashMap, HashSet};
 
-mod tracks;
+pub(crate) mod tracks;
 pub use tracks::{LibraryTrack, TrackDifficulty};
 
 pub struct BeatmapSetService<'a> {

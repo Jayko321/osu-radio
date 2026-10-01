@@ -44,6 +44,13 @@ failure propagates with context and exits unsuccessfully; it does not silently
 select another port. Keep the loopback default unless a task explicitly changes
 the hosting model.
 
+After migration, `AppState::connect` recovers the shared playback queue once.
+It retains the list and current position, restores any current entry on pause,
+and invalidates callbacks from the previous server lifetime. Recovery commits
+before the listener starts; a subsequent Play begins the recovered track from
+the start. Queue transitions and revision/token rules belong to
+[`QueueService`](../../crates/radio-services/src/queue.rs), not HTTP handlers.
+
 `serve` prepares application state, binds the TCP listener, reads the actual
 bound address, prints its startup messages, then enters `axum::serve`. This is
 the current order in source, not a separate HTTP health-check protocol.
@@ -133,6 +140,12 @@ continues to use its own [API DTOs](../../crates/osu-radio-client/src/api.rs).
 | --- | --- |
 | `GET /api/beatmap-sets` | Optional `q` searches the library; existing contract retained. Array of `{id, online_id, hash, has_multiple_audio_sources, audio_sources, beatmaps}`. Each audio source has `{id, kind, location}`; distinct sources per set, empty arrays allowed. |
 | `GET /api/tracks` | Optional `q`; one record per global audio ID with nullable representative metadata, cover ID and all difficulties. Used by Songs. |
+| `GET /api/queue` | Persisted `{audio_source_ids, current_index, mode, revision, playback_token}`. Duplicates and played history remain; an exhausted index equals list length. |
+| `POST /api/queue/items` | `{audio_source_ids:[...]}` appends atomically after validating every ID as Local/Copied. Unknown/Online IDs return 400 without changes. An empty/exhausted queue starts the first added item; paused playback stays paused. Returns the current assignment. |
+| `DELETE /api/queue` | Clears the queue, stops playback and invalidates the launch token. Returns the current assignment. |
+| `GET /api/playback` | Current assignment with metadata and duration independent of Songs search; the queue list is omitted. |
+| `GET /api/playback/events` | Current assignment immediately, followed by increasing committed revisions as NDJSON. Blank-line heartbeat every 15 seconds. Client uses a separate one-hour timeout and reconnects to synchronize. |
+| `POST /api/playback/commands` | Tagged `{command:...}`: `play` with optional `audio_source_id`, `pause`, `stop`, `next`, `previous`, `finished` or `failed`. Completion/error commands require `playback_token`; internal device pauses include it too. Stale callbacks return the current assignment without transitioning. |
 | `GET /api/beatmaps/{id}/cover` | Stored background reference bytes, at most 16 MiB; absent/unreadable/oversized cover is 404. No path parameter or caller-supplied filesystem location. |
 | `GET /api/audio-sources/{id}/audio` | Original Local/Copied file streamed with `Content-Length` and `application/octet-stream`; 404 for unknown ID or missing/nonregular file, 400 for Online. No caller-supplied paths. |
 | `GET /api/audio-sources/{id}/duration` | `{duration_ms}` with nullable duration; absent audio ID is 404, missing/corrupt/unsupported media is null. Local/copied sources only. |
@@ -150,6 +163,44 @@ Each `beatmaps` entry adds `id`, `audio_source_id`, `difficulty_name`, `title`,
 means a stored reference exists, not that the file is currently readable. The
 single repository aggregate joins difficulties and metadata while retaining a
 distinct, ID-ordered audio-source list per set. Existing fields remain unchanged.
+
+### Shared playback queue
+
+The [playback routes](../../apps/osu-radio-server/src/routes/playback.rs) use
+`Services::queue()` exclusively. Each assignment contains
+`{current_audio_source_id, track, duration_ms, mode, revision, playback_token,
+can_next, can_previous}`; `track` uses the existing `/api/tracks` record shape.
+Modes are `stopped`, `paused` and `playing`. Track/ID are null after exhaustion
+or clearing. Metadata includes the cover ID and every difficulty even when the
+current audio falls outside the active search. Duration reuses the content-based
+Lofty probe; unreadable or unsupported media produces null, without preventing
+the client from reporting a failed download/decode and advancing the queue.
+
+User Pause needs only `{"command":"pause"}`. Device-failure feedback sends
+`{"command":"pause","playback_token":T}`; the service pauses only that
+current launch. This callback can be retried after transport failure without
+pausing a newer assignment committed by another API writer.
+
+Every mutation publishes its committed revision before asynchronous duration
+probing. `AppState` uses a watch channel that only accepts increasing revisions,
+so a delayed response cannot replace a newer notification. The events handler
+subscribes before reading its initial snapshot and emits only increasing
+revisions afterward. Heartbeats also reread the persisted assignment to detect
+independent writers or cancellation between commit and notification. Watch
+notifications may coalesce intermediate revisions; every emitted assignment
+reflects a committed snapshot. The body directly owns its receiver and read
+stream, so dropping it releases the subscription without a detached task or an
+open transaction waiting for an event.
+
+Malformed or incomplete JSON commands follow Axum's 422 rejection; typed invalid
+audio IDs use the deliberate 400 error body. Unexpected database/probe-task
+failures retain the safe 500 boundary. Both router variants and OpenAPI register
+all six endpoints. [Route tests](../../apps/osu-radio-server/src/routes/playback_tests.rs)
+cover wire transitions, atomic validation, metadata/duration, repeated callbacks,
+initial/reconnected snapshots, duplicate-ID tokens, notification ordering,
+heartbeat detection and subscriber cancellation. The
+[media tests](../../apps/osu-radio-server/src/routes/media.rs) additionally check
+that duration probing rejects FIFO sources before opening them.
 
 ### Folder discovery and selection
 

@@ -31,7 +31,7 @@ fn main() -> ExitCode {
     };
     if mode == LaunchMode::Help {
         println!(
-            "Usage: osu-radio-qt [--component-gallery] [--help]\n\nSongs connects to the local library server; the component gallery stays offline. Playback is unavailable."
+            "Usage: osu-radio-qt [--component-gallery] [--help]\n\nSongs connects to the local library server; the component gallery stays offline. Playback uses the server queue."
         );
         return ExitCode::SUCCESS;
     }

@@ -1,7 +1,7 @@
 use super::BeatmapSetWithAudio;
 use std::collections::HashMap;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryTrack {
     pub audio_source_id: i32,
     pub title: Option<String>,
@@ -12,7 +12,7 @@ pub struct LibraryTrack {
     pub difficulties: Vec<TrackDifficulty>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackDifficulty {
     pub beatmap_id: i32,
     pub beatmap_set_id: i32,
@@ -20,7 +20,7 @@ pub struct TrackDifficulty {
     pub set_has_multiple_audio_sources: bool,
 }
 
-pub(super) fn from_sets(sets: Vec<BeatmapSetWithAudio>) -> Vec<LibraryTrack> {
+pub(crate) fn from_sets(sets: Vec<BeatmapSetWithAudio>) -> Vec<LibraryTrack> {
     let mut order = Vec::new();
     let mut groups = HashMap::<_, Vec<_>>::new();
     for set in sets {

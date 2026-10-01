@@ -197,3 +197,56 @@ pub struct TrackDifficulty {
     pub difficulty_name: Option<String>,
     pub set_has_multiple_audio_sources: bool,
 }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaybackMode {
+    #[default]
+    Stopped,
+    Paused,
+    Playing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct QueueState {
+    pub audio_source_ids: Vec<i32>,
+    pub current_index: Option<usize>,
+    pub mode: PlaybackMode,
+    pub revision: u64,
+    pub playback_token: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PlaybackAssignment {
+    pub current_audio_source_id: Option<i32>,
+    pub track: Option<LibraryTrack>,
+    pub duration_ms: Option<u64>,
+    pub mode: PlaybackMode,
+    pub revision: u64,
+    pub playback_token: u64,
+    pub can_next: bool,
+    pub can_previous: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "command", rename_all = "snake_case")]
+pub enum PlaybackCommand {
+    Play {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        audio_source_id: Option<i32>,
+    },
+    Pause,
+    #[serde(rename = "pause")]
+    PauseIfCurrent {
+        playback_token: u64,
+    },
+    Stop,
+    Next,
+    Previous,
+    Finished {
+        playback_token: u64,
+    },
+    Failed {
+        playback_token: u64,
+    },
+}

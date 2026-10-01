@@ -117,6 +117,7 @@ playback.
 | C# helper source | `dotnet build tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj --configuration Release --nologo` | Compiles the producer; no automated C# test project currently exists. Follow the [scanner skill](../../.agents/skills/osu-radio-scanner/SKILL.md) for contract checks. |
 | CLI wiring | `cargo test -p osu-radio-cli --locked` and `cargo clippy -p osu-radio-cli --all-targets --locked` | Argument tests reject removed `store --count` and retain `--clear`; memory SQLite connection check. No real source import. |
 | Local audio engine | `cargo test -p osu-radio-player --locked` | MP3 CBR/VBR, Ogg/Vorbis and WAV decoding/seek with controlled mixer consumption; no physical device. |
+| Persisted playback queue and assignment protocol | Repository/service tests on each backend, server tests with and without `docs`, client tests with and without `mock`, Qt tests and QML lint below | Use disposable databases; verify recovery, duplicates, stale callbacks/downloads, reconnect and current metadata outside search. Physical output and Windows remain separate. |
 | Client formatting, state, readiness parsing | `cargo test -p osu-radio-client --lib --locked` | [Client tests](../../crates/osu-radio-client/src/lib.rs), [Track tests](../../crates/osu-radio-client/src/view_models/track.rs), [readiness tests](../../crates/osu-radio-client/src/server.rs) and controller tests; process fixtures are isolated. |
 | GUI code and embedded stylesheet paths | `cargo check -p osu-radio-gui-vizia --release --locked` | Release `include_style!` resolves stylesheet paths at compile time. Debug can defer missing paths to runtime. |
 | Server changes, default docs | `cargo clippy -p osu-radio-server --all-targets --locked` | Compiles the documentation-enabled router; does not launch the server. |
@@ -428,8 +429,9 @@ establish these results, physical playback or Windows compatibility.
 
 Playback uses the client-owned worker and Rodio 0.22.2 with `playback`, `mp3`, `vorbis` and `wav`.
 Linux builds need the native audio development libraries required by CPAL/ALSA.
-Device initialization occurs on the first Play; galleries and normal startup do
-not require an output device. No database migration or reset is needed.
+Device initialization occurs on the first playing assignment; galleries and normal
+startup do not require an output device. The versioned queue migration preserves
+the existing library. Server startup restores queue position on pause; no reset is needed.
 
 Run the player tests, client tests with and without `mock`, server tests with and
 without `docs`, and both frontend checks listed above. Scope Clippy to these five
@@ -441,10 +443,12 @@ controller tests cover selection independence, stale requests and cleanup.
 
 Manual acceptance remains separate: play MP3, Ogg/Vorbis and WAV files, select another row while audio
 continues, explicitly play that row, pause/resume, seek forward/backward and after
-EOF, adjust global volume, and close during a download. Test slider dragging
-without tick interference in Qt and Vizia. Repeat physical playback and lifecycle
-checks on Windows. Queue, automatic advance, shuffle, repeat, device selection and
-volume persistence across launches are outside this stage.
+EOF, adjust global volume, and close during a download. Enqueue several tracks
+through the API, check automatic advance and Qt Next/Previous while playing and
+paused, then restart the server and resume from the restored queue position.
+Test slider dragging without tick interference in Qt. Repeat physical playback
+and lifecycle checks on Windows. Queue-list UI, shuffle, repeat, device selection
+and volume persistence across launches remain deferred.
 
 Executed on Linux on 2026-09-20 for this playback change: player tests passed
 (6), client library tests passed with `mock` disabled (35) and enabled (41),
@@ -464,6 +468,28 @@ decoding and seek/EOF/replay coverage. Client tests passed without/with `mock`
 (35/41; two benchmarks ignored in each). Scoped player/client all-target Clippy
 with warnings denied and formatting passed. Physical playback and Windows were
 not exercised in this follow-up.
+
+Executed on Linux on 2026-10-01 for the server queue: SQLite repository and
+service suites passed (5 and 12 tests; two service benchmarks ignored), including
+the populated-library migration, reopen, rollback and independent-pool queue
+contracts. PostgreSQL repository/service contracts passed on separate fresh
+temporary databases; service contracts were repeated after recovery and
+token-bound device-pause fixes. Server suites passed with docs enabled/disabled
+(29/26, one benchmark ignored in each), then the added conditional-pause regression
+passed in both routers and the OpenAPI test was repeated. Client suites passed
+without/with `mock` (50/56, two benchmarks ignored in each). Player tests passed
+(6), CLI tests passed (2), and Qt passed its 13 ordinary tests, including eight
+offscreen scenarios, plus its normally ignored real-backend startup probe on
+disposable SQLite. A final actual-server HTTP smoke passed 30 requests covering
+NDJSON, insertion/history, callbacks, duplicate IDs, clear and process restart.
+The independent source review's confirmed races were fixed and rechecked.
+
+Server/Qt builds, scoped all-target Clippy on SQLite and both PostgreSQL router
+configurations, generated-import QML lint, formatting and affected guide paths
+passed. Loopback/process checks ran outside the sandbox. Native Qt headers emit
+a compiler warning; Rust Clippy with warnings denied passed. These checks do
+not establish physical audio, desktop input/GPU rendering or Windows behavior.
+Queue-list UI, shuffle and repeat were not added; the gallery remains offline.
 
 ## Qt folder modal verification
 

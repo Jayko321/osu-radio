@@ -156,6 +156,24 @@ fn songs_search_debounces_retries_and_clears_through_the_live_adapter() {
 
 #[cfg(unix)]
 #[test]
+fn queue_controls_preserve_pause_and_current_metadata_outside_search() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("isolated queue fixture");
+    let server = directory.path().join("fixture-server");
+    std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fixture");
+    let output = run(&[], "offscreen", directory.path(), &server, "queue");
+    assert_probe(&output);
+    assert_child_reaped(directory.path());
+    let commands = std::fs::read_to_string(directory.path().join("playback_commands"))
+        .expect("queue commands");
+    assert_eq!(commands.lines().count(), 3);
+    assert!(commands.contains("next") && commands.contains("previous"));
+}
+
+#[cfg(unix)]
+#[test]
 fn playback_controls_show_loading_errors_and_global_volume_without_a_device() {
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().expect("isolated playback fixture");

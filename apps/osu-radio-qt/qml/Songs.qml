@@ -533,7 +533,7 @@ Basic.ApplicationWindow {
                             anchors.centerIn: parent
                             spacing: 28
                             IconButton { anchors.verticalCenter: parent.verticalCenter; iconName: "shuffle"; accessibleName: "Shuffle (unavailable)"; enabled: false }
-                            IconButton { anchors.verticalCenter: parent.verticalCenter; iconName: "skip-back"; accessibleName: "Previous track (unavailable)"; enabled: false }
+                            IconButton { objectName: "previousTrackButton"; anchors.verticalCenter: parent.verticalCenter; iconName: "skip-back"; accessibleName: "Previous track"; enabled: bridge.connected && bridge.canPrevious; onClicked: bridge.previousTrack() }
                             IconButton {
                                 width: 48
                                 height: 48
@@ -544,7 +544,7 @@ Basic.ApplicationWindow {
                                 onClicked: bridge.togglePlayback()
                                 background: Rectangle { radius: 24; color: Theme.accent }
                             }
-                            IconButton { anchors.verticalCenter: parent.verticalCenter; iconName: "skip-forward"; accessibleName: "Next track (unavailable)"; enabled: false }
+                            IconButton { objectName: "nextTrackButton"; anchors.verticalCenter: parent.verticalCenter; iconName: "skip-forward"; accessibleName: "Next track"; enabled: bridge.connected && bridge.canNext; onClicked: bridge.nextTrack() }
                             IconButton { anchors.verticalCenter: parent.verticalCenter; iconName: "repeat-2"; accessibleName: "Repeat (unavailable)"; enabled: false }
                         }
                         IconButton { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; iconName: "circle-plus"; accessibleName: "Add to playlist (unavailable)"; enabled: false }

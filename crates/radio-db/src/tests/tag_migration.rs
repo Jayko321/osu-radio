@@ -160,7 +160,11 @@ pub(super) async fn contracts(database: &Database, url: &str) {
             .unwrap()
     );
     assert!(
-        crate::migrations::Migrator::down(&database.connection, Some(1))
+        crate::migrations::Migrator::migrations()
+            .into_iter()
+            .nth(3)
+            .unwrap()
+            .down(&manager)
             .await
             .is_err()
     );

@@ -6,3 +6,5 @@ pub(crate) mod beatmap_set_tag;
 pub(crate) mod osu_installation;
 pub(crate) mod tag;
 pub(crate) mod user_data;
+
+pub(crate) mod queue;

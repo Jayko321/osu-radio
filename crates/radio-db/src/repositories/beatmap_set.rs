@@ -81,6 +81,20 @@ impl BeatmapSetRepository<'_> {
         self.load_with_audio_sources(None).await
     }
 
+    /// One track's references and multiplicity, without loading unrelated library data.
+    pub async fn for_audio_source(&self, id: i32) -> Result<Vec<BeatmapSetWithAudio>> {
+        let mut sets = self.load_with_audio_sources(Some(&[id])).await?;
+        for set in &mut sets {
+            set.has_multiple_audio_sources = beatmap::Entity::find()
+                .filter(beatmap::Column::BeatmapSetId.eq(set.beatmap_set.id))
+                .filter(beatmap::Column::AudioSourceId.ne(id))
+                .one(&self.connection)
+                .await?
+                .is_some();
+        }
+        Ok(sets)
+    }
+
     /// Caller supplies multiplicity from the unfiltered search snapshot.
     /// Chunking is safe only on a transaction-bound repository for a consistent read.
     pub async fn for_audio_sources(

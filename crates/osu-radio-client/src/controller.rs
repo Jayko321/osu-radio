@@ -17,6 +17,7 @@ use tokio::{
     task::{AbortHandle, JoinSet},
 };
 mod folders;
+mod queue;
 pub use folders::{FolderAction, FolderSelection, FolderSelectionRow};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,6 +56,8 @@ pub enum AppCommand {
     Pause,
     Resume,
     Stop,
+    Next,
+    Previous,
     Seek(Duration),
     SetVolume(f32),
     SelectFolder(Option<i32>),
@@ -135,6 +138,11 @@ impl AppController {
 }
 
 enum Completed {
+    PlaybackRetry(queue::PendingPlayback),
+    PlaybackCommand {
+        pending: queue::PendingPlayback,
+        result: Result<crate::models::PlaybackAssignment, String>,
+    },
     FolderSelection(folders::FolderEvent),
     Connected(Result<Session, String>),
     Library {
@@ -174,6 +182,15 @@ struct Controller {
     tracks: Vec<Track>,
     track_indices: HashMap<i32, usize>,
     selected: Option<i32>,
+    current_track: Option<Track>,
+    assignment: Option<crate::models::PlaybackAssignment>,
+    playback_commands: VecDeque<queue::PendingPlayback>,
+    playback_command_busy: bool,
+    assignments: mpsc::UnboundedReceiver<Result<crate::models::PlaybackAssignment, String>>,
+    assignment_sender: mpsc::UnboundedSender<Result<crate::models::PlaybackAssignment, String>>,
+    worker_state: crate::playback::Playback,
+    worker_updates: mpsc::UnboundedReceiver<crate::playback::Playback>,
+    worker_sender: mpsc::UnboundedSender<crate::playback::Playback>,
     folders: Vec<OsuFolder>,
     selected_folder: Option<i32>,
     library: OperationStatus,
@@ -190,7 +207,7 @@ struct Controller {
     duration_done: HashSet<i32>,
     unavailable: HashSet<i32>,
     playback: Option<crate::playback::Worker>,
-    downloads: Option<mpsc::UnboundedReceiver<crate::playback::Download>>,
+    downloads: Option<mpsc::UnboundedReceiver<crate::playback::Message>>,
     audio_task: Option<AbortHandle>,
     audio_gate: Arc<tokio::sync::Semaphore>,
 }
@@ -198,6 +215,8 @@ impl Controller {
     fn new(options: ServerOptions, emit: Arc<dyn Fn(AppUpdate) + Send + Sync>) -> Self {
         let (cancel, _) = watch::channel(false);
         let (folder_sender, folder_events) = mpsc::unbounded_channel();
+        let (assignment_sender, assignments) = mpsc::unbounded_channel();
+        let (worker_sender, worker_updates) = mpsc::unbounded_channel();
         Self {
             selection: folders::SelectionWork::default(),
             folder_sender,
@@ -211,6 +230,15 @@ impl Controller {
             tracks: Vec::new(),
             track_indices: HashMap::new(),
             selected: None,
+            current_track: None,
+            assignment: None,
+            playback_commands: VecDeque::new(),
+            playback_command_busy: false,
+            assignment_sender,
+            assignments,
+            worker_sender,
+            worker_state: crate::playback::Playback::default(),
+            worker_updates,
             folders: Vec::new(),
             selected_folder: None,
             library: OperationStatus::default(),
@@ -240,19 +268,22 @@ impl Controller {
                     Some(command) => self.command(command),
                 },
                 Some(event) = self.folder_events.recv() => self.selection_event(event),
+                Some(assignment) = self.assignments.recv() => self.assignment_result(assignment),
+                Some(playback) = self.worker_updates.recv() => self.worker_update(playback),
                 request = async {
                     match &mut self.downloads {
                         Some(downloads) => downloads.recv().await,
                         None => std::future::pending().await,
                     }
                 } => {
-                    if let Some(request) = request { self.download(request); }
+                    if let Some(request) = request { self.worker_message(request); }
                     else { self.downloads = None; }
                 }
                 result = self.tasks.join_next(), if !self.tasks.is_empty() => {
                     if let Some(Ok(result)) = result { self.complete(result); }
                 }
             }
+            self.start_playback_command();
             self.start_media();
             self.start_counts();
         }
@@ -293,28 +324,24 @@ impl Controller {
             AppCommand::RetryFolderCount(path) => self.retry_count(&path),
             AppCommand::ApplyFolderSelection => self.apply_selection(),
             AppCommand::PlayTrack(id) => {
-                self.cancel_audio();
-                if self.ensure_playback()
-                    && let Some(worker) = &self.playback
-                {
-                    let generation = worker.invalidate();
-                    worker.send(crate::playback::Command::Request { generation, id });
-                }
+                self.queue_playback(crate::models::PlaybackCommand::Play {
+                    audio_source_id: Some(id),
+                });
             }
-            AppCommand::Pause => {
-                self.player_command(crate::playback::Command::Pause(self.selected));
-            }
-            AppCommand::Resume => {
-                self.cancel_audio();
-                self.player_command(crate::playback::Command::Resume(self.selected));
-            }
-            AppCommand::Stop => {
-                self.cancel_audio();
-                self.player_command(crate::playback::Command::Stop);
-            }
+            AppCommand::Pause => self.queue_playback(crate::models::PlaybackCommand::Pause),
+            AppCommand::Resume => self.queue_playback(crate::models::PlaybackCommand::Play {
+                audio_source_id: None,
+            }),
+            AppCommand::Stop => self.queue_playback(crate::models::PlaybackCommand::Stop),
+            AppCommand::Next => self.queue_playback(crate::models::PlaybackCommand::Next),
+            AppCommand::Previous => self.queue_playback(crate::models::PlaybackCommand::Previous),
             AppCommand::Seek(position) => {
                 self.player_command(crate::playback::Command::Seek {
                     expected_id: self.selected,
+                    playback_token: self
+                        .assignment
+                        .as_ref()
+                        .map_or(0, |state| state.playback_token),
                     position,
                 });
             }
@@ -331,7 +358,7 @@ impl Controller {
             }
             AppCommand::RefreshFolders => self.refresh_folders(),
             AppCommand::SelectTrack(id) => {
-                if id.is_none_or(|id| self.track_indices.contains_key(&id)) {
+                if id.is_none_or(|id| self.track(id).is_some()) {
                     self.selected = id;
                     self.emit_selection();
                     if let Some(id) = id
@@ -376,9 +403,9 @@ impl Controller {
     }
     fn ensure_playback(&mut self) -> bool {
         if self.playback.is_none() {
-            let emit = self.emit.clone();
+            let sender = self.worker_sender.clone();
             match crate::playback::Worker::spawn(Arc::new(move |state| {
-                emit(AppUpdate::Playback(state));
+                let _ = sender.send(state);
             })) {
                 Ok((worker, downloads)) => {
                     self.playback = Some(worker);
@@ -556,6 +583,10 @@ impl Controller {
     }
     fn complete(&mut self, result: Completed) {
         match result {
+            Completed::PlaybackRetry(pending) => self.playback_commands.push_front(pending),
+            Completed::PlaybackCommand { pending, result } => {
+                self.playback_command_completed(pending, result);
+            }
             Completed::FolderSelection(event) => self.selection_event(event),
             Completed::Audio {
                 generation,
@@ -586,6 +617,7 @@ impl Controller {
                         });
                         self.load_library(delay);
                         self.refresh_folders();
+                        self.start_playback_stream();
                     }
                     Err(error) => {
                         self.library = failure(error.clone(), SettingsRetry::Load);
@@ -648,7 +680,15 @@ impl Controller {
         self.queue.clear();
         self.duration_done.clear();
         self.unavailable.clear();
-        self.selected = selection_after_refresh(&tracks, self.selected);
+        if self.selected
+            != self
+                .current_track
+                .as_ref()
+                .map(|track| track.audio_source_id)
+            || self.selected.is_none()
+        {
+            self.selected = selection_after_refresh(&tracks, self.selected);
+        }
         self.track_indices = tracks
             .iter()
             .enumerate()
@@ -686,9 +726,14 @@ impl Controller {
         (self.emit)(AppUpdate::FolderStatus(self.folder_status.clone()));
     }
     fn track(&self, id: i32) -> Option<&Track> {
-        self.track_indices
-            .get(&id)
-            .and_then(|index| self.tracks.get(*index))
+        self.current_track
+            .as_ref()
+            .filter(|track| track.audio_source_id == id)
+            .or_else(|| {
+                self.track_indices
+                    .get(&id)
+                    .and_then(|index| self.tracks.get(*index))
+            })
     }
     fn request_media(&mut self, id: i32, missing: bool) {
         if self.track(id).is_none() {
@@ -840,7 +885,7 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    fn controller() -> (Controller, Arc<Mutex<Vec<AppUpdate>>>) {
+    pub(super) fn controller() -> (Controller, Arc<Mutex<Vec<AppUpdate>>>) {
         let updates = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&updates);
         (
@@ -851,59 +896,7 @@ mod tests {
             updates,
         )
     }
-    #[tokio::test]
-    async fn playback_survives_selection_search_refresh_and_shutdown_removes_current_file() {
-        use crate::playback::{Command, PlayerState, Worker};
-        let (mut state, _) = controller();
-        let (sent, mut received) = mpsc::unbounded_channel();
-        let (worker, downloads) = Worker::spawn_fake(Arc::new(move |update| {
-            let _ = sent.send(update);
-        }))
-        .unwrap();
-        let generation = worker.invalidate();
-        let file = tempfile::NamedTempFile::new().unwrap();
-        let path = file.path().to_owned();
-        worker.send(Command::Loaded {
-            generation,
-            id: 1,
-            result: Ok(file),
-        });
-        assert_eq!(
-            received.recv().await.unwrap().snapshot.state,
-            PlayerState::Playing
-        );
-        state.playback = Some(worker);
-        state.downloads = Some(downloads);
-        state.replace_tracks(vec![track(1), track(2)]);
-        state.command(AppCommand::SelectTrack(Some(2)));
-        state.connecting = true; // Search starts no child in this isolated worker test.
-        state.command(AppCommand::SearchLibrary("nothing matches".into()));
-        state.complete(Completed::Library {
-            request: state.library_request,
-            result: Ok(Vec::new()),
-        });
-        assert!(state.playback.as_ref().unwrap().is_current(generation));
-        state.command(AppCommand::Pause);
-        let paused = tokio::time::timeout(Duration::from_secs(3), async {
-            loop {
-                let update = received.recv().await.unwrap();
-                if update.snapshot.state == PlayerState::Paused {
-                    break update;
-                }
-            }
-        })
-        .await
-        .unwrap();
-        assert_eq!(paused.current_audio_id, Some(1));
-        assert_eq!(paused.snapshot.state, PlayerState::Paused);
-        assert!(path.exists());
-        let (commands, shutdown_commands) = mpsc::unbounded_channel();
-        commands.send(AppCommand::Shutdown).unwrap();
-        state.run(shutdown_commands).await;
-        assert!(!path.exists());
-    }
-
-    fn track(id: i32) -> Track {
+    pub(super) fn track(id: i32) -> Track {
         Track {
             audio_source_id: id,
             cover_beatmap_id: Some(id.saturating_add(100)),
@@ -926,7 +919,7 @@ mod tests {
         }
     }
     #[cfg(unix)]
-    async fn test_session() -> (tempfile::TempDir, Session) {
+    pub(super) async fn test_session() -> (tempfile::TempDir, Session) {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir().unwrap();
         let binary = directory.path().join("server");

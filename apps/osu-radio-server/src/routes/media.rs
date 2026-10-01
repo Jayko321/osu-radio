@@ -121,17 +121,26 @@ pub(crate) async fn duration(
         .get(id)
         .await?
         .ok_or_else(|| ApiError::not_found("Audio source not found"))?;
-    let duration_ms = match audio.s_type {
+    let duration_ms = probe_source_duration(audio.s_type).await?;
+    Ok(Json(DurationResponse { duration_ms }))
+}
+
+pub(super) async fn probe_source_duration(
+    source: radio_services::model::SourceType,
+) -> Result<Option<u64>, ApiError> {
+    Ok(match source {
         radio_services::model::SourceType::Local(path)
         | radio_services::model::SourceType::Copied(path) => {
             tokio::task::spawn_blocking(move || probe_duration(Path::new(&path))).await?
         }
         radio_services::model::SourceType::Online(_) => None,
-    };
-    Ok(Json(DurationResponse { duration_ms }))
+    })
 }
 
 fn read_cover(path: &Path) -> Option<Vec<u8>> {
+    if !std::fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
     let file = File::open(path).ok()?;
     if !file.metadata().ok()?.is_file() {
         return None;
@@ -144,6 +153,9 @@ fn read_cover(path: &Path) -> Option<Vec<u8>> {
 }
 
 fn probe_duration(path: &Path) -> Option<u64> {
+    if !std::fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
     let file = File::open(path).ok()?;
     if !file.metadata().ok()?.is_file() {
         return None;
@@ -171,6 +183,32 @@ mod tests {
     use radio_core::import_types::{RealmFile, RealmNamedFileUsage};
     use radio_services::model::SourceType;
     use tower::ServiceExt;
+
+    #[cfg(unix)]
+    #[test]
+    fn duration_rejects_fifo_before_a_blocking_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let fifo = directory.path().join("audio-fifo");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let probe_path = fifo.clone();
+        let probe = std::thread::spawn(move || {
+            sender.send(probe_duration(&probe_path)).unwrap();
+        });
+        let result = receiver.recv_timeout(std::time::Duration::from_secs(2));
+        if result.is_err() {
+            // Unblock a regressed read-only open so the failed test still joins its thread.
+            drop(File::options().write(true).open(&fifo).unwrap());
+        }
+        probe.join().unwrap();
+        assert_eq!(result.unwrap(), None);
+    }
 
     async fn audio_request(state: AppState, id: i32) -> Response {
         crate::routes::router(state)

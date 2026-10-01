@@ -71,6 +71,7 @@ async fn contracts(url: &str) {
     concurrent_replacements_and_deletion(&database, &other_pool).await;
     shared_source_variants(&database).await;
     source_files_remain_untouched(&database).await;
+    queue::contracts(&database, &other_pool, url).await;
 }
 
 async fn assert_counts(database: &TestDatabase, expected: [i64; 4]) {
@@ -887,3 +888,5 @@ async fn cancellation_preserves_snapshot(database: &TestDatabase) {
 mod tags;
 
 mod search;
+
+mod queue;

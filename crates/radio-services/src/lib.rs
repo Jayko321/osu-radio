@@ -15,8 +15,12 @@ mod beatmap_set;
 mod folder_selection;
 mod osu_installation;
 pub use folder_selection::{DiscoveryDepth, DiscoveryOptions, FolderCandidate, FolderDiscovery};
+mod queue;
 mod tag;
 mod user_data;
+pub use queue::{
+    PlaybackAssignment, PlaybackCommand, PlaybackMode, QueueError, QueueService, QueueState,
+};
 pub use tag::TagService;
 
 use anyhow::Result;
@@ -57,6 +61,12 @@ impl Services {
     /// Explicitly discards application data; ordinary startup only migrates.
     pub async fn reset(&self) -> Result<()> {
         self.database.reset().await
+    }
+    #[must_use]
+    pub const fn queue(&self) -> QueueService<'_> {
+        QueueService {
+            database: &self.database,
+        }
     }
     #[must_use]
     pub const fn user_data(&self) -> UserDataService<'_> {

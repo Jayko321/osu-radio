@@ -56,32 +56,50 @@ identifies Vorbis as the OGG codec. Extensionless decoder and seek coverage live
 in [player tests](../../crates/osu-radio-player/src/tests.rs); adding decoders
 requires no HTTP or GUI changes because both frontends use this shared engine.
 
-The shared [controller](../../crates/osu-radio-client/src/controller.rs) handles
-`PlayTrack`, `Pause`, `Resume`, `Stop`, `Seek` and `SetVolume` and emits typed
-`Playback` updates. Selection, current audio ID and loading audio ID are separate.
-A dedicated client worker owns the engine and opens the device only on first
-Play; missing output hardware cannot prevent startup or offline galleries.
-[`ApiClient`](../../crates/osu-radio-client/src/api.rs) downloads audio by ID into
-a temporary file in chunks, with a 256 MiB limit and the existing 30-second timeout.
-Only the current file and one pending download are retained. Replaying the current
-track reuses its file. A new Play cancels and invalidates the previous request;
-stale results cannot replace current audio. A continues while B downloads, and a
-failure leaves A in place. Selection, search, refresh and disappearance from the
-visible library do not stop playback. Engine position updates arrive every 100 ms
-while playing; state changes are published immediately. Shutdown cancels downloads,
-joins the audio worker and releases files before ending the backend session.
+The shared [controller](../../crates/osu-radio-client/src/controller.rs) serializes
+Play/Pause/Stop/Next/Previous commands through the server queue API. The server
+persists queue order, history and current position; the client receives only the
+current [assignment](../../crates/osu-radio-client/src/models.rs), including
+metadata, duration, transition availability, `revision` and `playback_token`.
+The [queue workflow](../../crates/osu-radio-client/src/controller/queue.rs) applies
+strictly increasing revisions and reads a snapshot before each reconnect to the
+NDJSON event stream. Events use a separate one-hour deadline and blank-line
+heartbeats. Disconnecting the stream leaves current local playback running;
+reconnecting with the same token preserves position. A new token restarts even
+an identical audio ID from the beginning.
 
-Both frontends keep the selected-track panel. A normal row click only selects.
-The central button toggles Play/Pause for the current selection or explicitly
-loads a different selection. Position/seek apply only to the selected current
-track; volume is global regardless of selection. Worker transport commands verify the
-selected audio ID again when executed, so a delayed seek/pause cannot affect a
-newly committed track. Device callback errors reach the shared playback state;
-decoders are released directly without waiting for further audio callbacks.
-Loading and errors appear beside
-existing controls. Galleries remain offline. Queue, automatic advance, shuffle,
-repeat, device selection and persisted volume are not implemented. Physical
-output, desktop slider interaction and Windows require separate manual checks.
+A dedicated client worker owns the engine and opens the device only when an
+assignment starts playing. Restored paused queues, normal startup and offline
+galleries require no audio device. [`ApiClient`](../../crates/osu-radio-client/src/api.rs)
+downloads audio by ID into a temporary file in chunks, with a 256 MiB limit and
+30-second timeout. The worker retains the current file and one pending download;
+changing the token cancels and invalidates old downloads. A cached identical ID
+can restart without downloading again. Finished/download/decode callbacks carry
+the token of their launch, and the server ignores stale or repeated callbacks.
+Source errors advance the queue; an output-device failure pauses it and retains
+its position for explicit Play. Source and device callback retries pass through the same serialized command
+lane and token check. Device failures use `pause` with an optional playback token,
+so a delayed pause cannot affect a different current track.
+
+Both frontends keep the selected-track panel. A normal Songs click only selects;
+explicit Play of another selection inserts and starts it in the server queue.
+Queue transitions select the current track and carry its title, cover and duration
+even outside search results. Stop preserves an independently selected row. The
+current-track metadata is kept separately from the visible library. Qt's existing
+Next/Previous buttons use server availability and preserve pause; Previous on the
+first item restarts it. Seek and volume remain local; seeks also verify the
+launch token so a delayed same-ID seek cannot affect a duplicate queue item.
+Position updates arrive every 100 ms while playing and state changes immediately.
+Shutdown cancels the event stream and downloads, joins the worker, releases its
+files, then ends the backend session.
+
+Coverage lives in [worker tests](../../crates/osu-radio-client/src/playback.rs),
+[controller queue tests](../../crates/osu-radio-client/src/controller/queue/tests.rs),
+[stream tests](../../crates/osu-radio-client/src/api/playback_tests.rs), and the
+[Qt probe](../../apps/osu-radio-qt/tests/AdapterProbe.qml). Galleries remain offline.
+Shuffle, repeat, output-device selection and persisted volume remain deferred.
+Physical output, desktop slider interaction and Windows require separate manual
+checks.
 
 ## Session and server supervision
 
@@ -159,7 +177,7 @@ These are source-confirmed bindings, not a claim of interactive verification on 
 | Search fields | Songs searches the server through the shared controller; Settings only edits its independent placeholder query. | [search row](../../apps/osu-radio-gui-vizia/src/views/components/search_row.rs), [track list](../../apps/osu-radio-gui-vizia/src/views/songs/track_list.rs), [settings pane](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) |
 | Song filter chips | Static labels and visual hover treatment; no filter or picker actions. | [chip](../../apps/osu-radio-gui-vizia/src/views/components/chip.rs) |
 | Folder settings | Display-only dropdown selection, native directory picker with immediate registration, and failure-only retry. No GUI editing/removal, import or output-device selection. | [settings](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) |
-| Transport and volume | Central Play/Pause controls the selected track; volume opens a compact session-wide slider. Queue, shuffle, repeat and playlist controls remain disabled. | [controls](../../apps/osu-radio-gui-vizia/src/views/player/controls.rs), [icon helpers](../../apps/osu-radio-gui-vizia/src/views/components/icon.rs), [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs) |
+| Transport and volume | Central Play/Pause controls the selected track; volume opens a compact session-wide slider. Qt Next/Previous use the server queue; Vizia's corresponding buttons remain disabled. Shuffle, repeat and playlist controls remain disabled. | [controls](../../apps/osu-radio-gui-vizia/src/views/player/controls.rs), [icon helpers](../../apps/osu-radio-gui-vizia/src/views/components/icon.rs), [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs) |
 | Progress and elapsed time | Engine position for the selected current track; seek commits at drag completion and does not follow ticks while dragging. Other selected tracks show zero position with seek disabled. | [progress](../../apps/osu-radio-gui-vizia/src/views/player/progress.rs), [player stylesheet](../../apps/osu-radio-gui-vizia/styles/player.css) |
 | Window controls | Custom minimize/maximize/close actions and title-bar dragging; double-click handler requests maximize toggling. | [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs), [events](../../apps/osu-radio-gui-vizia/src/app.rs) |
 
