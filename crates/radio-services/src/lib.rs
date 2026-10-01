@@ -8,16 +8,23 @@
     )
 )]
 
+mod audio_settings;
 mod audio_source;
+pub use audio_settings::{AudioSettings, AudioSettingsError, AudioSettingsService};
 mod beatmap;
 mod beatmap_metadata;
 mod beatmap_set;
 mod folder_selection;
+mod listening_history;
+pub use listening_history::ListeningHistoryService;
 mod osu_installation;
 pub use folder_selection::{DiscoveryDepth, DiscoveryOptions, FolderCandidate, FolderDiscovery};
 mod playlist;
 mod queue;
-pub use playlist::{Playlist, PlaylistError, PlaylistItem, PlaylistService, PlaylistSummary};
+pub use playlist::{
+    MAX_PLAYLIST_COVER_BYTES, Playlist, PlaylistError, PlaylistItem, PlaylistService,
+    PlaylistSummary,
+};
 mod tag;
 mod user_data;
 pub use queue::{
@@ -49,6 +56,18 @@ pub struct Services {
 }
 
 impl Services {
+    #[must_use]
+    pub const fn audio_settings(&self) -> AudioSettingsService<'_> {
+        AudioSettingsService {
+            database: &self.database,
+        }
+    }
+    #[must_use]
+    pub const fn listening_history(&self) -> ListeningHistoryService<'_> {
+        ListeningHistoryService {
+            repository: self.database.listening_history(),
+        }
+    }
     pub async fn connect(database_url: &str) -> Result<Self> {
         Ok(Self {
             database: Database::connect(database_url).await?,

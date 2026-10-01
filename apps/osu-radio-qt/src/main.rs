@@ -84,9 +84,16 @@ fn run(mode: LaunchMode) -> ExitCode {
     }
     if smoke {
         runtime::ffi::configure_probe(engine.as_mut(), mode == LaunchMode::ComponentGallery);
-        engine
-            .as_mut()
-            .load(&QUrl::from("qrc:/qt/qml/OsuRadio/tests/AdapterProbe.qml"));
+        let probe = if std::env::var("OSU_RADIO_QT_PROBE_CASE")
+            .is_ok_and(|case| case.starts_with("visual") || case.starts_with("native"))
+        {
+            "VisualProbe"
+        } else {
+            "AdapterProbe"
+        };
+        engine.as_mut().load(&QUrl::from(&format!(
+            "qrc:/qt/qml/OsuRadio/tests/{probe}.qml"
+        )));
         if !created.load(Ordering::Relaxed) {
             return ExitCode::FAILURE;
         }

@@ -6,6 +6,8 @@ use crate::{BeatmapSet, models::BeatmapDetails};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Track {
     pub audio_source_id: i32,
+    pub last_played_at_ms: Option<i64>,
+    pub volume_percent: Option<u8>,
     pub cover_beatmap_id: Option<i32>,
     pub title: String,
     pub artist: String,
@@ -19,6 +21,8 @@ impl Track {
         let artist = artist.into();
         Self {
             audio_source_id: 0,
+            last_played_at_ms: None,
+            volume_percent: None,
             cover_beatmap_id: None,
             title: title.into(),
             subtitle: artist.clone(),
@@ -74,6 +78,8 @@ pub fn library_tracks(sets: &[BeatmapSet]) -> Vec<Track> {
             let representative = maps.first().map(|(map, _, _)| *map);
             Track::from(crate::models::LibraryTrack {
                 audio_source_id: id,
+                last_played_at_ms: None,
+                volume_percent: None,
                 title: representative.and_then(|map| map.title.clone()),
                 title_unicode: representative.and_then(|map| map.title_unicode.clone()),
                 artist: representative.and_then(|map| map.artist.clone()),
@@ -139,6 +145,8 @@ impl From<crate::models::LibraryTrack> for Track {
         };
         Self {
             audio_source_id: track.audio_source_id,
+            last_played_at_ms: track.last_played_at_ms,
+            volume_percent: track.volume_percent,
             cover_beatmap_id: track.cover_beatmap_id,
             title,
             artist,

@@ -1,3 +1,4 @@
+pub(crate) mod audio_settings;
 pub(crate) mod beatmap_sets;
 pub(crate) mod folder_selection;
 pub(crate) mod media;
@@ -37,6 +38,15 @@ pub(crate) fn router(state: AppState) -> Router {
         )
         .route("/api/playlists/{id}/play", post(playlists::play))
         .route(
+            "/api/playlists/{id}/cover",
+            get(playlists::get_cover)
+                .put(playlists::put_cover)
+                .delete(playlists::delete_cover)
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    radio_services::MAX_PLAYLIST_COVER_BYTES,
+                )),
+        )
+        .route(
             "/api/queue",
             get(playback::get_queue).delete(playback::clear_queue),
         )
@@ -46,6 +56,14 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/api/playback/commands", post(playback::command))
         .route("/api/beatmap-sets", get(beatmap_sets::list_beatmap_sets))
         .route("/api/user-data", get(user_data::get_user_data))
+        .route(
+            "/api/user-data/audio-settings",
+            get(audio_settings::get).patch(audio_settings::patch),
+        )
+        .route(
+            "/api/audio-sources/{id}/volume",
+            axum::routing::put(audio_settings::put_volume).delete(audio_settings::delete_volume),
+        )
         .route(
             "/api/user-data/osu-folders/discover",
             post(folder_selection::discover),
@@ -89,6 +107,11 @@ pub(crate) fn router(state: AppState) -> Router {
         .routes(routes!(playlists::add_items))
         .routes(routes!(playlists::remove_item))
         .routes(routes!(playlists::play))
+        .routes(routes!(
+            playlists::get_cover,
+            playlists::put_cover,
+            playlists::delete_cover
+        ))
         .routes(routes!(playback::get_queue, playback::clear_queue))
         .routes(routes!(playback::append_items))
         .routes(routes!(playback::get_playback))
@@ -98,6 +121,11 @@ pub(crate) fn router(state: AppState) -> Router {
         .routes(routes!(media::duration))
         .routes(routes!(media::audio))
         .routes(routes!(user_data::get_user_data))
+        .routes(routes!(audio_settings::get, audio_settings::patch))
+        .routes(routes!(
+            audio_settings::put_volume,
+            audio_settings::delete_volume
+        ))
         .routes(routes!(folder_selection::discover))
         .routes(routes!(folder_selection::metadata))
         .routes(routes!(folder_selection::import))
@@ -112,5 +140,9 @@ pub(crate) fn router(state: AppState) -> Router {
         .with_state(state)
         .split_for_parts();
 
-    router.merge(Scalar::with_url(SCALAR_PATH, api))
+    router
+        .merge(Scalar::with_url(SCALAR_PATH, api))
+        .layer(axum::extract::DefaultBodyLimit::max(
+            radio_services::MAX_PLAYLIST_COVER_BYTES,
+        ))
 }

@@ -22,7 +22,7 @@ migration for subsequent changes.
 
 | Table | Identity and relationships |
 | --- | --- |
-| `user_data` | Singleton settings anchor, primary key constrained to `1`. |
+| `user_data` | Singleton settings anchor, primary key constrained to `1`; individual volume mode and global volume percentage. |
 | `osu_installations` | Generated `i32` ID; required settings owner; unique marker path; kind, root/marker paths, label, enabled flag and last-scanned timestamp. |
 | `beatmap_sets` | Generated `i32` ID; required installation; optional online ID and source hash. |
 | `beatmaps` | Generated `i32` ID; required set; difficulty, BPM, source hash; optional independent metadata and audio references. Source kind is derived from the installation. |
@@ -30,8 +30,10 @@ migration for subsequent changes.
 | `tags` | Generated `i32` ID; globally unique normalized name, SQLite `BINARY` / PostgreSQL `C` collation. |
 | `beatmap_set_tags` | Composite primary key `(beatmap_set_id, tag_id)`; set cascade, restrictive tag reference, index on `tag_id`. |
 | `audio_sources` | Generated `i32` ID; globally unique `(kind, location)`; `local`, `copied`, or `online`. |
+| `audio_volume` | Composite primary key `(audio_kind, source_location)` and absolute integer `volume_percent` in 0–100. No library foreign key. |
+| `listening_history` | Composite primary key `(audio_kind, source_location)` using the audio source's existing identity; UTC millisecond timestamp and last acknowledged playback token. No library foreign key. |
 | `playback_queue` | Singleton `id = 1`; JSON audio-ID history and parallel nullable playlist-item IDs, nullable current index, playback mode and monotonic revision/token counters. |
-| `playlists` | Generated `i32` ID and nonempty trimmed name; equal names are allowed. |
+| `playlists` | Generated `i32` ID and nonempty trimmed name; equal names are allowed. Nullable custom PNG and a retained monotonic cover revision. |
 | `playlist_items` | Generated `i32` ID; required playlist with deletion cascade; unique `(playlist_id, source_kind, beatmap_hash)` and saved title, artist and difficulty. No library foreign key. |
 
 Installation deletion cascades through sets, beatmaps and set-tag links. Shared references use
@@ -121,8 +123,9 @@ there are no new standalone beatmap or set creation workflows.
 | `beatmap_metadata()` | `get`, `get_or_insert`; the pure `metadata_hash` helper is re-exported. |
 | `tags()` | `all`, `get`, `for_set`; lists use `ORDER BY name ASC` with SQLite `BINARY` / PostgreSQL `C`. |
 | `audio_sources()` | `get`, `find`, `get_or_insert`. |
-| `queue()` | `get`, `playback`, `append`, `clear`, `command`, `recover`; one persistent server queue. |
-| `playlists()` | `all`, `get`, `create`, `rename`, `delete`, `add_items`, `remove_item`, `play`; concrete difficulties with source-stable membership. |
+| `audio_settings()` | `get`, `update`, `set_volume`; settings and durable per-audio overrides. |
+| `queue()` | `get`, `upcoming`, `playback`, `append`, `clear`, `command`, `recover`; one persistent server queue. |
+| `playlists()` | `all`, `get`, `create`, `rename`, `delete`, `add_items`, `remove_item`, `play`, `cover`, `set_cover`, `clear_cover`; concrete difficulties with source-stable membership. |
 
 [Installation services](../../crates/radio-services/src/osu_installation.rs) own
 folder discovery validation, label trimming, snapshot replacement and deletion.
@@ -190,7 +193,8 @@ with a new token. Next/Previous preserve pause, and select a paused entry when
 starting from Stop. Previous at the first playable entry restarts it; from
 exhaustion it returns the last playable entry. Transitions skip deleted/Online
 IDs while keeping their history entries. Decode/download failure advances via
-the client's Failed callback; exhaustion stops. Seek and volume stay local.
+the client's Failed callback; exhaustion stops. Seeking stays local; persisted
+volume settings are described below.
 
 Revision increases once for a persisted change; no-op commands and stale callbacks
 retain it. Every new launch, restart, Stop, clear, exhaustion and active-state
@@ -214,6 +218,12 @@ result or materialize the complete library. ID validation reads queue IDs in
 batches of 500. Physical source availability remains the client's download/
 decoding responsibility; extensionless imported locations remain valid.
 
+`upcoming()` reads the queue and pending audio summaries in one read transaction.
+It excludes current and history, keeps duplicate positions and skips deleted/Online
+sources. Metadata loads only pending audio references and is reused for repeated
+IDs; it uses the ordinary library audio summary, independently of Songs search or
+later playlist ordering. It neither probes files nor changes the queue.
+
 [Repository queue contracts](../../crates/radio-db/src/tests/queue.rs) cover a
 populated pre-queue upgrade, concurrent migration, reopen, rollback, position
 validation and explicit reset. [Service queue contracts](../../crates/radio-services/src/tests/queue.rs)
@@ -223,6 +233,62 @@ concurrent append/clear, recovery, removed sources and search-independent metada
 Both run through the ordinary disposable SQLite/PostgreSQL contract harnesses.
 These deterministic storage/transition checks do not establish physical output.
 
+## Audio volume settings
+
+The additive [audio-settings migration](../../crates/radio-db/src/migrations/m20261001_000008_audio_settings.rs)
+adds `individual_volume_enabled` (false) and `global_volume_percent` (100) to
+`user_data`, and creates `audio_volume` without resetting existing library,
+queue, playlists or listening history. Both stored percentages have SQL range
+constraints. The [settings service](../../crates/radio-services/src/audio_settings.rs)
+validates 0–100 and writes through the singleton writer lock and one transaction.
+An omitted patch field is retained; removing an override is idempotent for an
+existing audio ID. Unknown audio IDs are rejected.
+
+Overrides are absolute percentages keyed by the audio source's exact existing
+`(kind, location)` identity, using the same native-path encoding as listening
+history. All difficulties and playlists sharing audio share its setting. Library
+cleanup retains overrides; reimport of the same source resolves them for new IDs.
+Changing kind or moving the file creates a new identity. Explicit application
+reset clears settings and overrides. Disabling individual mode retains overrides.
+
+The [volume repository](../../crates/radio-db/src/repositories/audio_volume.rs)
+resolves IDs in batches of 500. Library tracks, available playlist items and
+playback assignments expose nullable `volume_percent` within their consistent
+read transaction, including while the mode is disabled. Playback assignments
+also carry the value at their top level. The client combines it with the loaded
+mode/global settings before starting the engine.
+[Repository checks](../../crates/radio-db/src/tests/audio_settings.rs) cover the
+seven-migration upgrade, constraints, read snapshots, rollback, reopen, native
+keys, source removal/return, batching and reset on SQLite/PostgreSQL.
+[Service checks](../../crates/radio-services/src/tests/audio_settings.rs) cover
+shared difficulty/playlist projections, retained overrides and reimport.
+
+## Listening history
+
+The additive [listening-history migration](../../crates/radio-db/src/migrations/m20261001_000007_listening_history.rs) preserves the library, playlists and
+queue. Existing queue positions do not prove successful playback and are not
+backfilled. A concrete [history repository](../../crates/radio-db/src/repositories/listening_history.rs)
+and [service](../../crates/radio-services/src/listening_history.rs) read dates in batches
+inside the transaction that loads library tracks, playlist items or the current
+assignment.
+
+`QueueService` records `Started { playback_token }` within its existing singleton
+writer lock and outer transaction. It validates the current token and playable
+source in Playing/Paused mode, then accounts for that source/token once. A new
+date increments queue revision while retaining the launch token, position and
+mode. Pausing and continuing the same launch do not update history; a new launch
+can update it again. Duplicate or stale callbacks leave revision and date intact.
+
+History stores the source's kind and stored location independently of transient
+audio IDs. Folder deletion and shared-source cleanup can remove every library
+reference without removing history or retaining audio-source rows. Reimporting
+the same source reconnects its date; moving the file creates another identity.
+Queue clear preserves history. Explicit application reset removes it.
+
+[Repository checks](../../crates/radio-db/src/tests/listening_history.rs) and
+[service checks](../../crates/radio-services/src/tests/listening_history.rs) cover
+the migration and source/token lifecycle on each database backend.
+
 ## User playlists
 
 The additive [playlist migration](../../crates/radio-db/src/migrations/m20261001_000006_playlists.rs)
@@ -230,6 +296,23 @@ creates the two playlist tables, indexes `beatmaps.hash` for resolution, and add
 the nullable queue JSON column without clearing the library or queue. A null
 column in a pre-playlist queue reads as one null item ID per existing audio ID.
 The repository validates equal array lengths on every queue save.
+
+The additive [cover migration](../../crates/radio-db/src/migrations/m20261001_000009_playlist_covers.rs)
+adds a nullable binary PNG and a nonnegative `i64` revision without rewriting
+existing playlists, membership, the library or queue. Upload increments the
+revision under the singleton writer lock; resetting the cover keeps the counter
+so a later upload gets a different version. The service accepts fully decodable
+512×512 PNG files up to 2 MiB, with bounded PNG-only `image` decoding. It stores
+image bytes, independently of the original file. `cover` is the only read that
+selects those bytes; detail, rename and list responses omit binary data.
+
+`PlaylistSummary` contains `id`, `name`, `item_count`, `cover_beatmap_id` and
+`custom_cover_revision`. The list uses one aggregated repository statement in a
+consistent read transaction, without loading each playlist's contents. Counts
+include unavailable entries. Automatic artwork resolves the first inserted
+item only, using its representative audio cover; it remains null if that item
+has no available artwork. A custom cover exposes its revision, otherwise the
+revision is null. Name changes return the same complete summary.
 
 [`PlaylistService`](../../crates/radio-services/src/playlist.rs) trims names and
 rejects whitespace-only names. Additions accept current beatmap IDs, validate all
@@ -261,10 +344,13 @@ the track. Deleted-item metadata falls back to the normal audio track projection
 Next/Previous and completion callbacks reuse the existing position/token rules.
 
 [Migration/repository checks](../../crates/radio-db/src/tests/playlists.rs) cover
-a populated five-migration upgrade, old queue preservation, cascades and reset.
+a populated five-migration upgrade, an eight-migration upgrade with existing
+playlists, old queue preservation, summary counts/first-item artwork, cover
+revision retention, cascades and reset.
 [Service checks](../../crates/radio-services/src/tests/playlists.rs) cover CRUD,
 reopen, concurrent idempotent addition, atomic validation, reimported IDs, source
-removal/return, copy priority, distinct source kinds, 503 ordered items, queue
+removal/return, copy priority, distinct source kinds, 503 ordered items, PNG
+validation, replacement/reset, persistence after deleting the original file, queue
 replacement, shared audio, selected start, pause/resume and stale callbacks.
 
 Collection import is deferred. A future source adapter should resolve collection
@@ -321,7 +407,7 @@ its lock. Independent pools/processes therefore cannot select the same pending w
 
 Application tables without applied SeaORM migration history produce an actionable
 legacy-database error. There is no legacy data migration: choose a new database or
-explicit reset. Reset drops only the eleven application tables and their SeaORM/
+explicit reset. Reset drops only the twelve application tables and their SeaORM/
 Diesel migration history, in child-first order, then recreates the schema in the
 same transaction. Unrelated tables are preserved; reset does not use a broad
 schema refresh or drop external objects.

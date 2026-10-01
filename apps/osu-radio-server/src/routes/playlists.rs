@@ -2,8 +2,9 @@ use super::playback::{PlaybackResponse, committed_response};
 use crate::{error::ApiError, state::AppState};
 use axum::{
     Json,
+    body::Bytes,
     extract::{Path, State},
-    http::StatusCode,
+    http::{StatusCode, header},
 };
 use radio_services::{Playlist, PlaylistError, PlaylistItem, PlaylistSummary};
 use serde::{Deserialize, Serialize};
@@ -13,12 +14,18 @@ use serde::{Deserialize, Serialize};
 pub(crate) struct PlaylistSummaryResponse {
     id: i32,
     name: String,
+    item_count: u64,
+    cover_beatmap_id: Option<i32>,
+    custom_cover_revision: Option<i64>,
 }
 impl From<PlaylistSummary> for PlaylistSummaryResponse {
     fn from(value: PlaylistSummary) -> Self {
         Self {
             id: value.id,
             name: value.name,
+            item_count: value.item_count,
+            cover_beatmap_id: value.cover_beatmap_id,
+            custom_cover_revision: value.custom_cover_revision,
         }
     }
 }
@@ -26,6 +33,8 @@ impl From<PlaylistSummary> for PlaylistSummaryResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
 pub(crate) struct PlaylistItemResponse {
+    last_played_at_ms: Option<i64>,
+    volume_percent: Option<u8>,
     id: i32,
     playlist_id: i32,
     source_kind: String,
@@ -42,6 +51,8 @@ impl From<PlaylistItem> for PlaylistItemResponse {
     fn from(item: PlaylistItem) -> Self {
         Self {
             id: item.id,
+            last_played_at_ms: item.last_played_at_ms,
+            volume_percent: item.volume_percent,
             playlist_id: item.playlist_id,
             source_kind: item.source_kind,
             beatmap_hash: item.beatmap_hash,
@@ -174,6 +185,55 @@ pub(crate) async fn delete(
         .services()
         .playlists()
         .delete(id)
+        .await
+        .map_err(playlist_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg_attr(feature = "docs", utoipa::path(get, path = "/api/playlists/{id}/cover", tag = "playlists", params(("id" = i32, Path)),
+    responses((status = OK, body = [u8], content_type = "image/png"), (status = NOT_FOUND))))]
+pub(crate) async fn get_cover(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<([(header::HeaderName, &'static str); 1], Vec<u8>), ApiError> {
+    let png = state
+        .services()
+        .playlists()
+        .cover(id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Playlist cover was not found."))?;
+    Ok(([(header::CONTENT_TYPE, "image/png")], png))
+}
+
+#[cfg_attr(feature = "docs", utoipa::path(put, path = "/api/playlists/{id}/cover", tag = "playlists", params(("id" = i32, Path)),
+    request_body(content = [u8], content_type = "image/png"),
+    responses((status = OK, body = PlaylistSummaryResponse), (status = NOT_FOUND), (status = BAD_REQUEST), (status = PAYLOAD_TOO_LARGE))))]
+pub(crate) async fn put_cover(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+    body: Bytes,
+) -> Result<Json<PlaylistSummaryResponse>, ApiError> {
+    Ok(Json(
+        state
+            .services()
+            .playlists()
+            .set_cover(id, &body)
+            .await
+            .map_err(playlist_error)?
+            .into(),
+    ))
+}
+
+#[cfg_attr(feature = "docs", utoipa::path(delete, path = "/api/playlists/{id}/cover", tag = "playlists", params(("id" = i32, Path)),
+    responses((status = NO_CONTENT), (status = NOT_FOUND))))]
+pub(crate) async fn delete_cover(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<StatusCode, ApiError> {
+    state
+        .services()
+        .playlists()
+        .clear_cover(id)
         .await
         .map_err(playlist_error)?;
     Ok(StatusCode::NO_CONTENT)

@@ -1,7 +1,7 @@
 //! Shared application workflows. Adapters own presentation and decoded artwork, and acknowledge
 //! every artwork delivery only after decoding and cache installation (or stale-result discard).
 use crate::{
-    ApiClient, OsuFolder, RegisterOsuFolder, ServerOptions, Session, Track, describe,
+    OsuFolder, RegisterOsuFolder, ServerOptions, Session, Track, describe,
     view_models::selection_after_refresh,
 };
 use std::{
@@ -19,8 +19,13 @@ use tokio::{
 mod folders;
 mod playlists;
 mod queue;
+mod sorting;
+mod volume;
 pub use folders::{FolderAction, FolderSelection, FolderSelectionRow};
 pub use playlists::{PlaylistAction, PlaylistCandidate, PlaylistsState};
+pub use queue::QueueView;
+pub use sorting::TrackSort;
+pub use volume::AudioSettingsState;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsRetry {
@@ -53,6 +58,7 @@ pub enum AppCommand {
     Connect,
     RefreshLibrary,
     SearchLibrary(String),
+    SetTrackSort(TrackSort),
     RefreshFolders,
     SelectTrack(Option<i32>),
     PlayTrack(i32),
@@ -61,8 +67,16 @@ pub enum AppCommand {
     Stop,
     Next,
     Previous,
+    SetQueueVisible(bool),
     Seek(Duration),
     SetVolume(f32),
+    SetIndividualVolumeEnabled(bool),
+    SetGlobalVolume(u8),
+    SetTrackVolume {
+        audio_id: i32,
+        volume_percent: Option<u8>,
+    },
+    RetryAudioSettings,
     SelectFolder(Option<i32>),
     BeginFolderPick,
     CompleteFolderPick(Option<PathBuf>),
@@ -81,6 +95,7 @@ pub enum AppCommand {
         audio_id: i32,
         artwork_missing: bool,
     },
+    SetVisibleMedia(Vec<(i32, bool)>),
     MediaInstalled {
         ticket: MediaTicket,
         available: bool,
@@ -89,12 +104,29 @@ pub enum AppCommand {
 }
 #[derive(Clone, Debug)]
 pub enum AppUpdate {
+    Queue(QueueView),
+    AudioSettings(AudioSettingsState),
     Playlists(PlaylistsState),
+    PlaylistCover {
+        id: i32,
+        revision: i64,
+        bytes: Vec<u8>,
+    },
+    PlaylistArtwork {
+        id: i32,
+        beatmap_id: i32,
+        bytes: Vec<u8>,
+    },
     Playback(crate::playback::Playback),
     Connection(ConnectionStatus),
     LibraryStatus(OperationStatus),
     FolderStatus(OperationStatus),
-    TracksReplaced(Vec<Track>),
+    TracksReplaced {
+        tracks: Vec<Track>,
+        invalidate_artwork: bool,
+    },
+    TracksReordered(Vec<Track>),
+    TrackSort(TrackSort),
     TrackChanged(Track),
     TrackSelected(Option<Track>),
     FoldersReplaced(Vec<OsuFolder>),
@@ -142,6 +174,11 @@ impl AppController {
 }
 
 enum Completed {
+    Queue {
+        request: u64,
+        result: Result<crate::models::QueueState, String>,
+    },
+    AudioSettings(Result<crate::models::AudioSettings, String>),
     Playlist(playlists::PlaylistEvent),
     PlaybackRetry(queue::PendingPlayback),
     PlaybackCommand {
@@ -152,15 +189,18 @@ enum Completed {
     Connected(Result<Session, String>),
     Library {
         request: u64,
+        invalidate_artwork: bool,
         result: Result<Vec<Track>, String>,
     },
     Folders(Result<Vec<OsuFolder>, String>),
     Registered(Result<OsuFolder, String>),
-    Media {
+    MediaArtwork {
         ticket: MediaTicket,
         bytes: Option<Vec<u8>>,
+    },
+    MediaDuration {
+        ticket: MediaTicket,
         duration: Option<u64>,
-        duration_requested: bool,
     },
     Audio {
         generation: u64,
@@ -173,8 +213,14 @@ struct MediaJob {
     ticket: MediaTicket,
     cover: Option<i32>,
     decoding: bool,
+    artwork_pending: bool,
+    duration_pending: bool,
+    tasks: Vec<AbortHandle>,
 }
+#[allow(clippy::struct_excessive_bools)] // Independent async workflows have separate pending flags.
 struct Controller {
+    upcoming: queue::QueueWork,
+    volume: volume::VolumeWork,
     playlists: playlists::PlaylistWork,
     selection: folders::SelectionWork,
     folder_events: mpsc::UnboundedReceiver<folders::FolderEvent>,
@@ -186,12 +232,15 @@ struct Controller {
     tasks: JoinSet<Completed>,
     cancel: watch::Sender<bool>,
     tracks: Vec<Track>,
+    track_sort: TrackSort,
+    last_played: HashMap<i32, i64>,
     track_indices: HashMap<i32, usize>,
     selected: Option<i32>,
     current_track: Option<Track>,
     assignment: Option<crate::models::PlaybackAssignment>,
     playback_commands: VecDeque<queue::PendingPlayback>,
     playback_command_busy: bool,
+    pending_start: Option<u64>,
     assignments: mpsc::UnboundedReceiver<Result<crate::models::PlaybackAssignment, String>>,
     assignment_sender: mpsc::UnboundedSender<Result<crate::models::PlaybackAssignment, String>>,
     worker_state: crate::playback::Playback,
@@ -204,13 +253,18 @@ struct Controller {
     library_request: u64,
     library_task: Option<AbortHandle>,
     library_deadline: Option<tokio::time::Instant>,
+    library_invalidation_pending: bool,
     folder_status: OperationStatus,
     picking: bool,
     generation: u64,
     serial: u64,
     queue: VecDeque<(i32, bool)>,
+    visible_media: Option<Vec<(i32, bool)>>,
+    selected_media: Option<Track>,
+    selected_artwork_missing: Option<bool>,
+    queue_media: HashMap<i32, bool>,
     jobs: HashMap<u64, MediaJob>,
-    duration_done: HashSet<i32>,
+    durations: HashMap<i32, Option<Duration>>,
     unavailable: HashSet<i32>,
     playback: Option<crate::playback::Worker>,
     downloads: Option<mpsc::UnboundedReceiver<crate::playback::Message>>,
@@ -224,6 +278,8 @@ impl Controller {
         let (assignment_sender, assignments) = mpsc::unbounded_channel();
         let (worker_sender, worker_updates) = mpsc::unbounded_channel();
         Self {
+            upcoming: queue::QueueWork::default(),
+            volume: volume::VolumeWork::default(),
             playlists: playlists::PlaylistWork::default(),
             selection: folders::SelectionWork::default(),
             folder_sender,
@@ -235,12 +291,15 @@ impl Controller {
             tasks: JoinSet::new(),
             cancel,
             tracks: Vec::new(),
+            track_sort: TrackSort::default(),
+            last_played: HashMap::new(),
             track_indices: HashMap::new(),
             selected: None,
             current_track: None,
             assignment: None,
             playback_commands: VecDeque::new(),
             playback_command_busy: false,
+            pending_start: None,
             assignment_sender,
             assignments,
             worker_sender,
@@ -253,13 +312,18 @@ impl Controller {
             library_request: 0,
             library_task: None,
             library_deadline: None,
+            library_invalidation_pending: true,
             folder_status: OperationStatus::default(),
             picking: false,
             generation: 0,
             serial: 0,
             queue: VecDeque::new(),
+            visible_media: None,
+            selected_media: None,
+            selected_artwork_missing: None,
+            queue_media: HashMap::new(),
             jobs: HashMap::new(),
-            duration_done: HashSet::new(),
+            durations: HashMap::new(),
             unavailable: HashSet::new(),
             playback: None,
             downloads: None,
@@ -269,7 +333,20 @@ impl Controller {
     }
     async fn run(mut self, mut commands: mpsc::UnboundedReceiver<AppCommand>) {
         loop {
+            let volume_deadline = self.volume_deadline();
             tokio::select! {
+                () = async {
+                    match volume_deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                } => self.start_volume_save(),
+                result = async {
+                    match &mut self.volume.save_task {
+                        Some(task) => task.await.unwrap_or_else(|error| Err(error.to_string())),
+                        None => std::future::pending().await,
+                    }
+                } => self.volume_saved(result),
                 command = commands.recv() => match command {
                     Some(AppCommand::Shutdown) | None => break,
                     Some(command) => self.command(command),
@@ -292,9 +369,11 @@ impl Controller {
             }
             self.start_playback_command();
             self.start_media();
+            self.start_playlist_images();
             self.start_counts();
         }
         self.cancel_audio();
+        self.flush_volume_saves().await;
         self.cancel_selection();
         let _ = self.cancel.send(true);
         if let Some(mut playback) = self.playback.take() {
@@ -319,8 +398,10 @@ impl Controller {
             }
         })
     }
+    #[allow(clippy::too_many_lines)] // Keep command-to-workflow routing in one place.
     fn command(&mut self, command: AppCommand) {
         match command {
+            AppCommand::SetQueueVisible(visible) => self.set_queue_visible(visible),
             AppCommand::Playlist(action) => self.playlist_action(action),
             AppCommand::OpenFolderSelection => self.open_selection(),
             AppCommand::CloseFolderSelection => self.close_selection(),
@@ -344,19 +425,26 @@ impl Controller {
             AppCommand::Next => self.queue_playback(crate::models::PlaybackCommand::Next),
             AppCommand::Previous => self.queue_playback(crate::models::PlaybackCommand::Previous),
             AppCommand::Seek(position) => self.seek_selected(position),
-            AppCommand::SetVolume(volume) => {
-                self.player_command(crate::playback::Command::SetVolume(volume));
-            }
+            AppCommand::SetVolume(volume) => self.set_selected_volume(volume),
+            AppCommand::SetIndividualVolumeEnabled(enabled) => self.set_individual_volume(enabled),
+            AppCommand::SetGlobalVolume(percent) => self.set_global_volume(percent),
+            AppCommand::SetTrackVolume {
+                audio_id,
+                volume_percent,
+            } => self.set_track_volume(audio_id, volume_percent),
+            AppCommand::RetryAudioSettings => self.retry_audio_settings(),
             AppCommand::Connect => self.connect(),
             AppCommand::RefreshLibrary => self.refresh_library(),
+            AppCommand::SetTrackSort(sort) => self.set_track_sort(sort),
             AppCommand::SearchLibrary(query) => {
                 if self.library_query != query {
                     self.library_query = query;
-                    self.load_library(Duration::from_millis(200));
+                    self.load_library(Duration::from_millis(200), false);
                 }
             }
             AppCommand::RefreshFolders => self.refresh_folders(),
             AppCommand::SelectTrack(id) => {
+                self.finish_volume_editing();
                 if id.is_none_or(|id| self.track(id).is_some()) {
                     self.selected = id;
                     self.emit_selection();
@@ -384,31 +472,53 @@ impl Controller {
                 audio_id,
                 artwork_missing,
             } => self.request_media(audio_id, artwork_missing),
+            AppCommand::SetVisibleMedia(visible) => self.set_visible_media(visible),
             AppCommand::MediaInstalled { ticket, available } => {
-                if self
-                    .jobs
-                    .get(&ticket.serial)
-                    .is_some_and(|job| job.ticket == ticket && job.decoding)
-                    && let Some(job) = self.jobs.remove(&ticket.serial)
-                    && ticket.generation == self.generation
-                    && !available
-                    && let Some(cover) = job.cover
+                if let Some(job) = self.jobs.get_mut(&ticket.serial)
+                    && job.ticket == ticket
+                    && job.decoding
                 {
-                    self.unavailable.insert(cover);
+                    job.decoding = false;
+                    if ticket.generation == self.generation && available {
+                        if self
+                            .selected_media
+                            .as_ref()
+                            .is_some_and(|track| track.audio_source_id == ticket.audio_id)
+                        {
+                            self.selected_artwork_missing = Some(false);
+                        }
+                        if let Some(missing) = self.queue_media.get_mut(&ticket.audio_id) {
+                            *missing = false;
+                        }
+                        if let Some(visible) = &mut self.visible_media {
+                            for (id, missing) in visible {
+                                if *id == ticket.audio_id {
+                                    *missing = false;
+                                }
+                            }
+                        }
+                    }
+                    if ticket.generation == self.generation
+                        && !available
+                        && let Some(cover) = job.cover
+                    {
+                        self.unavailable.insert(cover);
+                    }
+                    self.finish_media(ticket);
                 }
             }
             AppCommand::Shutdown => {}
         }
     }
     fn seek_selected(&mut self, position: Duration) {
-        if self.playlists.view.active_id.is_some()
+        if self.playlists.view.showing_detail()
             && self.assignment.as_ref().is_none_or(|state| {
                 state.current_playlist_item_id != self.playlists.view.selected_item_id
             })
         {
             return;
         }
-        let expected_id = if self.playlists.view.active_id.is_some() {
+        let expected_id = if self.playlists.view.showing_detail() {
             self.playlists
                 .view
                 .selected_item()
@@ -515,9 +625,11 @@ impl Controller {
         });
     }
     fn refresh_library(&mut self) {
-        self.load_library(Duration::ZERO);
+        self.load_library(Duration::ZERO, true);
     }
-    fn load_library(&mut self, delay: Duration) {
+    fn load_library(&mut self, delay: Duration, invalidate_artwork: bool) {
+        self.library_invalidation_pending |= invalidate_artwork;
+        let invalidate_artwork = self.library_invalidation_pending;
         self.library_deadline = tokio::time::Instant::now().checked_add(delay);
         self.library_request = self.library_request.wrapping_add(1);
         if let Some(task) = self.library_task.take() {
@@ -540,6 +652,7 @@ impl Controller {
             tokio::time::sleep(delay).await;
             Completed::Library {
                 request,
+                invalidate_artwork,
                 result: api
                     .search_tracks(&query)
                     .await
@@ -605,8 +718,11 @@ impl Controller {
             )
         });
     }
+    #[allow(clippy::too_many_lines)] // Keep completion routing and stale-result checks together.
     fn complete(&mut self, result: Completed) {
         match result {
+            Completed::Queue { request, result } => self.queue_loaded(request, result),
+            Completed::AudioSettings(result) => self.audio_settings_loaded(result),
             Completed::Playlist(event) => self.playlist_event(event),
             Completed::PlaybackRetry(pending) => self.playback_commands.push_front(pending),
             Completed::PlaybackCommand { pending, result } => {
@@ -640,10 +756,11 @@ impl Controller {
                         let delay = self.library_deadline.map_or(Duration::ZERO, |deadline| {
                             deadline.saturating_duration_since(tokio::time::Instant::now())
                         });
-                        self.load_library(delay);
+                        self.load_library(delay, true);
                         self.refresh_folders();
                         self.refresh_playlists();
-                        self.start_playback_stream();
+                        self.load_audio_settings();
+                        self.refresh_queue();
                     }
                     Err(error) => {
                         self.library = failure(error.clone(), SettingsRetry::Load);
@@ -653,7 +770,11 @@ impl Controller {
                     }
                 }
             }
-            Completed::Library { request, result } => {
+            Completed::Library {
+                request,
+                invalidate_artwork,
+                result,
+            } => {
                 if request != self.library_request {
                     return;
                 }
@@ -661,7 +782,8 @@ impl Controller {
                 self.library = OperationStatus::default();
                 match result {
                     Ok(tracks) => {
-                        self.replace_tracks(tracks);
+                        self.library_invalidation_pending = false;
+                        self.replace_tracks(tracks, invalidate_artwork);
                         if self.playlists.view.active_id.is_some() {
                             self.playlist_action(PlaylistAction::Refresh);
                         }
@@ -697,20 +819,19 @@ impl Controller {
                 }
                 (self.emit)(AppUpdate::FolderStatus(self.folder_status.clone()));
             }
-            Completed::Media {
-                ticket,
-                bytes,
-                duration,
-                duration_requested,
-            } => self.media_completed(ticket, bytes, duration, duration_requested),
+            Completed::MediaArtwork { ticket, bytes } => self.artwork_completed(ticket, bytes),
+            Completed::MediaDuration { ticket, duration } => {
+                self.duration_completed(ticket, duration);
+            }
             Completed::Cancelled => {}
         }
     }
-    fn replace_tracks(&mut self, tracks: Vec<Track>) {
-        self.generation = self.generation.wrapping_add(1);
-        self.queue.clear();
-        self.duration_done.clear();
-        self.unavailable.clear();
+    fn replace_tracks(&mut self, mut tracks: Vec<Track>, invalidate_artwork: bool) {
+        self.advance_media(invalidate_artwork);
+        self.restore_durations(&mut tracks);
+        self.merge_last_played(&mut tracks);
+        self.merge_volume_overrides(&mut tracks);
+        self.track_sort.sort_tracks(&mut tracks);
         if self.selected
             != self
                 .current_track
@@ -734,13 +855,14 @@ impl Controller {
             }
             .into();
         }
-        (self.emit)(AppUpdate::TracksReplaced(
-            if self.playlists.view.active_id.is_some() {
+        (self.emit)(AppUpdate::TracksReplaced {
+            tracks: if self.playlists.view.showing_detail() {
                 self.playlists.tracks.clone()
             } else {
                 self.tracks.clone()
             },
-        ));
+            invalidate_artwork,
+        });
         self.emit_selection();
     }
     fn replace_folders(&mut self, folders: Vec<OsuFolder>) {
@@ -753,34 +875,49 @@ impl Controller {
         (self.emit)(AppUpdate::FoldersReplaced(self.folders.clone()));
         (self.emit)(AppUpdate::FolderSelected(self.selected_folder));
     }
-    fn emit_selection(&self) {
-        if self.playlists.view.active_id.is_some() {
-            (self.emit)(AppUpdate::TrackSelected(
-                self.playlists
-                    .view
-                    .active
-                    .as_ref()
-                    .and_then(|playlist| {
-                        playlist
-                            .items
-                            .iter()
-                            .position(|item| Some(item.id) == self.playlists.view.selected_item_id)
-                    })
-                    .and_then(|index| self.playlists.tracks.get(index))
-                    .cloned(),
-            ));
+    fn emit_selection(&mut self) {
+        // Detail loading has no replacement selection yet; retain the displayed track.
+        if self.playlists.view.showing_detail() && self.playlists.view.active.is_none() {
+            self.reconcile_media();
             return;
         }
-        (self.emit)(AppUpdate::TrackSelected(
-            self.selected.and_then(|id| self.track(id)).cloned(),
-        ));
+        self.emit_volume();
+        let track = if self.playlists.view.showing_detail() {
+            self.playlists
+                .view
+                .active
+                .as_ref()
+                .and_then(|playlist| {
+                    playlist
+                        .items
+                        .iter()
+                        .position(|item| Some(item.id) == self.playlists.view.selected_item_id)
+                })
+                .and_then(|index| self.playlists.tracks.get(index))
+                .cloned()
+        } else {
+            self.selected.and_then(|id| self.track(id)).cloned()
+        };
+        if self
+            .selected_media
+            .as_ref()
+            .map(|old| (old.audio_source_id, old.cover_beatmap_id))
+            != track
+                .as_ref()
+                .map(|row| (row.audio_source_id, row.cover_beatmap_id))
+        {
+            self.selected_artwork_missing = None;
+        }
+        self.selected_media.clone_from(&track);
+        (self.emit)(AppUpdate::TrackSelected(track));
+        self.reconcile_media();
     }
     fn emit_statuses(&self) {
         (self.emit)(AppUpdate::LibraryStatus(self.library.clone()));
         (self.emit)(AppUpdate::FolderStatus(self.folder_status.clone()));
     }
     fn track(&self, id: i32) -> Option<&Track> {
-        if self.playlists.view.active_id.is_some() {
+        if self.playlists.view.showing_detail() {
             let item_index = self.playlists.view.active.as_ref().and_then(|playlist| {
                 playlist
                     .items
@@ -808,35 +945,202 @@ impl Controller {
                     .get(&id)
                     .and_then(|index| self.tracks.get(*index))
             })
+            .or_else(|| {
+                self.upcoming
+                    .view
+                    .tracks
+                    .iter()
+                    .find(|track| track.audio_source_id == id)
+            })
+            .or_else(|| {
+                self.selected_media
+                    .as_ref()
+                    .filter(|track| track.audio_source_id == id)
+            })
+    }
+    fn restore_durations(&self, tracks: &mut [Track]) {
+        for track in tracks {
+            if let Some(duration) = self.durations.get(&track.audio_source_id) {
+                track.duration = *duration;
+            }
+        }
+    }
+    fn advance_media(&mut self, invalidate_artwork: bool) {
+        self.generation = self.generation.wrapping_add(1);
+        self.queue.clear();
+        if let Some(visible) = &mut self.visible_media {
+            visible.clear();
+        }
+        for job in self.jobs.values_mut() {
+            for task in job.tasks.drain(..) {
+                task.abort();
+            }
+            job.artwork_pending = false;
+            job.duration_pending = false;
+        }
+        // A started decoder cannot be cancelled, and continues owning its pipeline slot.
+        self.jobs.retain(|_, job| job.decoding);
+        if invalidate_artwork {
+            self.durations.clear();
+            self.unavailable.clear();
+            self.selected_artwork_missing = self.selected_media.as_ref().map(|_| true);
+            for missing in self.queue_media.values_mut() {
+                *missing = true;
+            }
+        }
+    }
+    fn media_wanted(&self, id: i32) -> bool {
+        self.selected_media
+            .as_ref()
+            .is_some_and(|track| track.audio_source_id == id)
+            || (self.upcoming.open && self.queue_media.contains_key(&id))
+            || self
+                .visible_media
+                .as_ref()
+                .is_none_or(|visible| visible.iter().any(|(audio_id, _)| *audio_id == id))
+    }
+    fn set_visible_media(&mut self, visible: Vec<(i32, bool)>) {
+        let mut snapshot = Vec::<(i32, bool)>::new();
+        for (id, missing) in visible {
+            if id < 0 || self.track(id).is_none() {
+                continue;
+            }
+            if let Some((_, old_missing)) = snapshot.iter_mut().find(|(old_id, _)| *old_id == id) {
+                *old_missing |= missing;
+            } else {
+                snapshot.push((id, missing));
+            }
+        }
+        self.visible_media = Some(snapshot);
+        self.reconcile_media();
+    }
+    fn reconcile_media(&mut self) {
+        let unwanted: Vec<_> = self
+            .jobs
+            .values()
+            .filter(|job| {
+                job.ticket.generation != self.generation || !self.media_wanted(job.ticket.audio_id)
+            })
+            .map(|job| job.ticket.serial)
+            .collect();
+        for serial in unwanted {
+            if let Some(job) = self.jobs.get_mut(&serial) {
+                for task in job.tasks.drain(..) {
+                    task.abort();
+                }
+                job.artwork_pending = false;
+                job.duration_pending = false;
+                if !job.decoding {
+                    self.jobs.remove(&serial);
+                }
+            }
+        }
+        if let Some(visible) = self.visible_media.clone() {
+            self.queue.clear();
+            for (id, missing) in visible {
+                self.enqueue_media(id, missing);
+            }
+        }
+        if self.upcoming.open {
+            for (id, missing) in self.queue_media.clone() {
+                self.enqueue_media(id, missing);
+            }
+        }
+        if let Some(id) = self
+            .selected_media
+            .as_ref()
+            .map(|track| track.audio_source_id)
+            && let Some(missing) = self.selected_artwork_missing
+        {
+            self.enqueue_media(id, missing);
+        }
     }
     fn request_media(&mut self, id: i32, missing: bool) {
-        if id < 0 {
-            return;
-        }
-        if self.track(id).is_none() {
+        if id < 0 || self.track(id).is_none() {
             return;
         }
         if self
+            .selected_media
+            .as_ref()
+            .is_some_and(|track| track.audio_source_id == id)
+        {
+            self.selected_artwork_missing = Some(missing);
+        }
+        if self.upcoming.open
+            && self
+                .upcoming
+                .view
+                .tracks
+                .iter()
+                .any(|track| track.audio_source_id == id)
+        {
+            self.queue_media.insert(id, missing);
+        }
+        if self.media_wanted(id) {
+            self.enqueue_media(id, missing);
+        }
+    }
+    fn enqueue_media(&mut self, id: i32, missing: bool) {
+        if id < 0 || self.track(id).is_none() {
+            return;
+        }
+        let requested_cover = self
+            .track(id)
+            .and_then(|track| track.cover_beatmap_id)
+            .filter(|cover| missing && !self.unavailable.contains(cover));
+        if let Some((ticket, previous_cover, active_artwork)) = self
             .jobs
             .values()
-            .any(|job| job.ticket.audio_id == id && job.ticket.generation == self.generation)
+            .find(|job| job.ticket.audio_id == id && job.ticket.generation == self.generation)
+            .map(|job| (job.ticket, job.cover, job.artwork_pending || job.decoding))
         {
+            if let Some(cover) = requested_cover.filter(|_| !active_artwork) {
+                if previous_cover.is_some() {
+                    // A second delivery needs a fresh ticket so a repeated old ACK cannot release it.
+                    if let Some(job) = self.jobs.remove(&ticket.serial) {
+                        for task in job.tasks {
+                            task.abort();
+                        }
+                    }
+                } else {
+                    if let Some(api) = self.session.as_ref().map(|session| session.api().clone()) {
+                        let task = self.task(async move {
+                            Completed::MediaArtwork {
+                                ticket,
+                                bytes: api.cover(cover).await.ok().flatten(),
+                            }
+                        });
+                        if let Some(job) = self.jobs.get_mut(&ticket.serial) {
+                            job.cover = Some(cover);
+                            job.artwork_pending = true;
+                            job.tasks.push(task);
+                        }
+                    }
+                    return;
+                }
+            } else {
+                return;
+            }
+        }
+        let selected = self
+            .selected_media
+            .as_ref()
+            .map(|track| track.audio_source_id)
+            .or(self.selected)
+            == Some(id);
+        if let Some(index) = self.queue.iter().position(|(queued, _)| *queued == id) {
+            if let Some(request) = self.queue.get_mut(index) {
+                request.1 |= missing;
+            }
+            if selected && let Some(request) = self.queue.remove(index) {
+                self.queue.push_front(request);
+            }
             return;
         }
-        if let Some((_, artwork_missing)) = self.queue.iter_mut().find(|(queued, _)| *queued == id)
-        {
-            *artwork_missing |= missing;
+        if requested_cover.is_none() && self.durations.contains_key(&id) {
             return;
         }
-        let needs_cover = missing
-            && self
-                .track(id)
-                .and_then(|track| track.cover_beatmap_id)
-                .is_some_and(|cover| !self.unavailable.contains(&cover));
-        if !needs_cover && self.duration_done.contains(&id) {
-            return;
-        }
-        if self.selected == Some(id) {
+        if selected {
             self.queue.push_front((id, missing));
         } else {
             self.queue.push_back((id, missing));
@@ -853,13 +1157,16 @@ impl Controller {
             let Some((id, missing)) = self.queue.pop_front() else {
                 break;
             };
+            if !self.media_wanted(id) {
+                continue;
+            }
             let Some(track) = self.track(id) else {
                 continue;
             };
             let cover = track
                 .cover_beatmap_id
                 .filter(|cover| missing && !self.unavailable.contains(cover));
-            let duration_requested = !self.duration_done.contains(&id);
+            let duration_requested = !self.durations.contains_key(&id);
             if cover.is_none() && !duration_requested {
                 continue;
             }
@@ -869,17 +1176,129 @@ impl Controller {
                 audio_id: id,
                 serial: self.serial,
             };
+            let mut tasks = Vec::new();
+            if let Some(cover_id) = cover {
+                let api = api.clone();
+                tasks.push(self.task(async move {
+                    Completed::MediaArtwork {
+                        ticket,
+                        bytes: api.cover(cover_id).await.ok().flatten(),
+                    }
+                }));
+            }
+            if duration_requested {
+                let api = api.clone();
+                tasks.push(self.task(async move {
+                    Completed::MediaDuration {
+                        ticket,
+                        duration: api
+                            .audio_duration(id)
+                            .await
+                            .ok()
+                            .and_then(|result| result.duration_ms),
+                    }
+                }));
+            }
             self.jobs.insert(
                 ticket.serial,
                 MediaJob {
                     ticket,
                     cover,
                     decoding: false,
+                    artwork_pending: cover.is_some(),
+                    duration_pending: duration_requested,
+                    tasks,
                 },
             );
-            self.task(fetch_media(api.clone(), ticket, cover, duration_requested));
         }
     }
+    fn finish_media(&mut self, ticket: MediaTicket) {
+        if self.jobs.get(&ticket.serial).is_some_and(|job| {
+            job.ticket == ticket && !job.artwork_pending && !job.duration_pending && !job.decoding
+        }) {
+            self.jobs.remove(&ticket.serial);
+        }
+    }
+    fn artwork_completed(&mut self, ticket: MediaTicket, bytes: Option<Vec<u8>>) {
+        let Some(job) = self
+            .jobs
+            .get_mut(&ticket.serial)
+            .filter(|job| job.ticket == ticket && job.artwork_pending)
+        else {
+            return;
+        };
+        job.artwork_pending = false;
+        if ticket.generation == self.generation {
+            match (job.cover, bytes) {
+                (Some(cover_id), Some(bytes)) => {
+                    job.decoding = true;
+                    (self.emit)(AppUpdate::Artwork {
+                        ticket,
+                        cover_id,
+                        bytes,
+                    });
+                }
+                (Some(cover), None) => {
+                    self.unavailable.insert(cover);
+                }
+                _ => {}
+            }
+        }
+        self.finish_media(ticket);
+    }
+    fn duration_completed(&mut self, ticket: MediaTicket, duration: Option<u64>) {
+        let Some(job) = self
+            .jobs
+            .get_mut(&ticket.serial)
+            .filter(|job| job.ticket == ticket && job.duration_pending)
+        else {
+            return;
+        };
+        job.duration_pending = false;
+        if ticket.generation == self.generation {
+            let duration = duration.map(Duration::from_millis);
+            self.durations.insert(ticket.audio_id, duration);
+            for track in self
+                .tracks
+                .iter_mut()
+                .chain(&mut self.playlists.tracks)
+                .chain(&mut self.upcoming.view.tracks)
+            {
+                if track.audio_source_id == ticket.audio_id {
+                    track.duration = duration;
+                }
+            }
+            if let Some(track) = self
+                .current_track
+                .as_mut()
+                .filter(|track| track.audio_source_id == ticket.audio_id)
+            {
+                track.duration = duration;
+            }
+            if let Some(track) = self
+                .selected_media
+                .as_mut()
+                .filter(|track| track.audio_source_id == ticket.audio_id)
+            {
+                track.duration = duration;
+            }
+            if let Some(track) = self.track(ticket.audio_id) {
+                (self.emit)(AppUpdate::TrackChanged(track.clone()));
+            }
+            if self
+                .selected_media
+                .as_ref()
+                .is_some_and(|track| track.audio_source_id == ticket.audio_id)
+            {
+                self.emit_selection();
+            }
+            if self.upcoming.open {
+                self.emit_queue();
+            }
+        }
+        self.finish_media(ticket);
+    }
+    #[cfg(test)]
     fn media_completed(
         &mut self,
         ticket: MediaTicket,
@@ -887,65 +1306,9 @@ impl Controller {
         duration: Option<u64>,
         duration_requested: bool,
     ) {
-        let Some(job) = self.jobs.get_mut(&ticket.serial) else {
-            return;
-        };
-        if ticket.generation != self.generation {
-            self.jobs.remove(&ticket.serial);
-            return;
-        }
+        self.artwork_completed(ticket, bytes);
         if duration_requested {
-            self.duration_done.insert(ticket.audio_id);
-            for track in &mut self.playlists.tracks {
-                if track.audio_source_id == ticket.audio_id {
-                    track.duration = duration.map(Duration::from_millis);
-                }
-            }
-            if self.playlists.view.active_id.is_some()
-                && let Some(track) = self
-                    .playlists
-                    .tracks
-                    .iter()
-                    .find(|track| track.audio_source_id == ticket.audio_id)
-            {
-                (self.emit)(AppUpdate::TrackChanged(track.clone()));
-            }
-            if let Some(index) = self.track_indices.get(&ticket.audio_id)
-                && let Some(track) = self.tracks.get_mut(*index)
-            {
-                track.duration = duration.map(Duration::from_millis);
-                if self.playlists.view.active_id.is_none() {
-                    (self.emit)(AppUpdate::TrackChanged(track.clone()));
-                    if self.selected == Some(ticket.audio_id) {
-                        (self.emit)(AppUpdate::TrackSelected(Some(track.clone())));
-                    }
-                }
-            }
-        }
-        match (job.cover, bytes) {
-            (Some(cover_id), Some(bytes)) => {
-                job.decoding = true;
-                (self.emit)(AppUpdate::Artwork {
-                    ticket,
-                    cover_id,
-                    bytes,
-                });
-            }
-            (cover, _) => {
-                if let Some(cover) = cover {
-                    self.unavailable.insert(cover);
-                }
-                self.jobs.remove(&ticket.serial);
-            }
-        }
-        if duration_requested
-            && self
-                .playlists
-                .view
-                .selected_item()
-                .is_some_and(|item| item.audio_source_id == Some(ticket.audio_id))
-        {
-            self.emit_selection();
+            self.duration_completed(ticket, duration);
         }
     }
 }
@@ -956,32 +1319,6 @@ fn failure(message: String, retry: SettingsRetry) -> OperationStatus {
         ..Default::default()
     }
 }
-async fn fetch_media(
-    api: ApiClient,
-    ticket: MediaTicket,
-    cover: Option<i32>,
-    duration_requested: bool,
-) -> Completed {
-    let bytes = match cover {
-        Some(id) => api.cover(id).await.ok().flatten(),
-        None => None,
-    };
-    let duration = if duration_requested {
-        api.audio_duration(ticket.audio_id)
-            .await
-            .ok()
-            .and_then(|result| result.duration_ms)
-    } else {
-        None
-    };
-    Completed::Media {
-        ticket,
-        bytes,
-        duration,
-        duration_requested,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -991,16 +1328,22 @@ mod tests {
         let updates = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&updates);
         (
-            Controller::new(
-                ServerOptions::default(),
-                Arc::new(move |update| sink.lock().unwrap().push(update)),
-            ),
+            {
+                let mut controller = Controller::new(
+                    ServerOptions::default(),
+                    Arc::new(move |update| sink.lock().unwrap().push(update)),
+                );
+                controller.volume.settings = Some(crate::models::AudioSettings::default());
+                controller
+            },
             updates,
         )
     }
     pub(super) fn track(id: i32) -> Track {
         Track {
             audio_source_id: id,
+            last_played_at_ms: None,
+            volume_percent: None,
             cover_beatmap_id: Some(id.saturating_add(100)),
             title: id.to_string(),
             artist: "Artist".into(),
@@ -1070,7 +1413,7 @@ mod tests {
         let (_directory, session) = test_session().await;
         let (mut state, _) = controller();
         state.session = Some(session);
-        state.replace_tracks(vec![track(1), track(2)]);
+        state.replace_tracks(vec![track(1), track(2)], true);
         state.command(AppCommand::RefreshLibrary);
         assert!(state.library.loading);
         state.command(AppCommand::RequestMedia {
@@ -1087,6 +1430,7 @@ mod tests {
         assert_eq!(state.queue, VecDeque::from([(2, true), (1, true)]));
         state.complete(Completed::Library {
             request: state.library_request,
+            invalidate_artwork: true,
             result: Err("refresh failed".into()),
         });
         assert_eq!(state.selected, Some(2));
@@ -1109,7 +1453,7 @@ mod tests {
         let (_directory, session) = test_session().await;
         let (mut state, updates) = controller();
         state.session = Some(session);
-        state.replace_tracks(vec![track(1), track(2)]);
+        state.replace_tracks(vec![track(1), track(2)], true);
         state.selected = Some(2);
         // Paused time lets us check the delay without relying on wall-clock scheduling.
         tokio::time::pause();
@@ -1130,6 +1474,7 @@ mod tests {
         for result in [Ok(vec![track(99)]), Err("late failure".into())] {
             state.complete(Completed::Library {
                 request: old,
+                invalidate_artwork: true,
                 result,
             });
             assert_eq!(state.tracks, vec![track(1), track(2)]);
@@ -1147,6 +1492,7 @@ mod tests {
         assert_eq!(state.library_query, "roc");
         state.complete(Completed::Library {
             request: state.library_request,
+            invalidate_artwork: true,
             result: Ok(vec![track(2)]),
         });
         assert_eq!(state.selected, Some(2));
@@ -1154,6 +1500,7 @@ mod tests {
         state.command(AppCommand::SearchLibrary("nothing".into()));
         state.complete(Completed::Library {
             request: state.library_request,
+            invalidate_artwork: true,
             result: Ok(vec![]),
         });
         assert_eq!(state.library.message, "Nothing found.");
@@ -1161,11 +1508,13 @@ mod tests {
         state.command(AppCommand::SearchLibrary(String::new()));
         state.complete(Completed::Library {
             request: before_clear,
+            invalidate_artwork: true,
             result: Err("late".into()),
         });
         assert!(state.library.loading);
         state.complete(Completed::Library {
             request: state.library_request,
+            invalidate_artwork: true,
             result: Ok(vec![track(1), track(2)]),
         });
         assert_eq!(state.tracks.len(), 2);
@@ -1178,18 +1527,18 @@ mod tests {
     #[test]
     fn selection_survives_refresh_shrinking_and_empty_library() {
         let (mut state, updates) = controller();
-        state.replace_tracks(vec![track(1), track(2)]);
+        state.replace_tracks(vec![track(1), track(2)], true);
         assert_eq!(state.selected, Some(1));
         state.command(AppCommand::SelectTrack(Some(2)));
-        state.replace_tracks(vec![track(2), track(1)]);
+        state.replace_tracks(vec![track(2), track(1)], true);
         assert_eq!(state.selected, Some(2));
-        state.replace_tracks(vec![track(1)]);
+        state.replace_tracks(vec![track(1)], true);
         assert_eq!(state.selected, Some(1));
         state.command(AppCommand::SelectTrack(None));
         assert_eq!(state.selected, None);
         state.command(AppCommand::SelectTrack(Some(404)));
         assert_eq!(state.selected, None);
-        state.replace_tracks(vec![]);
+        state.replace_tracks(vec![], true);
         assert!(state.library.message.contains("No songs"));
         assert!(matches!(
             updates.lock().unwrap().last(),
@@ -1199,12 +1548,13 @@ mod tests {
     #[test]
     fn list_failures_are_independent_and_preserve_previous_rows() {
         let (mut state, _) = controller();
-        state.replace_tracks(vec![track(1)]);
+        state.replace_tracks(vec![track(1)], true);
         state.complete(Completed::Folders(Err("folders failed".into())));
         assert_eq!(state.folder_status.retry, Some(SettingsRetry::Load));
         assert_eq!(state.library.retry, None);
         state.complete(Completed::Library {
             request: state.library_request,
+            invalidate_artwork: true,
             result: Err("library failed".into()),
         });
         assert_eq!(state.tracks, vec![track(1)]);
@@ -1215,6 +1565,7 @@ mod tests {
         assert_eq!(state.library.retry, Some(SettingsRetry::Load));
         state.complete(Completed::Library {
             request: state.library_request,
+            invalidate_artwork: true,
             result: Ok(vec![track(2)]),
         });
         assert_eq!(state.library.retry, None);
@@ -1242,7 +1593,7 @@ mod tests {
     #[test]
     fn selected_media_has_priority_and_duplicate_requests_merge() {
         let (mut state, _) = controller();
-        state.replace_tracks(vec![track(1), track(2), track(3)]);
+        state.replace_tracks(vec![track(1), track(2), track(3)], true);
         state.request_media(2, false);
         state.request_media(2, true);
         state.request_media(3, true);
@@ -1257,13 +1608,13 @@ mod tests {
     #[test]
     fn evicted_cover_refetch_does_not_repeat_duration() {
         let (mut state, _) = controller();
-        state.replace_tracks(vec![track(1)]);
-        state.duration_done.insert(1);
+        state.replace_tracks(vec![track(1)], true);
+        state.durations.insert(1, None);
         state.request_media(1, false);
         assert!(state.queue.is_empty());
         state.request_media(1, true);
         assert_eq!(state.queue.pop_front(), Some((1, true)));
-        assert!(state.duration_done.contains(&1));
+        assert!(state.durations.contains_key(&1));
         state.unavailable.insert(101);
         state.request_media(1, true);
         assert!(state.queue.is_empty());
@@ -1274,7 +1625,7 @@ mod tests {
         let (_directory, session) = test_session().await;
         let (mut state, updates) = controller();
         state.session = Some(session);
-        state.replace_tracks((1..=5).map(track).collect());
+        state.replace_tracks((1..=5).map(track).collect(), true);
         let mut tickets = Vec::new();
         for id in 1..=4 {
             let ticket = MediaTicket {
@@ -1289,14 +1640,17 @@ mod tests {
                     ticket,
                     cover: Some(id.saturating_add(100)),
                     decoding: false,
+                    artwork_pending: true,
+                    duration_pending: true,
+                    tasks: Vec::new(),
                 },
             );
             state.media_completed(ticket, Some(vec![1, 2]), Some(42), true);
         }
         assert_eq!(state.jobs.len(), 4);
         assert!(state.jobs.values().all(|job| job.decoding));
-        for _ in 0..3 {
-            state.replace_tracks((1..=5).map(track).collect());
+        for invalidate in [false, true, false] {
+            state.replace_tracks((1..=5).map(track).collect(), invalidate);
         }
         assert_eq!(
             state.jobs.len(),
@@ -1326,17 +1680,27 @@ mod tests {
         state.start_media();
         assert_eq!(
             state.jobs.len(),
-            1,
-            "the acknowledged slot can now run current media"
+            2,
+            "released slots serve the retained selection and the newly visible row"
         );
-        assert_eq!(state.tasks.len(), 1);
+        assert_eq!(
+            state.jobs.get(&5).unwrap().ticket.audio_id,
+            1,
+            "selection keeps priority"
+        );
+        assert_eq!(state.jobs.get(&6).unwrap().ticket.audio_id, 5);
+        assert_eq!(
+            state.tasks.len(),
+            4,
+            "cover and duration run independently per pipeline"
+        );
         state.tasks.abort_all();
         state.session.take().unwrap().shutdown().await.unwrap();
     }
     #[test]
     fn stale_network_results_and_forged_acks_do_not_change_current_tracks() {
         let (mut state, updates) = controller();
-        state.replace_tracks(vec![track(1)]);
+        state.replace_tracks(vec![track(1)], true);
         let ticket = MediaTicket {
             generation: 1,
             audio_id: 1,
@@ -1348,6 +1712,9 @@ mod tests {
                 ticket,
                 cover: Some(101),
                 decoding: false,
+                artwork_pending: true,
+                duration_pending: true,
+                tasks: Vec::new(),
             },
         );
         state.command(AppCommand::MediaInstalled {
@@ -1359,7 +1726,7 @@ mod tests {
             1,
             "HTTP pipeline needs no installation ack yet"
         );
-        state.replace_tracks(vec![track(1)]);
+        state.replace_tracks(vec![track(1)], true);
         updates.lock().unwrap().clear();
         state.media_completed(ticket, Some(vec![3]), Some(6000), true);
         assert!(state.jobs.is_empty());
@@ -1396,3 +1763,333 @@ mod tests {
 
 #[cfg(test)]
 mod benchmarks;
+
+#[cfg(test)]
+mod media_tests {
+    use super::tests::{controller, track};
+    use super::*;
+
+    fn pipeline(state: &mut Controller, audio_id: i32, serial: u64) -> MediaTicket {
+        let ticket = MediaTicket {
+            generation: state.generation,
+            audio_id,
+            serial,
+        };
+        state.jobs.insert(
+            serial,
+            MediaJob {
+                ticket,
+                cover: Some(audio_id.saturating_add(100)),
+                decoding: false,
+                artwork_pending: true,
+                duration_pending: true,
+                tasks: Vec::new(),
+            },
+        );
+        ticket
+    }
+
+    #[test]
+    fn artwork_arrives_before_duration_and_slots_release_in_both_completion_orders() {
+        for duration_first in [false, true] {
+            let (mut state, updates) = controller();
+            state.replace_tracks(vec![track(1)], true);
+            state.current_track = Some(track(1));
+            state.request_media(1, true);
+            state.set_visible_media(vec![(1, true)]);
+            state.upcoming.open = true;
+            state.queue_media.insert(1, true);
+            let ticket = pipeline(&mut state, 1, 1);
+            updates.lock().unwrap().clear();
+            state.artwork_completed(ticket, Some(vec![1, 2, 3]));
+            assert!(state.jobs.get(&1).unwrap().decoding);
+            assert!(state.jobs.get(&1).unwrap().duration_pending);
+            assert_eq!(state.tracks.first().unwrap().duration, None);
+            assert!(
+                matches!(updates.lock().unwrap().last(), Some(AppUpdate::Artwork { ticket: emitted, .. }) if *emitted == ticket)
+            );
+            state.command(AppCommand::MediaInstalled {
+                ticket: MediaTicket {
+                    audio_id: 2,
+                    ..ticket
+                },
+                available: false,
+            });
+            assert!(
+                state.jobs.get(&1).unwrap().decoding,
+                "forged ACK cannot release a slot"
+            );
+            if duration_first {
+                state.duration_completed(ticket, Some(42_000));
+                assert_eq!(state.jobs.len(), 1, "duration cannot release a decoder");
+            }
+            state.command(AppCommand::MediaInstalled {
+                ticket,
+                available: true,
+            });
+            state.command(AppCommand::MediaInstalled {
+                ticket,
+                available: false,
+            });
+            assert!(
+                !state.unavailable.contains(&101),
+                "repeated ACK cannot poison a successful image"
+            );
+            if !duration_first {
+                assert_eq!(
+                    state.jobs.len(),
+                    1,
+                    "ACK cannot release pending duration HTTP"
+                );
+                state.duration_completed(ticket, Some(42_000));
+            }
+            assert!(state.jobs.is_empty());
+            assert_eq!(
+                state.current_track.as_ref().unwrap().duration,
+                Some(Duration::from_secs(42))
+            );
+            assert_eq!(
+                state.selected_media.as_ref().unwrap().duration,
+                Some(Duration::from_secs(42))
+            );
+            state.duration_completed(ticket, Some(99_000));
+            assert_eq!(
+                state.durations.get(&1),
+                Some(&Some(Duration::from_secs(42)))
+            );
+            state.set_visible_media(vec![(1, false)]);
+            assert!(
+                state.queue.is_empty(),
+                "successful installation consumes all artwork demand"
+            );
+            assert_eq!(state.selected_artwork_missing, Some(false));
+            assert_eq!(state.queue_media.get(&1), Some(&false));
+        }
+    }
+
+    #[test]
+    fn viewport_snapshots_replace_historical_demand_and_deduplicate_audio() {
+        let (mut state, _) = controller();
+        state.replace_tracks((1..=100).map(track).collect(), true);
+        state.command(AppCommand::SelectTrack(None));
+        state.set_visible_media((1..=30).map(|id| (id, true)).collect());
+        state.set_visible_media(vec![(90, false), (91, true), (90, true)]);
+        assert_eq!(state.visible_media, Some(vec![(90, true), (91, true)]));
+        assert_eq!(state.queue, VecDeque::from([(90, true), (91, true)]));
+        state.request_media(2, true);
+        assert_eq!(
+            state.queue.len(),
+            2,
+            "offscreen compatibility request cannot extend an active snapshot"
+        );
+        state.command(AppCommand::SelectTrack(Some(50)));
+        state.request_media(50, true);
+        state.set_visible_media(Vec::new());
+        assert_eq!(
+            state.queue,
+            VecDeque::from([(50, true)]),
+            "selection remains independent"
+        );
+    }
+
+    #[tokio::test]
+    async fn obsolete_http_is_aborted_but_started_decode_waits_for_its_ack() {
+        let (mut state, _) = controller();
+        state.replace_tracks((1..=3).map(track).collect(), true);
+        state.command(AppCommand::SelectTrack(None));
+        let first = pipeline(&mut state, 1, 1);
+        let second = pipeline(&mut state, 2, 2);
+        let http = state.task(std::future::pending());
+        let duration = state.task(std::future::pending());
+        state.jobs.get_mut(&1).unwrap().tasks.push(http.clone());
+        state.jobs.get_mut(&2).unwrap().tasks.push(duration.clone());
+        state.artwork_completed(second, Some(vec![2]));
+        state.set_visible_media(vec![(3, true)]);
+        assert!(!state.jobs.contains_key(&1));
+        assert!(state.jobs.get(&2).unwrap().decoding);
+        assert!(!state.jobs.get(&2).unwrap().duration_pending);
+        while state.tasks.join_next().await.is_some() {}
+        assert!(http.is_finished() && duration.is_finished());
+        state.artwork_completed(first, Some(vec![1]));
+        state.replace_tracks((1..=3).map(track).collect(), false);
+        state.duration_completed(second, Some(123_000));
+        assert!(
+            state.jobs.get(&2).unwrap().decoding,
+            "late duration cannot release old decoder"
+        );
+        state.command(AppCommand::MediaInstalled {
+            ticket: second,
+            available: false,
+        });
+        assert!(state.jobs.is_empty());
+        assert!(state.unavailable.is_empty() && state.durations.is_empty());
+    }
+
+    #[test]
+    fn navigation_preserves_metadata_and_true_invalidation_clears_it() {
+        let (mut state, updates) = controller();
+        state.replace_tracks(vec![track(1)], true);
+        updates.lock().unwrap().clear();
+        state.durations.insert(1, Some(Duration::from_secs(42)));
+        state.unavailable.insert(101);
+        state.replace_tracks(vec![track(1)], false);
+        assert_eq!(
+            state.tracks.first().unwrap().duration,
+            Some(Duration::from_secs(42))
+        );
+        state.playlist_action(PlaylistAction::ShowPlaylists);
+        state.playlist_action(PlaylistAction::ShowLibrary);
+        assert!(state.unavailable.contains(&101));
+        assert_eq!(
+            state.durations.get(&1),
+            Some(&Some(Duration::from_secs(42)))
+        );
+        assert_eq!(
+            state.generation, 4,
+            "each replacement advances the adapter ticket contract"
+        );
+        let replacements: Vec<_> = updates
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|event| {
+                if let AppUpdate::TracksReplaced {
+                    invalidate_artwork, ..
+                } = event
+                {
+                    Some(*invalidate_artwork)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(replacements, [false, false, false]);
+        state.replace_tracks(vec![track(1)], true);
+        assert!(state.unavailable.is_empty() && state.durations.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn superseding_search_retains_refresh_invalidation_until_success() {
+        let (_directory, session) = super::tests::test_session().await;
+        let (mut state, updates) = controller();
+        state.session = Some(session);
+        state.replace_tracks(vec![track(1)], true);
+        state.library_invalidation_pending = false;
+        state.durations.insert(1, Some(Duration::from_secs(42)));
+        state.command(AppCommand::RefreshLibrary);
+        let refresh = state.library_request;
+        state.command(AppCommand::SearchLibrary("latest".into()));
+        state.complete(Completed::Library {
+            request: refresh,
+            invalidate_artwork: true,
+            result: Ok(Vec::new()),
+        });
+        assert_eq!(state.tracks.len(), 1);
+        state.complete(Completed::Library {
+            request: state.library_request,
+            invalidate_artwork: true,
+            result: Err("offline".into()),
+        });
+        assert_eq!(
+            state.durations.get(&1),
+            Some(&Some(Duration::from_secs(42)))
+        );
+        assert!(
+            state.library_invalidation_pending,
+            "failed refresh preserves both images and its invalidation intent"
+        );
+        state.command(AppCommand::SearchLibrary("newest".into()));
+        // The current task itself must have carried the sticky reason through load_library.
+        let mut completion = None;
+        while let Some(result) = state.tasks.join_next().await {
+            if let Ok(result @ Completed::Library { .. }) = result {
+                completion = Some(result);
+                break;
+            }
+        }
+        assert!(matches!(
+            completion,
+            Some(Completed::Library {
+                invalidate_artwork: true,
+                ..
+            })
+        ));
+        state.complete(Completed::Library {
+            request: state.library_request,
+            invalidate_artwork: true,
+            result: Ok(vec![track(1)]),
+        });
+        assert!(!state.library_invalidation_pending && state.durations.is_empty());
+        assert!(updates.lock().unwrap().iter().any(|event| matches!(
+            event,
+            AppUpdate::TracksReplaced {
+                invalidate_artwork: true,
+                ..
+            }
+        )));
+        state.tasks.abort_all();
+        state.session.take().unwrap().shutdown().await.unwrap();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn artwork_upgrade_and_reentry_use_one_slot_and_distinct_delivery_tickets() {
+        let (_directory, session) = super::tests::test_session().await;
+        let (mut state, _) = controller();
+        state.session = Some(session);
+        state.replace_tracks(vec![track(1)], true);
+        state.request_media(1, false);
+        state.start_media();
+        let original = state.jobs.get(&1).unwrap().ticket;
+        assert!(state.jobs.get(&1).unwrap().cover.is_none());
+        state.request_media(1, true);
+        assert_eq!(state.jobs.len(), 1);
+        assert!(state.jobs.get(&1).unwrap().artwork_pending);
+        state.artwork_completed(original, Some(vec![1]));
+        state.command(AppCommand::MediaInstalled {
+            ticket: original,
+            available: true,
+        });
+        assert!(state.jobs.get(&1).unwrap().duration_pending);
+        state.request_media(1, true); // The installed cover was evicted while duration HTTP remained pending.
+        state.start_media();
+        let replacement = state.jobs.get(&2).unwrap().ticket;
+        assert_ne!(replacement.serial, original.serial);
+        assert_eq!(state.jobs.len(), 1);
+        state.artwork_completed(replacement, Some(vec![2]));
+        state.command(AppCommand::MediaInstalled {
+            ticket: original,
+            available: false,
+        });
+        state.duration_completed(original, Some(99_000));
+        assert!(state.jobs.get(&2).unwrap().decoding);
+        assert!(state.jobs.get(&2).unwrap().duration_pending);
+        assert!(!state.unavailable.contains(&101));
+        state.duration_completed(replacement, Some(42_000));
+        state.command(AppCommand::MediaInstalled {
+            ticket: replacement,
+            available: true,
+        });
+        state.set_visible_media(vec![(1, false)]);
+        assert!(state.jobs.is_empty() && state.queue.is_empty());
+        state.tasks.abort_all();
+        state.session.take().unwrap().shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancels_http_without_waiting_for_missing_decode_ack() {
+        let (mut state, _) = controller();
+        state.replace_tracks(vec![track(1)], true);
+        let ticket = pipeline(&mut state, 1, 1);
+        let task = state.task(std::future::pending());
+        state.jobs.get_mut(&1).unwrap().tasks.push(task.clone());
+        state.artwork_completed(ticket, Some(vec![1]));
+        let (sender, receiver) = mpsc::unbounded_channel();
+        sender.send(AppCommand::Shutdown).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), state.run(receiver))
+            .await
+            .unwrap();
+        assert!(task.is_finished());
+    }
+}

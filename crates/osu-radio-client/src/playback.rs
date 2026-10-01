@@ -2,6 +2,7 @@
 use osu_radio_player::Player;
 pub use osu_radio_player::{PlayerState, Snapshot};
 use std::{
+    collections::VecDeque,
     path::Path,
     sync::{Arc, Mutex, mpsc},
     thread,
@@ -28,6 +29,7 @@ pub(crate) enum Command {
         id: Option<i32>,
         playback_token: u64,
         mode: crate::models::PlaybackMode,
+        volume: f32,
     },
     Loaded {
         generation: u64,
@@ -50,6 +52,7 @@ pub(crate) struct Download {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Message {
     Download(Download),
+    Started(u64),
     Finished(u64),
     Failed(u64),
     DeviceFailure(u64),
@@ -96,7 +99,7 @@ impl Worker {
                                 let _ = downloads.send(Message::Download(request));
                             }
                             drop(guard);
-                            if let Some(feedback) = core.feedback.take() {
+                            while let Some(feedback) = core.feedback.pop_front() {
                                 let _ = downloads.send(feedback);
                             }
                             emit(core.state.clone());
@@ -104,7 +107,7 @@ impl Worker {
                         Err(mpsc::RecvTimeoutError::Timeout) => {
                             let previous = core.state.clone();
                             core.refresh();
-                            if let Some(feedback) = core.feedback.take() {
+                            while let Some(feedback) = core.feedback.pop_front() {
                                 let _ = downloads.send(feedback);
                             }
                             if previous != core.state
@@ -213,8 +216,9 @@ struct Core<E> {
     file_id: Option<i32>,
     state: Playback,
     mode: crate::models::PlaybackMode,
-    feedback: Option<Message>,
+    feedback: VecDeque<Message>,
     reported: bool,
+    started: bool,
 }
 impl<E> Default for Core<E> {
     fn default() -> Self {
@@ -224,8 +228,9 @@ impl<E> Default for Core<E> {
             file_id: None,
             state: Playback::default(),
             mode: crate::models::PlaybackMode::Stopped,
-            feedback: None,
+            feedback: VecDeque::new(),
             reported: false,
+            started: false,
         }
     }
 }
@@ -239,12 +244,25 @@ impl<E: Engine> Core<E> {
                 id,
                 playback_token,
                 mode,
+                volume,
             } => {
                 if candidate != generation {
                     return None;
                 }
+                if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
+                    self.state.error = Some("volume must be a finite value between 0 and 1".into());
+                    return None;
+                }
                 let restart = playback_token != self.state.playback_token
                     || id != self.state.current_audio_id;
+                self.state.snapshot.volume = volume;
+                if !restart
+                    && let Some(player) = &mut self.player
+                    && let Err(error) = player.volume(volume)
+                {
+                    self.state.error = Some(error);
+                    return None;
+                }
                 if !restart && self.mode == mode {
                     self.refresh();
                     return None;
@@ -269,6 +287,7 @@ impl<E: Engine> Core<E> {
                     self.state.snapshot.position = Duration::ZERO;
                     self.state.snapshot.duration = None;
                     self.reported = false;
+                    self.started = false;
                 }
                 match mode {
                     PlaybackMode::Stopped => {
@@ -294,7 +313,11 @@ impl<E: Engine> Core<E> {
                             self.report(Message::Finished(playback_token));
                             Ok(())
                         } else if self.player.is_some() {
-                            self.player.as_mut().map_or(Ok(()), Engine::play)
+                            let result = self.player.as_mut().map_or(Ok(()), Engine::play);
+                            if result.is_ok() {
+                                self.report_started();
+                            }
+                            result
                         } else if self.file_id == id && self.file.is_some() {
                             self.load_cached()
                         } else if self.state.loading_audio_id == id {
@@ -363,10 +386,17 @@ impl<E: Engine> Core<E> {
         self.refresh();
         None
     }
-    const fn report(&mut self, message: Message) {
+    fn report(&mut self, message: Message) {
         if !self.reported {
-            self.feedback = Some(message);
+            self.feedback.push_back(message);
             self.reported = true;
+        }
+    }
+    fn report_started(&mut self) {
+        if !self.started {
+            self.feedback
+                .push_back(Message::Started(self.state.playback_token));
+            self.started = true;
         }
     }
     fn load_cached(&mut self) -> Result<(), String> {
@@ -392,6 +422,9 @@ impl<E: Engine> Core<E> {
             _ => Ok(()),
         };
         self.state.has_source = result.is_ok();
+        if result.is_ok() && self.mode == crate::models::PlaybackMode::Playing {
+            self.report_started();
+        }
         if result.is_err() {
             let device = self
                 .player
@@ -435,22 +468,36 @@ mod tests {
         snapshot: Snapshot,
         loads: usize,
         output_error: Option<String>,
+        immediate_end: bool,
+        play_error: bool,
+        play_volumes: Vec<f32>,
     }
     impl Engine for FakeEngine {
         fn new() -> Result<Self, String> {
             Ok(Self::default())
         }
         fn load(&mut self, path: &Path) -> Result<(), String> {
-            if std::fs::read(path).unwrap() == b"bad" {
+            let bytes = std::fs::read(path).unwrap();
+            if bytes == b"bad" {
                 return Err("decode failed".into());
             }
             self.loads = self.loads.saturating_add(1);
+            self.immediate_end = bytes == b"short";
+            self.play_error = bytes == b"play-error";
             self.snapshot.state = PlayerState::Paused;
             self.snapshot.position = Duration::ZERO;
             Ok(())
         }
         fn play(&mut self) -> Result<(), String> {
-            self.snapshot.state = PlayerState::Playing;
+            self.play_volumes.push(self.snapshot.volume);
+            if self.play_error {
+                return Err("play failed".into());
+            }
+            self.snapshot.state = if self.immediate_end {
+                PlayerState::Ended
+            } else {
+                PlayerState::Playing
+            };
             Ok(())
         }
         fn pause(&mut self) -> Result<(), String> {
@@ -492,6 +539,7 @@ mod tests {
                 id: Some(id),
                 playback_token: token,
                 mode,
+                volume: core.state.snapshot.volume,
             },
             generation,
         )
@@ -506,6 +554,78 @@ mod tests {
             },
             token,
         );
+        assert_eq!(core.feedback.pop_front(), Some(Message::Started(token)));
+    }
+    #[test]
+    fn assignments_apply_volume_before_first_sample_resume_and_cached_queue_restart() {
+        let mut core = Core::<FakeEngine>::default();
+        for (token, percent) in [(1, 10_u8), (2, 20), (3, 0), (4, 100)] {
+            core.command(
+                Command::Assign {
+                    generation: token,
+                    id: Some(10),
+                    playback_token: token,
+                    mode: PlaybackMode::Playing,
+                    volume: f32::from(percent) / 100.0,
+                },
+                token,
+            );
+            if token == 1 {
+                core.command(
+                    Command::Loaded {
+                        generation: token,
+                        id: 10,
+                        result: Ok(file(b"mp3")),
+                    },
+                    token,
+                );
+            }
+            assert_eq!(
+                core.player.as_ref().unwrap().play_volumes,
+                [f32::from(percent) / 100.0]
+            );
+        }
+        core.command(
+            Command::Assign {
+                generation: 4,
+                id: Some(10),
+                playback_token: 4,
+                mode: PlaybackMode::Paused,
+                volume: 0.2,
+            },
+            4,
+        );
+        core.command(
+            Command::Assign {
+                generation: 4,
+                id: Some(10),
+                playback_token: 4,
+                mode: PlaybackMode::Playing,
+                volume: 0.1,
+            },
+            4,
+        );
+        assert_eq!(
+            core.player
+                .as_ref()
+                .unwrap()
+                .play_volumes
+                .last()
+                .unwrap()
+                .to_bits(),
+            0.1_f32.to_bits()
+        );
+        core.command(
+            Command::Assign {
+                generation: 3,
+                id: Some(10),
+                playback_token: 3,
+                mode: PlaybackMode::Playing,
+                volume: 1.0,
+            },
+            4,
+        );
+        assert_eq!(core.state.snapshot.volume.to_bits(), 0.1_f32.to_bits());
     }
     #[test]
     fn duplicate_id_new_token_restarts_and_same_token_reconnect_preserves_position() {
@@ -534,6 +654,73 @@ mod tests {
         assert_eq!(core.state.snapshot.position, Duration::ZERO);
     }
     #[test]
+    fn started_waits_for_successful_play_and_never_repeats_on_pause_resume() {
+        let mut core = Core::<FakeEngine>::default();
+        assert!(assign(&mut core, 1, 1, 10, PlaybackMode::Playing).is_some());
+        assert!(core.feedback.is_empty());
+        assign(&mut core, 1, 1, 10, PlaybackMode::Paused);
+        core.command(
+            Command::Loaded {
+                generation: 1,
+                id: 10,
+                result: Ok(file(b"mp3")),
+            },
+            1,
+        );
+        assert!(
+            core.feedback.is_empty(),
+            "loading while paused is not a start"
+        );
+        assign(&mut core, 1, 1, 10, PlaybackMode::Playing);
+        assert_eq!(core.feedback.pop_front(), Some(Message::Started(1)));
+        for mode in [
+            PlaybackMode::Playing,
+            PlaybackMode::Paused,
+            PlaybackMode::Playing,
+        ] {
+            assign(&mut core, 1, 1, 10, mode);
+            assert!(core.feedback.is_empty());
+        }
+        assert!(assign(&mut core, 2, 2, 10, PlaybackMode::Playing).is_none());
+        assert_eq!(
+            core.feedback.pop_front(),
+            Some(Message::Started(2)),
+            "cached replay starts a new token"
+        );
+        for (token, bytes) in [(3, &b"bad"[..]), (4, &b"play-error"[..])] {
+            assign(&mut core, token, token, 20, PlaybackMode::Playing);
+            core.command(
+                Command::Loaded {
+                    generation: token,
+                    id: 20,
+                    result: Ok(file(bytes)),
+                },
+                token,
+            );
+            assert_eq!(core.feedback.pop_front(), Some(Message::Failed(token)));
+            assert!(
+                core.feedback.is_empty(),
+                "decode/play failure never acknowledges a start"
+            );
+        }
+    }
+    #[test]
+    fn immediate_eof_keeps_started_before_finished() {
+        let mut core = Core::<FakeEngine>::default();
+        assign(&mut core, 1, 1, 10, PlaybackMode::Playing);
+        core.command(
+            Command::Loaded {
+                generation: 1,
+                id: 10,
+                result: Ok(file(b"short")),
+            },
+            1,
+        );
+        assert_eq!(core.feedback.pop_front(), Some(Message::Started(1)));
+        assert_eq!(core.feedback.pop_front(), Some(Message::Finished(1)));
+        assert!(core.feedback.is_empty());
+    }
+    #[test]
     fn stale_downloads_are_removed_and_pause_during_download_never_resumes() {
         let mut core = Core::<FakeEngine>::default();
         assign(&mut core, 1, 1, 10, PlaybackMode::Playing);
@@ -560,6 +747,7 @@ mod tests {
             2,
         );
         assert_eq!(core.state.snapshot.state, PlayerState::Paused);
+        assert!(core.feedback.is_empty());
     }
     #[test]
     fn finished_failed_and_device_feedback_captures_launch_token_and_emits_once() {
@@ -567,9 +755,9 @@ mod tests {
         load(&mut core, 1, 10);
         core.player.as_mut().unwrap().snapshot.state = PlayerState::Ended;
         core.refresh();
-        assert_eq!(core.feedback.take(), Some(Message::Finished(1)));
+        assert_eq!(core.feedback.pop_front(), Some(Message::Finished(1)));
         core.refresh();
-        assert!(core.feedback.take().is_none());
+        assert!(core.feedback.pop_front().is_none());
         assign(&mut core, 1, 1, 10, PlaybackMode::Playing);
         assert_eq!(core.state.snapshot.state, PlayerState::Ended);
         assign(&mut core, 1, 1, 10, PlaybackMode::Paused);
@@ -581,7 +769,7 @@ mod tests {
         );
         core.player.as_mut().unwrap().snapshot.state = PlayerState::Ended;
         core.refresh();
-        assert_eq!(core.feedback.take(), Some(Message::Finished(1)));
+        assert_eq!(core.feedback.pop_front(), Some(Message::Finished(1)));
         assign(&mut core, 2, 2, 20, PlaybackMode::Playing);
         core.command(
             Command::Loaded {
@@ -591,7 +779,7 @@ mod tests {
             },
             2,
         );
-        assert_eq!(core.feedback.take(), Some(Message::Failed(2)));
+        assert_eq!(core.feedback.pop_front(), Some(Message::Failed(2)));
         assign(&mut core, 3, 3, 30, PlaybackMode::Playing);
         core.command(
             Command::Loaded {
@@ -601,14 +789,14 @@ mod tests {
             },
             3,
         );
-        assert_eq!(core.feedback.take(), Some(Message::Failed(3)));
+        assert_eq!(core.feedback.pop_front(), Some(Message::Failed(3)));
         load(&mut core, 4, 40);
         core.player.as_mut().unwrap().output_error = Some("device lost".into());
         core.refresh();
-        assert_eq!(core.feedback.take(), Some(Message::DeviceFailure(4)));
+        assert_eq!(core.feedback.pop_front(), Some(Message::DeviceFailure(4)));
         assert!(core.player.is_none());
         core.refresh();
-        assert!(core.feedback.take().is_none());
+        assert!(core.feedback.pop_front().is_none());
     }
     std::thread_local! {
         static DEVICE_OPEN_FAILURES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -655,6 +843,7 @@ mod tests {
                 id: Some(10),
                 playback_token: 4,
                 mode: PlaybackMode::Playing,
+                volume: core.state.snapshot.volume,
             },
             1,
         );
@@ -666,13 +855,14 @@ mod tests {
             },
             1,
         );
-        assert_eq!(core.feedback.take(), Some(Message::DeviceFailure(4)));
+        assert_eq!(core.feedback.pop_front(), Some(Message::DeviceFailure(4)));
         core.command(
             Command::Assign {
                 generation: 1,
                 id: Some(10),
                 playback_token: 4,
                 mode: PlaybackMode::Paused,
+                volume: core.state.snapshot.volume,
             },
             1,
         );
@@ -682,26 +872,29 @@ mod tests {
                 id: Some(10),
                 playback_token: 4,
                 mode: PlaybackMode::Playing,
+                volume: core.state.snapshot.volume,
             },
             1,
         );
-        assert_eq!(core.feedback.take(), Some(Message::DeviceFailure(4)));
+        assert_eq!(core.feedback.pop_front(), Some(Message::DeviceFailure(4)));
         core.command(
             Command::Assign {
                 generation: 1,
                 id: Some(10),
                 playback_token: 4,
                 mode: PlaybackMode::Playing,
+                volume: core.state.snapshot.volume,
             },
             1,
         );
-        assert!(core.feedback.take().is_none());
+        assert!(core.feedback.pop_front().is_none());
         core.command(
             Command::Assign {
                 generation: 1,
                 id: Some(10),
                 playback_token: 4,
                 mode: PlaybackMode::Paused,
+                volume: core.state.snapshot.volume,
             },
             1,
         );
@@ -711,11 +904,13 @@ mod tests {
                 id: Some(10),
                 playback_token: 4,
                 mode: PlaybackMode::Playing,
+                volume: core.state.snapshot.volume,
             },
             1,
         );
         assert_eq!(core.state.snapshot.state, PlayerState::Playing);
         assert!(core.state.error.is_none());
+        assert_eq!(core.feedback.pop_front(), Some(Message::Started(4)));
     }
     #[test]
     fn paused_restore_is_lazy_and_volume_and_file_lifetime_are_preserved() {

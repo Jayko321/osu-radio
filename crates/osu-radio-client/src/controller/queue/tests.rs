@@ -5,10 +5,13 @@ use std::sync::Arc;
 
 fn assignment(revision: u64, token: u64, id: i32, mode: PlaybackMode) -> PlaybackAssignment {
     PlaybackAssignment {
+        volume_percent: None,
         current_audio_source_id: Some(id),
         current_playlist_item_id: None,
         track: Some(LibraryTrack {
             audio_source_id: id,
+            last_played_at_ms: None,
+            volume_percent: None,
             title: Some(format!("Track {id}")),
             title_unicode: None,
             artist: Some("Artist".into()),
@@ -31,12 +34,102 @@ fn assignment(revision: u64, token: u64, id: i32, mode: PlaybackMode) -> Playbac
 }
 
 #[tokio::test]
+async fn queue_view_preserves_order_duplicates_and_media_outside_search() {
+    let (mut state, updates) = super::super::tests::controller();
+    state.assignment = Some(assignment(5, 9, 7, PlaybackMode::Paused));
+    state.upcoming.open = true;
+    state.upcoming.request = 3;
+    let queue = crate::models::QueueState {
+        upcoming_tracks: [42, 103, 42]
+            .into_iter()
+            .map(|id| assignment(5, 9, id, PlaybackMode::Paused).track.unwrap())
+            .collect(),
+        audio_source_ids: vec![7, 42, 103, 42],
+        playlist_item_ids: vec![None; 4],
+        current_index: Some(0),
+        mode: PlaybackMode::Paused,
+        revision: 5,
+        playback_token: 9,
+    };
+    state.queue_loaded(2, Ok(queue.clone()));
+    assert!(
+        state.upcoming.view.tracks.is_empty(),
+        "stale request ignored"
+    );
+    state.queue_loaded(3, Ok(queue.clone()));
+    assert_eq!(
+        state
+            .upcoming
+            .view
+            .tracks
+            .iter()
+            .map(|track| track.audio_source_id)
+            .collect::<Vec<_>>(),
+        [42, 103, 42]
+    );
+    assert!(
+        state.tracks.is_empty(),
+        "queue metadata does not populate Songs search"
+    );
+    state.request_media(42, true);
+    assert_eq!(state.queue.front(), Some(&(42, true)));
+    let ticket = super::super::MediaTicket {
+        generation: state.generation,
+        audio_id: 42,
+        serial: 1,
+    };
+    state.jobs.insert(
+        1,
+        super::super::MediaJob {
+            ticket,
+            cover: Some(142),
+            decoding: false,
+            artwork_pending: true,
+            duration_pending: true,
+            tasks: Vec::new(),
+        },
+    );
+    state.media_completed(ticket, None, Some(261_000), true);
+    assert_eq!(
+        state.upcoming.view.tracks.first().unwrap().duration_label(),
+        "04:21"
+    );
+    assert_eq!(
+        state.upcoming.view.tracks.get(2).unwrap().duration_label(),
+        "04:21"
+    );
+    assert!(matches!(
+        updates.lock().unwrap().last(),
+        Some(AppUpdate::Queue(_))
+    ));
+    let mut empty = queue.clone();
+    empty.upcoming_tracks.clear();
+    state.queue_loaded(3, Ok(empty));
+    state.queue_loaded(3, Ok(queue));
+    assert_eq!(
+        state.upcoming.view.tracks.first().unwrap().duration_label(),
+        "04:21",
+        "rewinding the queue restores probed duration outside search"
+    );
+    state.set_queue_visible(false);
+    state.queue_loaded(3, Err("late failure".into()));
+    assert!(
+        state.upcoming.view.message.is_empty(),
+        "closed panel ignores late responses"
+    );
+    state.upcoming.open = true;
+    state.queue_loaded(state.upcoming.request, Err("queue unavailable".into()));
+    assert!(state.upcoming.view.tracks.is_empty());
+    assert_eq!(state.upcoming.view.message, "queue unavailable");
+}
+
+#[tokio::test]
 async fn assignments_order_reconnect_and_search_selection_are_independent() {
     let (mut state, updates) = super::super::tests::controller();
-    state.replace_tracks(vec![
-        super::super::tests::track(1),
-        super::super::tests::track(2),
-    ]);
+    state.replace_tracks(
+        vec![super::super::tests::track(1), super::super::tests::track(2)],
+        true,
+    );
     let (worker, downloads) = crate::playback::Worker::spawn_fake(Arc::new(|_| {})).unwrap();
     state.playback = Some(worker);
     state.downloads = Some(downloads);
@@ -48,7 +141,7 @@ async fn assignments_order_reconnect_and_search_selection_are_independent() {
     );
     assert_eq!(state.track(99).unwrap().cover_beatmap_id, Some(199));
     let generation = state.playback.as_ref().unwrap().generation();
-    state.replace_tracks(vec![]);
+    state.replace_tracks(vec![], true);
     assert_eq!(state.selected, Some(99));
     assert!(
         matches!(updates.lock().unwrap().last(), Some(AppUpdate::TrackSelected(Some(track))) if track.audio_source_id == 99)
@@ -62,7 +155,7 @@ async fn assignments_order_reconnect_and_search_selection_are_independent() {
         state.playback.as_ref().unwrap().generation(),
         generation.saturating_add(1)
     );
-    state.replace_tracks(vec![super::super::tests::track(1)]);
+    state.replace_tracks(vec![super::super::tests::track(1)], true);
     state.command(AppCommand::SelectTrack(Some(1)));
     state.apply_assignment(assignment(7, 10, 99, PlaybackMode::Playing));
     assert_eq!(state.selected, Some(1), "resume is not a queue transition");
@@ -70,15 +163,58 @@ async fn assignments_order_reconnect_and_search_selection_are_independent() {
 }
 
 #[tokio::test]
+async fn same_audio_assignment_without_duration_preserves_probed_metadata() {
+    let (mut state, updates) = super::super::tests::controller();
+    state.replace_tracks(vec![super::super::tests::track(1)], true);
+    let (worker, downloads) = crate::playback::Worker::spawn_fake(Arc::new(|_| {})).unwrap();
+    state.playback = Some(worker);
+    state.downloads = Some(downloads);
+    let mut initial = assignment(1, 4, 1, PlaybackMode::Paused);
+    initial.duration_ms = None;
+    state.apply_assignment(initial);
+    state.durations.insert(1, Some(Duration::from_secs(42)));
+    state.current_track.as_mut().unwrap().duration = Some(Duration::from_secs(42));
+    state.emit_selection();
+    let generation = state.playback.as_ref().unwrap().generation();
+    let mut resumed = assignment(2, 4, 1, PlaybackMode::Paused);
+    resumed.duration_ms = None;
+    state.apply_assignment(resumed);
+    assert_eq!(
+        state.track(1).unwrap().duration,
+        Some(Duration::from_secs(42))
+    );
+    assert_eq!(
+        state.selected_media.as_ref().unwrap().duration,
+        Some(Duration::from_secs(42))
+    );
+    assert_eq!(
+        state.durations.get(&1),
+        Some(&Some(Duration::from_secs(42)))
+    );
+    assert_eq!(state.playback.as_ref().unwrap().generation(), generation);
+    assert!(matches!(
+        updates.lock().unwrap().last(),
+        Some(AppUpdate::TrackSelected(Some(track))) if track.duration == Some(Duration::from_secs(42))
+    ));
+    state.playback.take().unwrap().shutdown();
+}
+
+#[tokio::test]
 async fn callbacks_keep_launch_token_and_device_failure_pauses_instead_of_skipping() {
     let (mut state, _) = super::super::tests::controller();
     state.assignment = Some(assignment(1, 4, 10, PlaybackMode::Playing));
+    state.worker_message(crate::playback::Message::Started(3));
     state.worker_message(crate::playback::Message::Finished(3));
     assert!(state.playback_commands.is_empty());
+    state.worker_message(crate::playback::Message::Started(4));
     state.worker_message(crate::playback::Message::Finished(4));
     state.worker_message(crate::playback::Message::Failed(4));
     state.worker_message(crate::playback::Message::DeviceFailure(4));
-    assert_eq!(state.playback_commands.len(), 3);
+    assert_eq!(state.playback_commands.len(), 4);
+    assert_eq!(
+        state.playback_commands.pop_front().unwrap().command,
+        PlaybackCommand::Started { playback_token: 4 }
+    );
     assert_eq!(
         state.playback_commands.pop_front().unwrap().command,
         PlaybackCommand::Finished { playback_token: 4 }
@@ -94,6 +230,48 @@ async fn callbacks_keep_launch_token_and_device_failure_pauses_instead_of_skippi
     state.assignment.as_mut().unwrap().mode = PlaybackMode::Paused;
     state.worker_message(crate::playback::Message::DeviceFailure(4));
     assert!(state.playback_commands.is_empty());
+}
+
+#[tokio::test]
+async fn started_assignment_updates_recent_dates_without_restart_or_selection_change() {
+    use crate::controller::TrackSort;
+    let (mut state, _) = super::super::tests::controller();
+    state.replace_tracks(
+        vec![super::super::tests::track(1), super::super::tests::track(2)],
+        true,
+    );
+    state.command(AppCommand::SetTrackSort(TrackSort::RecentlyPlayed));
+    let (worker, downloads) = crate::playback::Worker::spawn_fake(Arc::new(|_| {})).unwrap();
+    state.playback = Some(worker);
+    state.downloads = Some(downloads);
+    state.apply_assignment(assignment(1, 4, 2, PlaybackMode::Paused));
+    state.command(AppCommand::SelectTrack(Some(1)));
+    let generation = state.playback.as_ref().unwrap().generation();
+    let mut started = assignment(2, 4, 2, PlaybackMode::Paused);
+    started.track.as_mut().unwrap().last_played_at_ms = Some(100);
+    state.apply_assignment(started);
+    assert_eq!(
+        state
+            .tracks
+            .iter()
+            .map(|track| track.audio_source_id)
+            .collect::<Vec<_>>(),
+        [2, 1]
+    );
+    assert_eq!(state.tracks.first().unwrap().last_played_at_ms, Some(100));
+    assert_eq!(
+        state.current_track.as_ref().unwrap().last_played_at_ms,
+        Some(100)
+    );
+    assert_eq!(state.selected, Some(1));
+    assert_eq!(state.playback.as_ref().unwrap().generation(), generation);
+    state.apply_assignment(assignment(1, 4, 2, PlaybackMode::Paused));
+    state.replace_tracks(
+        vec![super::super::tests::track(1), super::super::tests::track(2)],
+        true,
+    );
+    assert_eq!(state.tracks.first().unwrap().last_played_at_ms, Some(100));
+    state.playback.take().unwrap().shutdown();
 }
 
 #[tokio::test]
@@ -278,6 +456,78 @@ async fn controller_serializes_http_commands_until_the_previous_response_commits
 }
 #[cfg(unix)]
 #[tokio::test]
+async fn playlist_append_preserves_pause_selection_order_and_duplicates_and_skips_unavailable() {
+    use crate::controller::PlaylistAction;
+    use tokio::io::AsyncWriteExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (_directory, session) =
+        session_at(&format!("http://{}", listener.local_addr().unwrap())).await;
+    let (mut state, _) = super::super::tests::controller();
+    state.session = Some(session);
+    let (worker, downloads) = crate::playback::Worker::spawn_fake(Arc::new(|_| {})).unwrap();
+    state.playback = Some(worker);
+    state.downloads = Some(downloads);
+    state.apply_assignment(assignment(1, 5, 7, PlaybackMode::Paused));
+    state.replace_tracks(vec![super::super::tests::track(42)], true);
+    state.command(AppCommand::SelectTrack(Some(42)));
+    let server = tokio::spawn(async move {
+        for ids in [vec![Some(42), None, Some(42), Some(103)], vec![None]] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            assert!(
+                read_request(&mut stream)
+                    .await
+                    .starts_with("GET /api/playlists/3 ")
+            );
+            let items: Vec<_> = ids.iter().enumerate().map(|(index, audio_id)| serde_json::json!({
+                "id": index, "playlist_id": 3, "source_kind": "stable", "beatmap_hash": format!("hash-{index}"),
+                "title": "Track", "artist": null, "difficulty_name": null, "beatmap_id": audio_id,
+                "beatmap_set_id": audio_id, "audio_source_id": audio_id, "cover_beatmap_id": null,
+            })).collect();
+            let body = serde_json::json!({"id": 3, "name": "Playlist", "items": items}).to_string();
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            if ids.iter().any(Option::is_some) {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let request = read_request(&mut stream).await;
+                assert!(request.starts_with("POST /api/queue/items "));
+                assert!(request.ends_with(r#"{"audio_source_ids":[42,42,103]}"#));
+                response(&mut stream, 2, 5, 7, false).await;
+            } else {
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(50), listener.accept())
+                        .await
+                        .is_err(),
+                    "unavailable playlist must not append"
+                );
+            }
+        }
+    });
+    for _ in 0..2 {
+        state.command(AppCommand::Playlist(PlaylistAction::AddToQueue(3)));
+        state.start_playback_command();
+        let completed = state.tasks.join_next().await.unwrap().unwrap();
+        state.complete(completed);
+        let current = state.assignment.as_ref().unwrap();
+        assert_eq!(current.current_audio_source_id, Some(7));
+        assert_eq!(current.playback_token, 5);
+        assert_eq!(current.mode, PlaybackMode::Paused);
+        assert_eq!(state.selected, Some(42));
+    }
+    server.await.unwrap();
+    state.playback.take().unwrap().shutdown();
+    state.session.take().unwrap().shutdown().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn stream_reconnect_rereads_snapshot_without_new_generation_or_download() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let (_directory, session) =
@@ -410,4 +660,102 @@ async fn device_pause_retries_a_lost_http_request_with_the_launch_token() {
     server.await.unwrap();
     state.playback.take().unwrap().shutdown();
     state.session.take().unwrap().shutdown().await.unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn started_retry_precedes_immediate_eof_without_blocking_user_pause() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (_directory, session) =
+        session_at(&format!("http://{}", listener.local_addr().unwrap())).await;
+    let (mut state, _) = super::super::tests::controller();
+    state.session = Some(session);
+    state.assignment = Some(assignment(1, 4, 10, PlaybackMode::Playing));
+    let (worker, downloads) = crate::playback::Worker::spawn_fake(Arc::new(|_| {})).unwrap();
+    state.playback = Some(worker);
+    state.downloads = Some(downloads);
+    let server = tokio::spawn(async move {
+        {
+            let (mut first, _) = listener.accept().await.unwrap();
+            assert!(
+                read_request(&mut first)
+                    .await
+                    .ends_with(r#"{"command":"started","playback_token":4}"#)
+            );
+        }
+        for (expected, revision) in [
+            (r#"{"command":"pause"}"#, 2),
+            (r#"{"command":"started","playback_token":4}"#, 3),
+            (r#"{"command":"finished","playback_token":4}"#, 4),
+        ] {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            assert!(read_request(&mut stream).await.ends_with(expected));
+            response(&mut stream, revision, 4, 10, false).await;
+        }
+    });
+    state.worker_message(crate::playback::Message::Started(4));
+    state.worker_message(crate::playback::Message::Finished(4));
+    state.start_playback_command();
+    let failed = state.tasks.join_next().await.unwrap().unwrap();
+    state.complete(failed);
+    state.start_playback_command();
+    assert!(
+        !state.playback_command_busy,
+        "EOF waits for a successful start acknowledgment"
+    );
+    state.command(AppCommand::Pause);
+    state.start_playback_command();
+    let paused = state.tasks.join_next().await.unwrap().unwrap();
+    state.complete(paused);
+    assert_eq!(state.pending_start, Some(4));
+    let retry = state.tasks.join_next().await.unwrap().unwrap();
+    state.complete(retry);
+    state.start_playback_command();
+    let started = state.tasks.join_next().await.unwrap().unwrap();
+    state.complete(started);
+    assert!(state.pending_start.is_none());
+    state.start_playback_command();
+    let finished = state.tasks.join_next().await.unwrap().unwrap();
+    state.complete(finished);
+    server.await.unwrap();
+    state.playback.take().unwrap().shutdown();
+    state.session.take().unwrap().shutdown().await.unwrap();
+}
+
+#[test]
+fn queue_media_demand_survives_empty_main_view_and_is_removed_on_close_or_new_queue() {
+    let (mut state, _) = super::super::tests::controller();
+    state.replace_tracks(Vec::new(), true);
+    state.upcoming.open = true;
+    state.upcoming.view.tracks = vec![
+        super::super::tests::track(42),
+        super::super::tests::track(103),
+    ];
+    state.request_media(42, true);
+    state.set_visible_media(Vec::new());
+    assert_eq!(state.queue, std::collections::VecDeque::from([(42, true)]));
+    state.replace_tracks(Vec::new(), false);
+    assert_eq!(
+        state.queue,
+        std::collections::VecDeque::from([(42, true)]),
+        "navigation retains independent open-queue demand"
+    );
+    state.set_queue_visible(false);
+    assert!(state.queue_media.is_empty() && state.queue.is_empty());
+    state.upcoming.open = true;
+    state.request_media(103, true);
+    let refreshed = crate::models::QueueState {
+        upcoming_tracks: Vec::new(),
+        audio_source_ids: Vec::new(),
+        playlist_item_ids: Vec::new(),
+        current_index: None,
+        mode: PlaybackMode::Stopped,
+        revision: 0,
+        playback_token: 0,
+    };
+    state.queue_loaded(state.upcoming.request, Ok(refreshed));
+    assert!(
+        state.queue_media.is_empty() && state.queue.is_empty(),
+        "removed queue IDs cannot keep media work alive"
+    );
 }

@@ -21,9 +21,9 @@ pub mod repositories;
 
 use anyhow::Result;
 use repositories::{
-    AudioSourceRepository, BeatmapMetadataRepository, BeatmapRepository, BeatmapSetRepository,
-    OsuInstallationRepository, PlaylistRepository, QueueRepository, TagRepository,
-    UserDataRepository,
+    AudioSourceRepository, AudioVolumeRepository, BeatmapMetadataRepository, BeatmapRepository,
+    BeatmapSetRepository, ListeningHistoryRepository, OsuInstallationRepository,
+    PlaylistRepository, QueueRepository, TagRepository, UserDataRepository,
 };
 pub use repositories::{RegisteredInstallation, metadata_hash};
 use sea_orm::TransactionTrait;
@@ -35,6 +35,18 @@ pub struct Database {
 }
 
 impl Database {
+    #[must_use]
+    pub const fn audio_volume(&self) -> AudioVolumeRepository<'_> {
+        AudioVolumeRepository {
+            connection: sea_orm::DatabaseExecutor::Connection(&self.connection),
+        }
+    }
+    #[must_use]
+    pub const fn listening_history(&self) -> ListeningHistoryRepository<'_> {
+        ListeningHistoryRepository {
+            connection: sea_orm::DatabaseExecutor::Connection(&self.connection),
+        }
+    }
     /// Opens the pool without modifying the schema, so legacy databases can be reset explicitly.
     pub async fn connect(database_url: &str) -> Result<Self> {
         Ok(Self {
@@ -142,6 +154,18 @@ pub struct Transaction {
 }
 
 impl Transaction {
+    #[must_use]
+    pub const fn audio_volume(&self) -> AudioVolumeRepository<'_> {
+        AudioVolumeRepository {
+            connection: sea_orm::DatabaseExecutor::Transaction(&self.connection),
+        }
+    }
+    #[must_use]
+    pub const fn listening_history(&self) -> ListeningHistoryRepository<'_> {
+        ListeningHistoryRepository {
+            connection: sea_orm::DatabaseExecutor::Transaction(&self.connection),
+        }
+    }
     pub async fn commit(self) -> Result<()> {
         self.connection.commit().await?;
         Ok(())

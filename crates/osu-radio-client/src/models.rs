@@ -2,6 +2,36 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub struct AudioSettings {
+    pub individual_volume_enabled: bool,
+    #[serde(deserialize_with = "volume_percent")]
+    pub global_volume_percent: u8,
+}
+impl Default for AudioSettings {
+    fn default() -> Self {
+        Self {
+            individual_volume_enabled: false,
+            global_volume_percent: 100,
+        }
+    }
+}
+fn volume_percent<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u8, D::Error> {
+    let percent = u8::deserialize(d)?;
+    if percent > 100 {
+        return Err(serde::de::Error::custom("Volume exceeds 100%"));
+    }
+    Ok(percent)
+}
+
+fn optional_volume_percent<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u8>, D::Error> {
+    let percent = Option::<u8>::deserialize(d)?;
+    if percent.is_some_and(|p| p > 100) {
+        return Err(serde::de::Error::custom("Volume exceeds 100%"));
+    }
+    Ok(percent)
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct DiscoverFolders {
     pub roots: Vec<PathBuf>,
@@ -182,6 +212,10 @@ pub struct AudioDuration {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct LibraryTrack {
     pub audio_source_id: i32,
+    #[serde(default)]
+    pub last_played_at_ms: Option<i64>,
+    #[serde(default, deserialize_with = "optional_volume_percent")]
+    pub volume_percent: Option<u8>,
     pub title: Option<String>,
     pub title_unicode: Option<String>,
     pub artist: Option<String>,
@@ -209,6 +243,8 @@ pub enum PlaybackMode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct QueueState {
+    #[serde(default)]
+    pub upcoming_tracks: Vec<LibraryTrack>,
     pub audio_source_ids: Vec<i32>,
     #[serde(default)]
     pub playlist_item_ids: Vec<Option<i32>>,
@@ -220,6 +256,8 @@ pub struct QueueState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PlaybackAssignment {
+    #[serde(default, deserialize_with = "optional_volume_percent")]
+    pub volume_percent: Option<u8>,
     pub current_audio_source_id: Option<i32>,
     #[serde(default)]
     pub current_playlist_item_id: Option<i32>,
@@ -247,6 +285,9 @@ pub enum PlaybackCommand {
     Stop,
     Next,
     Previous,
+    Started {
+        playback_token: u64,
+    },
     Finished {
         playback_token: u64,
     },
@@ -259,11 +300,21 @@ pub enum PlaybackCommand {
 pub struct PlaylistSummary {
     pub id: i32,
     pub name: String,
+    #[serde(default)]
+    pub item_count: u64,
+    #[serde(default)]
+    pub cover_beatmap_id: Option<i32>,
+    #[serde(default)]
+    pub custom_cover_revision: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PlaylistItem {
     pub id: i32,
+    #[serde(default)]
+    pub last_played_at_ms: Option<i64>,
+    #[serde(default, deserialize_with = "optional_volume_percent")]
+    pub volume_percent: Option<u8>,
     pub playlist_id: i32,
     pub source_kind: String,
     pub beatmap_hash: String,

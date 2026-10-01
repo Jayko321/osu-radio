@@ -8,8 +8,10 @@ Rectangle {
     required property var window
     property bool gallery: false
     property int selectedTab: 0
+    property bool queueEnabled: false
+    property bool queueVisible: false
     signal tabSelected(int index)
-    signal playlistsRequested()
+    signal queueRequested()
     readonly property bool maximized: window.visibility === Window.Maximized
     height: 50
     color: Theme.background
@@ -36,6 +38,7 @@ Rectangle {
         spacing: 4
         AppButton {
             height: 34
+            objectName: "songsTabButton"
             text: bar.gallery ? "Components" : "Songs"
             iconName: "music"
             variant: bar.selectedTab === 0 ? "light" : "link"
@@ -47,15 +50,28 @@ Rectangle {
         }
         AppButton {
             height: 34
-            text: "Settings"
-            iconName: "settings"
+            objectName: "playlistsTabButton"
+            text: "Playlists"
+            iconName: "layers"
             variant: bar.selectedTab === 1 ? "light" : "link"
             foreground: bar.selectedTab === 1 ? Theme.background : Theme.text
-            enabled: !bar.gallery
             onClicked: bar.tabSelected(1)
             font.pixelSize: 16
             font.weight: Font.Bold
-            Accessible.name: bar.gallery ? "Settings (unavailable)" : "Settings"
+            Accessible.name: "Playlists"
+        }
+        AppButton {
+            height: 34
+            objectName: "settingsButton"
+            text: "Settings"
+            iconName: "settings-4-line"
+            variant: bar.selectedTab === 2 ? "light" : "link"
+            foreground: bar.selectedTab === 2 ? Theme.background : Theme.text
+            enabled: !bar.gallery
+            onClicked: bar.tabSelected(2)
+            font.pixelSize: 16
+            font.weight: Font.Bold
+            Accessible.name: "Settings"
         }
     }
 
@@ -64,13 +80,16 @@ Rectangle {
         height: parent.height
         spacing: 0
         IconButton {
-            anchors.verticalCenter: parent.verticalCenter
+            objectName: "queueButton"
+            width: 46
+            height: bar.height
+            visible: !bar.gallery
+            enabled: bar.queueEnabled
             iconName: "layers"
-            objectName: "playlistsButton"
-            accessibleName: "Playlists"
-            onClicked: { forceActiveFocus(); bar.playlistsRequested(); }
+            foreground: bar.queueVisible ? "#c142b0" : Theme.text
+            accessibleName: bar.queueVisible ? "Hide queue" : "Show queue"
+            onClicked: bar.queueRequested()
         }
-        Item { width: 16; height: 1 }
         Basic.Button {
             id: minimize
             width: 46

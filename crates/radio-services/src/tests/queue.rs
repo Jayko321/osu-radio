@@ -26,6 +26,7 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
     }
     let [a, b, c, x] = <[i32; 4]>::try_from(ids).unwrap();
     validation_is_atomic(database, a).await;
+    upcoming_tracks_follow_queue_order(database, [a, b, c]).await;
     insertion_and_history(database, [a, b, c, x]).await;
     pause_stop_failures(database, [a, b, c]).await;
     device_pause_is_bound_to_launch(database, [a, b]).await;
@@ -41,6 +42,41 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
 
 async fn command(database: &TestDatabase, command: Command) -> PlaybackAssignment {
     database.queue().command(command).await.unwrap()
+}
+
+async fn upcoming_tracks_follow_queue_order(database: &TestDatabase, [a, b, c]: [i32; 3]) {
+    database.queue().append(vec![a, c, b, c]).await.unwrap();
+    let before = database.queue().get().await.unwrap();
+    let (queue, tracks) = database.queue().upcoming().await.unwrap();
+    assert_eq!(queue, before, "viewing the queue must not change playback");
+    assert_eq!(
+        tracks
+            .iter()
+            .map(|track| track.audio_source_id)
+            .collect::<Vec<_>>(),
+        [c, b, c]
+    );
+    assert_eq!(
+        tracks[0], tracks[2],
+        "duplicate audio entries keep their metadata"
+    );
+    command(database, Command::Pause).await;
+    command(database, Command::Next).await;
+    let (queue, tracks) = database.queue().upcoming().await.unwrap();
+    assert_eq!(queue.mode, Mode::Paused);
+    assert_eq!(
+        tracks
+            .iter()
+            .map(|track| track.audio_source_id)
+            .collect::<Vec<_>>(),
+        [b, c]
+    );
+    for _ in 0..3 {
+        command(database, Command::Next).await;
+    }
+    assert!(database.queue().upcoming().await.unwrap().1.is_empty());
+    database.queue().clear().await.unwrap();
+    assert!(database.queue().upcoming().await.unwrap().1.is_empty());
 }
 
 async fn validation_is_atomic(database: &TestDatabase, a: i32) {
@@ -424,6 +460,18 @@ async fn missing_sources_are_skipped(
         &format!("UPDATE audio_sources SET kind = 'online' WHERE id = {c}"),
     )
     .await;
+    assert_eq!(
+        database
+            .queue()
+            .upcoming()
+            .await
+            .unwrap()
+            .1
+            .iter()
+            .map(|track| track.audio_source_id)
+            .collect::<Vec<_>>(),
+        [a]
+    );
     assert_eq!(
         command(database, Command::Next)
             .await

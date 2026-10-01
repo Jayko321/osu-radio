@@ -58,6 +58,17 @@ async fn client_playlist_http_roundtrip_matches_the_server_contract() {
     assert!(api.playlists().await.unwrap().is_empty());
     let created = api.create_playlist(" Test ").await.unwrap();
     assert_eq!(created.name, "Test");
+    assert_eq!(created.item_count, 0);
+    assert_eq!(api.playlist_cover(created.id).await.unwrap(), None);
+    let png = playlist_cover_png();
+    let covered = api
+        .set_playlist_cover(created.id, png.clone())
+        .await
+        .unwrap();
+    assert_eq!(covered.custom_cover_revision, Some(1));
+    assert_eq!(api.playlist_cover(created.id).await.unwrap(), Some(png));
+    api.reset_playlist_cover(created.id).await.unwrap();
+    assert_eq!(api.playlist_cover(created.id).await.unwrap(), None);
     assert!(api.rename_playlist(created.id, " ").await.is_err());
     assert_eq!(
         api.rename_playlist(created.id, " Renamed ")
@@ -120,6 +131,9 @@ async fn every_playlist_route_and_item_assignment_is_documented() {
         ("/api/playlists/{id}/items", "post"),
         ("/api/playlists/{id}/items/{item_id}", "delete"),
         ("/api/playlists/{id}/play", "post"),
+        ("/api/playlists/{id}/cover", "get"),
+        ("/api/playlists/{id}/cover", "put"),
+        ("/api/playlists/{id}/cover", "delete"),
     ] {
         assert!(
             document["paths"][path][method].is_object(),
@@ -127,6 +141,113 @@ async fn every_playlist_route_and_item_assignment_is_documented() {
         );
     }
     assert!(document["components"]["schemas"]["PlaybackResponse"]["properties"]["current_playlist_item_id"].is_object());
+    for field in ["item_count", "cover_beatmap_id", "custom_cover_revision"] {
+        assert!(
+            document["components"]["schemas"]["PlaylistSummaryResponse"]["properties"][field]
+                .is_object()
+        );
+    }
+}
+
+#[tokio::test]
+async fn playlist_cover_routes_validate_store_replace_and_reset_png() {
+    let state = crate::test_support::empty_state().await;
+    let created = state.services().playlists().create("Cover").await.unwrap();
+    let path = format!("/api/playlists/{}/cover", created.id);
+    assert_eq!(
+        request(&state, "GET", &path, None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let png = playlist_cover_png();
+    for expected_revision in 1..=2 {
+        let response = binary_request(&state, "PUT", &path, png.clone()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let summary: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(summary["item_count"], 0);
+        assert_eq!(summary["custom_cover_revision"], expected_revision);
+        let response = binary_request(&state, "GET", &path, Vec::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[header::CONTENT_TYPE], "image/png");
+        assert_eq!(
+            axum::body::to_bytes(response.into_body(), 1024 * 1024)
+                .await
+                .unwrap(),
+            png
+        );
+    }
+    assert_eq!(
+        binary_request(&state, "PUT", &path, b"broken PNG".to_vec())
+            .await
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        binary_request(
+            &state,
+            "PUT",
+            &path,
+            vec![0; radio_services::MAX_PLAYLIST_COVER_BYTES + 1]
+        )
+        .await
+        .status(),
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+    assert_eq!(
+        request(&state, "DELETE", &path, None).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        request(&state, "DELETE", &path, None).await.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        request(&state, "GET", &path, None).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let (_, summaries) = request(&state, "GET", "/api/playlists", None).await;
+    assert_eq!(summaries[0]["custom_cover_revision"], Value::Null);
+    assert_eq!(
+        binary_request(&state, "PUT", "/api/playlists/2147483647/cover", png)
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        request(&state, "DELETE", "/api/playlists/2147483647/cover", None)
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+async fn binary_request(
+    state: &AppState,
+    method: &str,
+    path: &str,
+    body: Vec<u8>,
+) -> axum::response::Response {
+    crate::routes::router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header(header::CONTENT_TYPE, "image/png")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+fn playlist_cover_png() -> Vec<u8> {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(512, 512)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    bytes.into_inner()
 }
 
 #[tokio::test]

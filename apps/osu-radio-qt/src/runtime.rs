@@ -17,6 +17,9 @@ pub mod ffi {
         #[rust_name = "check_artwork_cache"]
         #[must_use]
         fn checkArtworkCache() -> QString;
+        #[rust_name = "check_playlist_cover_preparation"]
+        #[must_use]
+        fn checkPlaylistCoverPreparation() -> QString;
         type QQmlApplicationEngine = cxx_qt_lib::QQmlApplicationEngine;
         include!("cxx-qt-lib/qstring.h");
         type QString = cxx_qt_lib::QString;
@@ -35,9 +38,32 @@ pub mod ffi {
         #[rust_name = "artwork_url"]
         #[must_use]
         fn artworkUrl(generation: u64, id: i32) -> QString;
+        #[rust_name = "protect_artwork"]
+        fn protectArtwork(generation: u64, id: i32);
         #[rust_name = "install_artwork"]
         #[must_use]
         fn installArtwork(generation: u64, id: i32, bytes: &QByteArray) -> QVector_i32;
+        #[rust_name = "playlist_artwork_url"]
+        #[must_use]
+        fn playlistArtworkUrl(generation: u64, id: i32, revision: i64, beatmap: i32) -> QString;
+        #[rust_name = "install_playlist_artwork"]
+        #[must_use]
+        fn installPlaylistArtwork(
+            generation: u64,
+            id: i32,
+            revision: i64,
+            beatmap: i32,
+            bytes: &QByteArray,
+        ) -> QVector_i32;
+        #[rust_name = "draft_artwork_url"]
+        #[must_use]
+        fn draftArtworkUrl(generation: u64, serial: u64) -> QString;
+        #[rust_name = "install_draft_artwork"]
+        #[must_use]
+        fn installDraftArtwork(generation: u64, serial: u64, bytes: &QByteArray) -> QVector_i32;
+        #[rust_name = "prepare_playlist_cover"]
+        #[must_use]
+        fn preparePlaylistCover(url: &QString, error: &mut QString) -> QByteArray;
     }
     impl UniquePtr<AppBridge> {}
 }

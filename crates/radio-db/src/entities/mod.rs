@@ -1,4 +1,5 @@
 pub(crate) mod audio_source;
+pub(crate) mod audio_volume;
 pub(crate) mod beatmap;
 pub(crate) mod beatmap_metadata;
 pub(crate) mod beatmap_set;
@@ -7,6 +8,7 @@ pub(crate) mod osu_installation;
 pub(crate) mod tag;
 pub(crate) mod user_data;
 
+pub(crate) mod listening_history;
 pub(crate) mod playlist;
 pub(crate) mod playlist_item;
 pub(crate) mod queue;

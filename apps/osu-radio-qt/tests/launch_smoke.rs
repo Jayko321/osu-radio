@@ -21,8 +21,10 @@ fn run(args: &[&str], platform: &str, directory: &Path, server: &Path, case: &st
         .env("QT_QUICK_BACKEND", "software")
         .env("QSG_RHI_BACKEND", "software")
         .env("QML_DISABLE_DISK_CACHE", "1")
+        .env("QT_QUICK_CONTROLS_STYLE", "org.kde.breeze")
         .env("OSU_RADIO_QT_SMOKE_TEST", "1")
         .env("OSU_RADIO_QT_PROBE_CASE", case)
+        .env("OSU_RADIO_QT_PROBE_COVER", directory.join("source.png"))
         .env("OSU_RADIO_SERVER_BIN", server)
         .env_remove("SQLITE_DATABASE_URL")
         .env_remove("POSTGRES_DATABASE_URL")
@@ -94,6 +96,32 @@ fn gallery_is_offline_and_its_adapter_notifies_only_on_changes() {
 
 #[cfg(unix)]
 #[test]
+fn cover_picker_uses_basic_controls_even_with_a_desktop_style_override() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("isolated picker fixture");
+    let server = directory.path().join("fixture-server");
+    std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fixture");
+    let output = run(&[], "offscreen", directory.path(), &server, "native-picker");
+    assert!(output.contains("Cover picker visible"), "{output}");
+    assert!(
+        output.contains("Visual probe finished: 0 issues"),
+        "{output}"
+    );
+    for error in [
+        "Binding loop",
+        "TypeError",
+        "ReferenceError",
+        "VISUAL ISSUE",
+    ] {
+        assert!(!output.contains(error), "{output}");
+    }
+    assert_child_reaped(directory.path());
+}
+
+#[cfg(unix)]
+#[test]
 fn live_session_projects_independent_loads_targeted_media_and_id_selections() {
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().expect("isolated fixture directory");
@@ -156,6 +184,43 @@ fn songs_search_debounces_retries_and_clears_through_the_live_adapter() {
 
 #[cfg(unix)]
 #[test]
+fn track_sort_menu_reorders_without_refetching_media_or_changing_selection() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("isolated sorting fixture");
+    let server = directory.path().join("fixture-server");
+    std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fixture");
+    assert_probe(&run(&[], "offscreen", directory.path(), &server, "sorting"));
+    let requests = std::fs::read_to_string(directory.path().join("requests")).expect("requests");
+    assert_eq!(
+        requests
+            .lines()
+            .filter(|line| line.starts_with("/api/tracks"))
+            .count(),
+        1
+    );
+    for id in [7, 42, 103] {
+        assert_eq!(
+            requests
+                .lines()
+                .filter(|line| *line == format!("/api/audio-sources/{id}/duration"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests
+                .lines()
+                .filter(|line| *line == format!("/api/beatmaps/{id}/cover"))
+                .count(),
+            1
+        );
+    }
+    assert_child_reaped(directory.path());
+}
+
+#[cfg(unix)]
+#[test]
 fn queue_controls_preserve_pause_and_current_metadata_outside_search() {
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().expect("isolated queue fixture");
@@ -168,7 +233,7 @@ fn queue_controls_preserve_pause_and_current_metadata_outside_search() {
     assert_child_reaped(directory.path());
     let commands = std::fs::read_to_string(directory.path().join("playback_commands"))
         .expect("queue commands");
-    assert_eq!(commands.lines().count(), 3);
+    assert_eq!(commands.lines().count(), 4);
     assert!(commands.contains("next") && commands.contains("previous"));
 }
 
@@ -343,4 +408,195 @@ fn help_and_invalid_arguments_do_not_initialize_a_gui() {
         "none",
     );
     assert!(output.contains("Unknown or repeated argument"));
+}
+
+#[cfg(unix)]
+#[test]
+fn individual_volume_controls_retry_preserve_selection_and_flush_at_close() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("isolated volume fixture");
+    let server = directory.path().join("fixture-server");
+    std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fixture");
+    assert_probe(&run(&[], "offscreen", directory.path(), &server, "volume"));
+    let settings: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(directory.path().join("audio-settings.json"))
+            .expect("saved settings"),
+    )
+    .expect("settings JSON");
+    assert_eq!(
+        settings
+            .get("global_volume_percent")
+            .and_then(serde_json::Value::as_u64),
+        Some(55)
+    );
+    assert_eq!(
+        settings
+            .get("individual_volume_enabled")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+    let volumes: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(directory.path().join("audio-volumes.json"))
+            .expect("saved volumes"),
+    )
+    .expect("volume JSON");
+    assert_eq!(
+        volumes.get("42").and_then(serde_json::Value::as_u64),
+        Some(10)
+    );
+    assert!(volumes.get("7").is_none());
+    assert_child_reaped(directory.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn playlist_cover_failure_retries_created_id_and_reset_keeps_auto_cover() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("isolated playlist cover fixture");
+    let server = directory.path().join("fixture-server");
+    std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fixture");
+    assert_probe(&run(
+        &[],
+        "offscreen",
+        directory.path(),
+        &server,
+        "playlist-covers",
+    ));
+    let requests = std::fs::read_to_string(directory.path().join("requests")).expect("requests");
+    assert_eq!(
+        requests
+            .lines()
+            .filter(|line| *line == "POST /api/playlists ")
+            .count(),
+        1
+    );
+    assert_eq!(
+        requests
+            .lines()
+            .filter(|line| line.starts_with("PUT /api/playlists/1/cover"))
+            .count(),
+        2
+    );
+    assert_eq!(
+        requests
+            .lines()
+            .filter(|line| *line == "DELETE /api/playlists/1/cover")
+            .count(),
+        1
+    );
+    assert_child_reaped(directory.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn playlist_editor_preserves_cached_covers_and_previews_automatic_cover_before_save() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("isolated playlist preview fixture");
+    let server = directory.path().join("fixture-server");
+    std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fixture");
+    assert_probe(&run(
+        &[],
+        "offscreen",
+        directory.path(),
+        &server,
+        "playlist-cover-preview",
+    ));
+    let requests = std::fs::read_to_string(directory.path().join("requests")).expect("requests");
+    assert_eq!(
+        requests
+            .lines()
+            .filter(|line| *line == "DELETE /api/playlists/1/cover")
+            .count(),
+        1,
+        "cancelled automatic cover preview never writes to the server"
+    );
+    assert_child_reaped(directory.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn warmed_navigation_fast_scrolling_and_cache_pressure_keep_displayed_artwork_ready() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("isolated flicker fixture");
+    let server = directory.path().join("fixture-server");
+    std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fixture");
+    let output = run(
+        &[],
+        "offscreen",
+        directory.path(),
+        &server,
+        "visual-flicker",
+    );
+    for marker in [
+        "Visual probe finished: 0 issues",
+        "flicker early artwork ready before duration",
+        "flicker stopped viewport ready",
+        "flicker stationary pressure settled without empty selected source",
+    ] {
+        assert!(output.contains(marker), "missing {marker}: {output}");
+    }
+    for error in [
+        "Binding loop",
+        "TypeError",
+        "ReferenceError",
+        "VISUAL ISSUE",
+    ] {
+        assert!(!output.contains(error), "{output}");
+    }
+    let requests = std::fs::read_to_string(directory.path().join("requests")).expect("requests");
+    for request in [
+        "/api/tracks?q=",
+        "/api/beatmaps/1/cover",
+        "/api/audio-sources/1/duration",
+        "/api/playlists/1/cover",
+    ] {
+        assert_eq!(
+            requests.lines().filter(|line| *line == request).count(),
+            1,
+            "warmed navigation and selected pin reuse {request}: {requests}"
+        );
+    }
+    assert!(
+        !requests.lines().any(|line| line.ends_with("/audio")),
+        "paused fixture must not start audio: {requests}"
+    );
+    let checkpoint = output
+        .lines()
+        .find_map(|line| {
+            line.split_once("flicker pressure checkpoint ")
+                .and_then(|(_, tail)| tail.split_whitespace().next())
+                .and_then(|timestamp| timestamp.parse::<u64>().ok())
+        })
+        .expect("pressure checkpoint timestamp");
+    let settled = output
+        .lines()
+        .find_map(|line| {
+            line.split_once("flicker stationary pressure settled without empty selected source ")
+                .and_then(|(_, timestamp)| timestamp.trim().parse::<u64>().ok())
+        })
+        .expect("pressure settlement timestamp");
+    assert!(settled.saturating_sub(checkpoint) >= 500, "{output}");
+    let events =
+        std::fs::read_to_string(directory.path().join("media-events")).expect("media events");
+    for event in events.lines() {
+        let mut fields = event.split_whitespace();
+        let timestamp = fields
+            .next()
+            .expect("event time")
+            .parse::<u64>()
+            .expect("numeric event time");
+        assert!(
+            timestamp < checkpoint || timestamp >= settled,
+            "stationary cache pressure refetches media: {event}\n{output}"
+        );
+    }
+    assert_child_reaped(directory.path());
 }

@@ -63,7 +63,7 @@ fn captured_client_timings() {
                     }),
                 );
                 let start = Instant::now();
-                controller.replace_tracks(tracks);
+                controller.replace_tracks(tracks, true);
                 let update = start.elapsed();
                 if sample != 0 {
                     results.push((
@@ -138,6 +138,8 @@ fn original_library_tracks(sets: &[BeatmapSet]) -> Vec<Track> {
             };
             Track {
                 audio_source_id: id,
+                last_played_at_ms: None,
+                volume_percent: None,
                 cover_beatmap_id: maps.iter().find(|(m, _)| m.has_cover).map(|(m, _)| m.id),
                 title,
                 artist,
@@ -196,7 +198,7 @@ async fn controller_http_timings() {
                 controller.library_query = query.into();
                 let start = Instant::now();
                 if compact {
-                    controller.load_library(delay);
+                    controller.load_library(delay, false);
                     let completion = controller.tasks.join_next().await.unwrap().unwrap();
                     controller.complete(completion);
                 } else {
@@ -213,6 +215,7 @@ async fn controller_http_timings() {
                     let tracks = original_library_tracks(&sets);
                     controller.complete(Completed::Library {
                         request: controller.library_request,
+                        invalidate_artwork: true,
                         result: Ok(tracks),
                     });
                 }

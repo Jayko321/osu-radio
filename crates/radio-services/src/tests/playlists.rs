@@ -1,6 +1,102 @@
 use super::*;
 use crate::{PlaybackCommand, PlaybackMode, PlaylistError};
 
+pub(super) async fn cover_contracts(database: &TestDatabase, other: &TestDatabase, url: &str) {
+    let playlist = database.playlists().create("Cover").await.unwrap();
+    assert_eq!(playlist.item_count, 0);
+    assert_eq!(playlist.custom_cover_revision, None);
+    let png = cover_png(512, 512);
+    let source = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(source.path(), &png).unwrap();
+    let saved = database
+        .playlists()
+        .set_cover(playlist.id, &std::fs::read(source.path()).unwrap())
+        .await
+        .unwrap();
+    source.close().unwrap();
+    assert_eq!(saved.custom_cover_revision, Some(1));
+    assert_eq!(
+        other.playlists().cover(playlist.id).await.unwrap(),
+        Some(png.clone())
+    );
+    let reopened = Services::connect(url).await.unwrap();
+    reopened.migrate().await.unwrap();
+    assert_eq!(
+        reopened.playlists().cover(playlist.id).await.unwrap(),
+        Some(png.clone())
+    );
+    assert_eq!(
+        reopened
+            .playlists()
+            .all()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|row| row.id == playlist.id),
+        Some(saved)
+    );
+    let queue = database.queue().get().await.unwrap();
+    for invalid in [
+        b"broken PNG".to_vec(),
+        png[..png.len() / 2].to_vec(),
+        cover_png(511, 512),
+        cover_png(513, 512),
+        vec![0; crate::MAX_PLAYLIST_COVER_BYTES + 1],
+    ] {
+        assert!(
+            database
+                .playlists()
+                .set_cover(playlist.id, &invalid)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            database.playlists().cover(playlist.id).await.unwrap(),
+            Some(png.clone())
+        );
+    }
+    assert_eq!(database.queue().get().await.unwrap(), queue);
+    database.playlists().clear_cover(playlist.id).await.unwrap();
+    database.playlists().clear_cover(playlist.id).await.unwrap();
+    assert_eq!(database.playlists().cover(playlist.id).await.unwrap(), None);
+    assert_eq!(
+        database
+            .playlists()
+            .rename(playlist.id, "Renamed cover")
+            .await
+            .unwrap()
+            .custom_cover_revision,
+        None
+    );
+    assert_eq!(
+        database
+            .playlists()
+            .set_cover(playlist.id, &png)
+            .await
+            .unwrap()
+            .custom_cover_revision,
+        Some(2)
+    );
+    database.playlists().delete(playlist.id).await.unwrap();
+    assert_eq!(database.playlists().cover(playlist.id).await.unwrap(), None);
+    assert!(
+        database
+            .playlists()
+            .set_cover(playlist.id, &png)
+            .await
+            .is_err()
+    );
+    assert!(database.playlists().clear_cover(playlist.id).await.is_err());
+}
+
+fn cover_png(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgb8(width, height)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    bytes.into_inner()
+}
+
 #[allow(clippy::too_many_lines)] // One scenario verifies persistence and playback across snapshot changes.
 pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url: &str) {
     let installation = register(database, "playlist").await;
@@ -64,6 +160,27 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
     let populated = first.unwrap();
     assert_eq!(second.unwrap(), populated);
     assert_eq!(populated.items.len(), 2);
+    let summary = database
+        .playlists()
+        .all()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|row| row.id == playlist.id)
+        .unwrap();
+    assert_eq!(summary.item_count, 2);
+    assert_eq!(
+        summary.cover_beatmap_id,
+        populated.items[0].cover_beatmap_id
+    );
+    assert_eq!(
+        database
+            .playlists()
+            .rename(playlist.id, "Evening")
+            .await
+            .unwrap(),
+        summary
+    );
     assert_eq!(
         populated
             .items
@@ -256,6 +373,16 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
         .unwrap()
         .unwrap();
     assert_eq!(unavailable.items.len(), 2);
+    let summary = database
+        .playlists()
+        .all()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|row| row.id == playlist.id)
+        .unwrap();
+    assert_eq!(summary.item_count, 2);
+    assert_eq!(summary.cover_beatmap_id, None);
     assert!(
         unavailable
             .items

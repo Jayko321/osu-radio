@@ -231,6 +231,12 @@ impl AppData {
             artwork_missing: missing,
         });
     }
+    fn set_tracks(&self, tracks: Vec<Track>) {
+        self.state.tracks.set(tracks);
+        self.state
+            .library_revision
+            .set(self.state.library_revision.get().wrapping_add(1));
+    }
     fn update(&mut self, cx: &EventContext, update: AppUpdate) {
         match update {
             AppUpdate::Playback(playback) => self.state.playback.set(playback),
@@ -254,15 +260,18 @@ impl AppData {
                 self.state.settings_retry.set(status.retry);
                 self.state.busy.set(status.busy);
             }
-            AppUpdate::TracksReplaced(tracks) => {
+            AppUpdate::TracksReplaced {
+                tracks,
+                invalidate_artwork,
+            } => {
                 self.generation = self.generation.wrapping_add(1);
-                assets::clear_covers();
-                self.artwork_changed();
-                self.state.tracks.set(tracks);
-                self.state
-                    .library_revision
-                    .set(self.state.library_revision.get().wrapping_add(1));
+                if invalidate_artwork {
+                    assets::clear_covers();
+                    self.artwork_changed();
+                }
+                self.set_tracks(tracks);
             }
+            AppUpdate::TracksReordered(tracks) => self.set_tracks(tracks),
             AppUpdate::TrackChanged(track) => {
                 let mut tracks = self.state.tracks.get();
                 if let Some(row) = tracks
@@ -284,7 +293,12 @@ impl AppData {
             }
             AppUpdate::FoldersReplaced(folders) => self.state.folders.set(folders),
             AppUpdate::FolderSelected(id) => self.state.selected_folder.set(id),
-            AppUpdate::Playlists(_)
+            AppUpdate::Queue(_)
+            | AppUpdate::AudioSettings(_)
+            | AppUpdate::Playlists(_)
+            | AppUpdate::PlaylistCover { .. }
+            | AppUpdate::PlaylistArtwork { .. }
+            | AppUpdate::TrackSort(_)
             | AppUpdate::FolderSelection(_)
             | AppUpdate::FolderSelectionPickerRequested(_) => {}
             AppUpdate::FolderPickerRequested => {

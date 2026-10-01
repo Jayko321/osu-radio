@@ -2,6 +2,144 @@ use super::*;
 use crate::model::{PlaybackMode, QueueState};
 use sea_orm_migration::MigratorTrait;
 
+#[allow(clippy::too_many_lines)] // One populated upgrade checks metadata, cover versions and retained queue.
+pub(super) async fn cover_migration_contracts(database: &Database, url: &str) {
+    crate::migrations::Migrator::up(&database.connection, Some(8))
+        .await
+        .unwrap();
+    let installation = database
+        .osu_installations()
+        .register(&marker("cover-upgrade"), None)
+        .await
+        .unwrap()
+        .into_installation();
+    let imported = snapshot("Saved cover library", "/cover-upgrade/audio");
+    let set = database
+        .beatmap_sets()
+        .insert(installation.id, &imported[0])
+        .await
+        .unwrap();
+    let audio = database
+        .audio_sources()
+        .get_or_insert(&SourceType::Local("/cover-upgrade/audio".into()))
+        .await
+        .unwrap();
+    let map = database
+        .beatmaps()
+        .insert(
+            set.id,
+            &imported[0].beatmaps[0],
+            None,
+            Some(audio.id),
+            Some("/cover-upgrade/background".into()),
+        )
+        .await
+        .unwrap();
+    sql(
+        database,
+        "INSERT INTO playlists (id, name) VALUES (501, 'Existing'), (502, 'Empty')",
+    )
+    .await;
+    sql(database, "INSERT INTO playlist_items (id, playlist_id, source_kind, beatmap_hash, title) VALUES (501, 501, 'lazer', 'missing-first', 'Unavailable first'), (502, 501, 'lazer', 'beatmap-Easy', 'Available second')").await;
+    sql(database, "UPDATE playback_queue SET audio_source_ids = '[11]', playlist_item_ids = '[501]', current_index = 0, mode = 'paused', revision = 7, playback_token = 9").await;
+    let queue = database.queue().get().await.unwrap();
+    let other = Database::connect(url).await.unwrap();
+    let (first, second) = tokio::join!(database.migrate(), other.migrate());
+    first.unwrap();
+    second.unwrap();
+    assert_eq!(
+        database.beatmaps().get(map.id).await.unwrap(),
+        Some(map.clone())
+    );
+    assert_eq!(database.queue().get().await.unwrap(), queue);
+    let summaries = database.playlists().all().await.unwrap();
+    assert_eq!(summaries[0].item_count, 2);
+    assert_eq!(
+        summaries[0].cover_beatmap_id, None,
+        "do not skip the first unavailable item"
+    );
+    assert_eq!(summaries[0].custom_cover_revision, None);
+    assert_eq!(summaries[1].item_count, 0);
+    assert_eq!(summaries[1].cover_beatmap_id, None);
+    assert_eq!(
+        database
+            .playlists()
+            .get(501)
+            .await
+            .unwrap()
+            .unwrap()
+            .items
+            .len(),
+        2
+    );
+    database.playlists().remove_item(501, 501).await.unwrap();
+    let automatic = database.playlists().summary(501).await.unwrap().unwrap();
+    assert_eq!(automatic.item_count, 1);
+    assert_eq!(automatic.cover_beatmap_id, Some(map.id));
+    assert_eq!(database.queue().get().await.unwrap(), queue);
+    assert!(
+        database
+            .playlists()
+            .set_cover(501, b"persisted PNG bytes")
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        other.playlists().cover(501).await.unwrap().as_deref(),
+        Some(b"persisted PNG bytes".as_slice())
+    );
+    assert_eq!(
+        other
+            .playlists()
+            .summary(501)
+            .await
+            .unwrap()
+            .unwrap()
+            .custom_cover_revision,
+        Some(1)
+    );
+    assert!(database.playlists().clear_cover(501).await.unwrap());
+    assert_eq!(
+        database
+            .playlists()
+            .summary(501)
+            .await
+            .unwrap()
+            .unwrap()
+            .custom_cover_revision,
+        None
+    );
+    assert_eq!(database.playlists().cover(501).await.unwrap(), None);
+    assert!(
+        database
+            .playlists()
+            .set_cover(501, b"replacement")
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        database
+            .playlists()
+            .summary(501)
+            .await
+            .unwrap()
+            .unwrap()
+            .custom_cover_revision,
+        Some(2)
+    );
+    assert!(
+        !database
+            .playlists()
+            .set_cover(i32::MAX, b"absent")
+            .await
+            .unwrap()
+    );
+    assert!(!database.playlists().clear_cover(i32::MAX).await.unwrap());
+    database.reset().await.unwrap();
+    assert!(database.playlists().all().await.unwrap().is_empty());
+    drop_application_tables(database).await;
+}
+
 #[allow(clippy::too_many_lines)] // Verify the additive upgrade, old queue and cascade/reset in one database.
 pub(super) async fn migration_contracts(database: &Database, url: &str) {
     crate::migrations::Migrator::up(&database.connection, Some(5))

@@ -2,7 +2,7 @@ use crate::model::BeatmapSet;
 pub use crate::model::BeatmapSetWithAudio;
 use anyhow::{Context, Result};
 use radio_core::import_types::ImportedBeatmapSet;
-use radio_db::{Database, repositories::BeatmapSetRepository};
+use radio_db::{Database, Transaction, repositories::BeatmapSetRepository};
 use std::collections::{HashMap, HashSet};
 
 pub(crate) mod tracks;
@@ -26,6 +26,13 @@ impl BeatmapSetService<'_> {
             .context("Failed to load beatmap sets with their audio sources")
     }
     pub async fn search_with_audio_sources(&self, query: &str) -> Result<Vec<BeatmapSetWithAudio>> {
+        let transaction = self.database.begin_read().await?;
+        let sets = Self::search_in(&transaction, query).await?;
+        transaction.commit().await?;
+        Ok(sets)
+    }
+
+    async fn search_in(transaction: &Transaction, query: &str) -> Result<Vec<BeatmapSetWithAudio>> {
         let mut seen = HashSet::new();
         let words: Vec<_> = query
             .split_whitespace()
@@ -33,9 +40,8 @@ impl BeatmapSetService<'_> {
             .filter(|word| seen.insert(word.clone()))
             .collect();
         if words.is_empty() {
-            return self.all_with_audio_sources().await;
+            return transaction.beatmap_sets().all_with_audio_sources().await;
         }
-        let transaction = self.database.begin_read().await?;
         let metadata = transaction.beatmap_metadata().search_metadata().await?;
         let difficulties = transaction.beatmap_sets().search_difficulties().await?;
         let mut tags = Vec::with_capacity(words.len());
@@ -47,14 +53,16 @@ impl BeatmapSetService<'_> {
             .beatmap_sets()
             .for_audio_sources(&ids, &multiple_audio_sets)
             .await?;
-        transaction.commit().await?;
         Ok(sets)
     }
 
     pub async fn search_tracks(&self, query: &str) -> Result<Vec<LibraryTrack>> {
-        Ok(tracks::from_sets(
-            self.search_with_audio_sources(query).await?,
-        ))
+        let transaction = self.database.begin_read().await?;
+        let mut tracks = tracks::from_sets(Self::search_in(&transaction, query).await?);
+        crate::ListeningHistoryService::fill_tracks(&transaction, &mut tracks).await?;
+        crate::AudioSettingsService::fill_tracks(&transaction, &mut tracks).await?;
+        transaction.commit().await?;
+        Ok(tracks)
     }
 
     pub(crate) async fn add(

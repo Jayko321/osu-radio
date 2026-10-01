@@ -37,6 +37,7 @@ impl From<radio_services::PlaybackMode> for PlaybackMode {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
 pub(crate) struct QueueResponse {
+    upcoming_tracks: Vec<TrackResponse>,
     audio_source_ids: Vec<i32>,
     playlist_item_ids: Vec<Option<i32>>,
     current_index: Option<usize>,
@@ -48,6 +49,7 @@ pub(crate) struct QueueResponse {
 impl From<QueueState> for QueueResponse {
     fn from(queue: QueueState) -> Self {
         Self {
+            upcoming_tracks: Vec::new(),
             audio_source_ids: queue.audio_source_ids,
             playlist_item_ids: queue.playlist_item_ids,
             current_index: queue.current_index,
@@ -61,6 +63,7 @@ impl From<QueueState> for QueueResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
 pub(crate) struct PlaybackResponse {
+    volume_percent: Option<u8>,
     current_audio_source_id: Option<i32>,
     current_playlist_item_id: Option<i32>,
     track: Option<TrackResponse>,
@@ -87,6 +90,7 @@ impl PlaybackResponse {
             None
         };
         Ok(Self {
+            volume_percent: assignment.volume_percent,
             current_audio_source_id: assignment.current_audio_source_id,
             current_playlist_item_id: assignment.current_playlist_item_id,
             track: assignment.track.map(TrackResponse::from),
@@ -116,6 +120,7 @@ pub(crate) enum CommandRequest {
     Stop,
     Next,
     Previous,
+    Started { playback_token: u64 },
     Finished { playback_token: u64 },
     Failed { playback_token: u64 },
 }
@@ -133,6 +138,7 @@ impl From<CommandRequest> for PlaybackCommand {
             CommandRequest::Stop => Self::Stop,
             CommandRequest::Next => Self::Next,
             CommandRequest::Previous => Self::Previous,
+            CommandRequest::Started { playback_token } => Self::Started { playback_token },
             CommandRequest::Finished { playback_token } => Self::Finished { playback_token },
             CommandRequest::Failed { playback_token } => Self::Failed { playback_token },
         }
@@ -162,7 +168,10 @@ pub(super) async fn committed_response(
 pub(crate) async fn get_queue(
     State(state): State<AppState>,
 ) -> Result<Json<QueueResponse>, ApiError> {
-    Ok(Json(state.services().queue().get().await?.into()))
+    let (queue, tracks) = state.services().queue().upcoming().await?;
+    let mut response = QueueResponse::from(queue);
+    response.upcoming_tracks = tracks.into_iter().map(TrackResponse::from).collect();
+    Ok(Json(response))
 }
 
 #[cfg_attr(feature = "docs", utoipa::path(post, path = "/api/queue/items", tag = "playback",

@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set,
-    Value, sea_query::OnConflict,
+    ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set, Value,
+    sea_query::{Expr, ExprTrait, OnConflict},
 };
 
 use crate::{
@@ -17,17 +17,71 @@ pub struct PlaylistRepository<'a> {
 
 impl PlaylistRepository<'_> {
     pub async fn all(&self) -> Result<Vec<PlaylistSummary>> {
-        Ok(playlist::Entity::find()
-            .order_by_asc(playlist::Column::Id)
-            .all(&self.connection)
+        self.summaries(None).await
+    }
+
+    pub async fn summary(&self, id: i32) -> Result<Option<PlaylistSummary>> {
+        Ok(self.summaries(Some(id)).await?.into_iter().next())
+    }
+
+    // One statement covers every playlist; neither item labels nor PNG bytes are loaded.
+    async fn summaries(&self, id: Option<i32>) -> Result<Vec<PlaylistSummary>> {
+        let filter = if id.is_some() {
+            #[cfg(feature = "postgres")]
+            {
+                "WHERE p.id = $1"
+            }
+            #[cfg(feature = "sqlite")]
+            {
+                "WHERE p.id = ?"
+            }
+        } else {
+            ""
+        };
+        let statement = sea_orm::Statement::from_sql_and_values(
+            self.connection.get_database_backend(),
+            format!(
+                "SELECT p.id, p.name, \
+                (SELECT COUNT(*) FROM playlist_items item WHERE item.playlist_id = p.id) AS item_count, \
+                (SELECT MIN(c.id) FROM beatmaps c WHERE c.audio_source_id = b.audio_source_id \
+                AND c.background_path IS NOT NULL) AS cover_beatmap_id, \
+                CASE WHEN p.custom_cover_png IS NULL THEN NULL ELSE p.custom_cover_revision END AS custom_cover_revision \
+                FROM playlists p \
+                LEFT JOIN playlist_items first_item ON first_item.id = \
+                    (SELECT MIN(item.id) FROM playlist_items item WHERE item.playlist_id = p.id) \
+                LEFT JOIN beatmaps b ON b.id = \
+                    (SELECT MIN(candidate.id) FROM beatmaps candidate \
+                    JOIN beatmap_sets s ON s.id = candidate.beatmap_set_id \
+                    JOIN osu_installations i ON i.id = s.installation_id \
+                    JOIN audio_sources a ON a.id = candidate.audio_source_id \
+                    WHERE candidate.hash = first_item.beatmap_hash AND i.kind = first_item.source_kind \
+                    AND a.kind IN ('local', 'copied')) \
+                {filter} ORDER BY p.id"
+            ),
+            id.into_iter().map(Value::from),
+        );
+        self.connection
+            .query_all_raw(statement)
             .await?
             .into_iter()
-            .map(summary)
-            .collect())
+            .map(|row| {
+                let count: i64 = row.try_get("", "item_count")?;
+                Ok(PlaylistSummary {
+                    id: row.try_get("", "id")?,
+                    name: row.try_get("", "name")?,
+                    item_count: u64::try_from(count)?,
+                    cover_beatmap_id: row.try_get("", "cover_beatmap_id")?,
+                    custom_cover_revision: row.try_get("", "custom_cover_revision")?,
+                })
+            })
+            .collect()
     }
 
     pub async fn get(&self, id: i32) -> Result<Option<Playlist>> {
         let Some(row) = playlist::Entity::find_by_id(id)
+            .select_only()
+            .column(playlist::Column::Name)
+            .into_tuple::<String>()
             .one(&self.connection)
             .await?
         else {
@@ -40,7 +94,7 @@ impl PlaylistRepository<'_> {
             .await?;
         Ok(Some(Playlist {
             id,
-            name: row.name,
+            name: row,
             items: self.resolve(rows).await?,
         }))
     }
@@ -75,6 +129,8 @@ impl PlaylistRepository<'_> {
             .map(|item| {
                 let map = resolved.get(&(item.source_kind.clone(), item.beatmap_hash.clone()));
                 PlaylistItem {
+                    last_played_at_ms: None,
+                    volume_percent: None,
                     id: item.id,
                     playlist_id: item.playlist_id,
                     source_kind: item.source_kind,
@@ -93,14 +149,56 @@ impl PlaylistRepository<'_> {
     }
 
     pub async fn create(&self, name: &str) -> Result<PlaylistSummary> {
-        Ok(summary(
-            playlist::ActiveModel {
-                name: Set(name.to_owned()),
-                ..Default::default()
-            }
-            .insert(&self.connection)
-            .await?,
-        ))
+        let row = playlist::Entity::insert(playlist::ActiveModel {
+            name: Set(name.to_owned()),
+            ..Default::default()
+        })
+        .exec(&self.connection)
+        .await?;
+        Ok(PlaylistSummary {
+            id: row.last_insert_id,
+            name: name.to_owned(),
+            item_count: 0,
+            cover_beatmap_id: None,
+            custom_cover_revision: None,
+        })
+    }
+
+    pub async fn cover(&self, id: i32) -> Result<Option<Vec<u8>>> {
+        Ok(playlist::Entity::find_by_id(id)
+            .select_only()
+            .column(playlist::Column::CustomCoverPng)
+            .into_tuple::<Option<Vec<u8>>>()
+            .one(&self.connection)
+            .await?
+            .flatten())
+    }
+
+    pub async fn set_cover(&self, id: i32, png: &[u8]) -> Result<bool> {
+        Ok(playlist::Entity::update_many()
+            .col_expr(playlist::Column::CustomCoverPng, Expr::value(png.to_vec()))
+            .col_expr(
+                playlist::Column::CustomCoverRevision,
+                Expr::col(playlist::Column::CustomCoverRevision).add(1),
+            )
+            .filter(playlist::Column::Id.eq(id))
+            .exec(&self.connection)
+            .await?
+            .rows_affected
+            > 0)
+    }
+
+    pub async fn clear_cover(&self, id: i32) -> Result<bool> {
+        Ok(playlist::Entity::update_many()
+            .col_expr(
+                playlist::Column::CustomCoverPng,
+                Expr::value(Option::<Vec<u8>>::None),
+            )
+            .filter(playlist::Column::Id.eq(id))
+            .exec(&self.connection)
+            .await?
+            .rows_affected
+            > 0)
     }
 
     pub async fn rename(&self, id: i32, name: &str) -> Result<bool> {
@@ -214,12 +312,5 @@ impl PlaylistRepository<'_> {
             }
         }
         Ok(rows)
-    }
-}
-
-fn summary(row: playlist::Model) -> PlaylistSummary {
-    PlaylistSummary {
-        id: row.id,
-        name: row.name,
     }
 }

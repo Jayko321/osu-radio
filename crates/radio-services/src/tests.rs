@@ -73,6 +73,9 @@ async fn contracts(url: &str) {
     source_files_remain_untouched(&database).await;
     queue::contracts(&database, &other_pool, url).await;
     playlists::contracts(&database, &other_pool, url).await;
+    playlists::cover_contracts(&database, &other_pool, url).await;
+    listening_history::contracts(&database, &other_pool, url).await;
+    audio_settings::contracts(&database, &other_pool, url).await;
 }
 
 async fn assert_counts(database: &TestDatabase, expected: [i64; 4]) {
@@ -890,5 +893,8 @@ mod tags;
 
 mod search;
 
+mod listening_history;
 mod playlists;
 mod queue;
+
+mod audio_settings;

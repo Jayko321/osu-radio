@@ -12,7 +12,7 @@ pub use beatmap_set::{
     BeatmapDetails, BeatmapSet, BeatmapSetWithAudio, SearchDifficulty, SearchMetadata,
 };
 pub use osu_installation::{OsuInstallation, OsuInstallationChanges};
-pub use user_data::{USER_DATA_ID, UserData};
+pub use user_data::{AudioSettings, USER_DATA_ID, UserData};
 mod tag;
 pub use tag::{SetTag, Tag};
 

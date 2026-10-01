@@ -8,9 +8,18 @@ The standalone component gallery needs no server or working-directory assets.
 - `fonts/Poppins-{Regular,Medium,SemiBold,Bold}.ttf`: original static fonts from
   [Google Fonts / Poppins](https://github.com/google/fonts/tree/main/ofl/poppins).
   See [Poppins-OFL.txt](fonts/Poppins-OFL.txt) for the SIL Open Font License.
-- `fonts/Nunito-Variable.ttf`: existing fallback font; see [OFL.txt](fonts/OFL.txt).
+- `fonts/Nunito-Variable.ttf`: Settings font and existing fallback;
+  see [OFL.txt](fonts/OFL.txt).
 - `icons/pause.svg`: app-authored pause symbol, shared with the Vizia frontend.
-- Other `icons/*.svg`: original, unmodified 24px SVGs from
+- `icons/{pencil-line,search-line,volume-up-fill,settings-4-line,arrow-down-s-line}.svg`:
+  original, unmodified SVGs with a 24px viewBox from
+  [RemixIcon v4.2.0](https://github.com/Remix-Design/RemixIcon/tree/v4.2.0/icons),
+  matching the icon names in the
+  [Settings reference](https://www.figma.com/design/VQULSEzRKI4ki7uWGJEezk/osu-radio--Copy-?node-id=51-799).
+  See [REMIX-LICENSE](icons/REMIX-LICENSE) for the Apache 2.0 license.
+  Figma export was unavailable due to its Starter tool limit; these are upstream
+  originals rather than verified exports of the Figma instances.
+- Remaining `icons/*.svg`: original, unmodified 24px SVGs from
   [Lucide](https://github.com/lucide-icons/lucide/tree/main/icons).
   [LUCIDE-LICENSE](icons/LUCIDE-LICENSE) includes the Lucide and Feather notices.
   QML applies tint at rendering time; the source SVG bytes are unchanged.

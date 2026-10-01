@@ -4,6 +4,8 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibraryTrack {
     pub audio_source_id: i32,
+    pub last_played_at_ms: Option<i64>,
+    pub volume_percent: Option<u8>,
     pub title: Option<String>,
     pub title_unicode: Option<String>,
     pub artist: Option<String>,
@@ -44,6 +46,8 @@ pub(crate) fn from_sets(sets: Vec<BeatmapSetWithAudio>) -> Vec<LibraryTrack> {
             let representative = maps.first().map(|(map, _, _)| map);
             LibraryTrack {
                 audio_source_id: id,
+                last_played_at_ms: None,
+                volume_percent: None,
                 title: representative.and_then(|map| map.title.clone()),
                 title_unicode: representative.and_then(|map| map.title_unicode.clone()),
                 artist: representative.and_then(|map| map.artist.clone()),

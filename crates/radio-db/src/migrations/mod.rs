@@ -8,6 +8,9 @@ mod m20260914_000003_native_paths;
 mod m20260919_000004_tags;
 mod m20261001_000005_playback_queue;
 mod m20261001_000006_playlists;
+mod m20261001_000007_listening_history;
+mod m20261001_000008_audio_settings;
+mod m20261001_000009_playlist_covers;
 
 pub(crate) struct Migrator;
 
@@ -21,12 +24,17 @@ impl MigratorTrait for Migrator {
             Box::new(m20260919_000004_tags::Migration),
             Box::new(m20261001_000005_playback_queue::Migration),
             Box::new(m20261001_000006_playlists::Migration),
+            Box::new(m20261001_000007_listening_history::Migration),
+            Box::new(m20261001_000008_audio_settings::Migration),
+            Box::new(m20261001_000009_playlist_covers::Migration),
         ]
     }
 }
 
 // Child-first order is also valid for the legacy Diesel schema.
 const APPLICATION_TABLES: &[&str] = &[
+    "audio_volume",
+    "listening_history",
     "playlist_items",
     "playlists",
     "playback_queue",

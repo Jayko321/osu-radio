@@ -8,6 +8,8 @@ Basic.Switch {
     padding: 0
     spacing: 12
     hoverEnabled: true
+    font.family: Theme.fontFamily
+    font.pixelSize: 14
     opacity: !enabled ? 0.4 : down ? 0.6 : hovered ? 0.8 : 1
     indicator: Rectangle {
         x: 0
@@ -28,8 +30,7 @@ Basic.Switch {
     contentItem: Text {
         leftPadding: control.text ? 49 : 0
         text: control.text
-        font.family: Theme.fontFamily
-        font.pixelSize: 14
+        font: control.font
         color: Theme.text
         verticalAlignment: Text.AlignVCenter
     }

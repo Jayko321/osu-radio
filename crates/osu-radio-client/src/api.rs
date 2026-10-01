@@ -108,6 +108,35 @@ impl ApiClient {
     pub async fn queue(&self) -> Result<crate::models::QueueState, ApiError> {
         self.get("/api/queue").await
     }
+    pub async fn audio_settings(&self) -> Result<crate::models::AudioSettings, ApiError> {
+        self.get("/api/user-data/audio-settings").await
+    }
+    pub async fn update_audio_settings(
+        &self,
+        settings: &crate::models::AudioSettings,
+    ) -> Result<crate::models::AudioSettings, ApiError> {
+        let path = "/api/user-data/audio-settings";
+        self.json_response(path, self.http.patch(self.url(path)).json(settings))
+            .await
+    }
+    pub async fn set_audio_volume(&self, id: i32, percent: Option<u8>) -> Result<(), ApiError> {
+        let path = format!("/api/audio-sources/{id}/volume");
+        let Some(percent) = percent else {
+            return self.delete(&path).await;
+        };
+        let response = self
+            .http
+            .put(self.url(&path))
+            .json(&serde_json::json!({"volume_percent": percent}))
+            .send()
+            .await
+            .map_err(ApiError::Transport)?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(Self::failure(&path, response).await)
+        }
+    }
     pub async fn playback(&self) -> Result<crate::models::PlaybackAssignment, ApiError> {
         self.get("/api/playback").await
     }
@@ -221,6 +250,57 @@ impl ApiClient {
     }
     pub async fn delete_playlist(&self, id: i32) -> Result<(), ApiError> {
         self.delete(&format!("/api/playlists/{id}")).await
+    }
+    pub async fn playlist_cover(&self, id: i32) -> Result<Option<Vec<u8>>, ApiError> {
+        let path = format!("/api/playlists/{id}/cover");
+        let mut response = self
+            .http
+            .get(self.url(&path))
+            .send()
+            .await
+            .map_err(ApiError::Transport)?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(Self::failure(&path, response).await);
+        }
+        let limit = 2 * 1024 * 1024;
+        if response
+            .content_length()
+            .is_some_and(|size| size > 2 * 1024 * 1024)
+        {
+            return Err(ApiError::Protocol("Playlist cover exceeds 2 MiB.".into()));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(ApiError::Transport)? {
+            if bytes.len().saturating_add(chunk.len()) > limit {
+                return Err(ApiError::Protocol("Playlist cover exceeds 2 MiB.".into()));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(Some(bytes))
+    }
+    pub async fn set_playlist_cover(
+        &self,
+        id: i32,
+        png: Vec<u8>,
+    ) -> Result<crate::models::PlaylistSummary, ApiError> {
+        if png.len() > 2 * 1024 * 1024 {
+            return Err(ApiError::Protocol("Playlist cover exceeds 2 MiB.".into()));
+        }
+        let path = format!("/api/playlists/{id}/cover");
+        self.json_response(
+            &path,
+            self.http
+                .put(self.url(&path))
+                .header(reqwest::header::CONTENT_TYPE, "image/png")
+                .body(png),
+        )
+        .await
+    }
+    pub async fn reset_playlist_cover(&self, id: i32) -> Result<(), ApiError> {
+        self.delete(&format!("/api/playlists/{id}/cover")).await
     }
     pub async fn add_playlist_items(
         &self,
@@ -498,6 +578,10 @@ mod folder_tests;
 #[cfg(test)]
 #[path = "api/playback_tests.rs"]
 mod playback_tests;
+
+#[cfg(test)]
+#[path = "api/playlist_tests.rs"]
+mod playlist_tests;
 
 #[derive(Debug, serde::Deserialize)]
 struct ErrorBody {

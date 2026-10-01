@@ -50,6 +50,9 @@ async fn repository_contracts(url: &str) {
     tag_migration::contracts(&database, url).await;
     queue::migration_contracts(&database, url).await;
     playlists::migration_contracts(&database, url).await;
+    listening_history::migration_contracts(&database, url).await;
+    audio_settings::migration_contracts(&database, url).await;
+    playlists::cover_migration_contracts(&database, url).await;
     // A fresh database is expected: no configured application database is consulted.
     sql(
         &database,
@@ -344,6 +347,8 @@ async fn background_migration_preserves_existing_rows() {
 
 async fn drop_application_tables(database: &Database) {
     for table in [
+        "audio_volume",
+        "listening_history",
         "playlist_items",
         "playlists",
         "playback_queue",
@@ -380,7 +385,7 @@ async fn concurrent_schema_changes(database: &Database, url: &str) {
                 .await
                 .unwrap()
                 .len(),
-            6
+            9
         );
         let (reset, migrate) = tokio::join!(database.reset(), other.migrate());
         reset.unwrap();
@@ -647,5 +652,8 @@ async fn tag_repository_contracts(database: &Database) {
     assert!(repository.all().await.unwrap().is_empty());
 }
 
+mod listening_history;
 mod playlists;
 mod queue;
+
+mod audio_settings;

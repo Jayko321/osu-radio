@@ -38,6 +38,31 @@ multiplicity), plus title, artist, subtitle and optional `Duration`, with no too
 refresh by audio ID, falling back to the first remaining row. Tests live in
 [track.rs](../../crates/osu-radio-client/src/view_models/track.rs).
 
+## Track sorting and listening dates
+
+The shared [sorting workflow](../../crates/osu-radio-client/src/controller/sorting.rs)
+defaults to `TrackSort::TitleAsc`; `SetTrackSort` changes
+the mode for the current session, including search results, refreshes and open
+playlists. `ArtistAsc` compares artist then title; `RecentlyPlayed` compares
+`last_played_at_ms` descending with unheard rows last, then title and artist.
+Alphabetical keys use the displayed fallback strings and Unicode `to_lowercase()`,
+with audio IDs (library) or item IDs (playlist) as the final tie-breaker.
+This is deterministic string ordering, without locale collation.
+
+Playlist items and presentation rows are reordered together. Display sorting
+does not write playlist order or alter the server's queue snapshot. The dedicated
+`TracksReordered` update preserves selection, duration and artwork caches, media
+generation and pending jobs. Qt's existing `AppMenu` selects the mode through its
+typed adapter; Vizia accepts the shared events without adding sort controls.
+
+Only a successful engine start sends the token-bound `started` callback through
+the existing retry lane. Loading, decoding or device failure records no listening
+date; pause/resume of an already started launch records no new date. Updated
+assignment dates are merged into every known row sharing that audio ID and
+immediately reorder recent results. Late list responses retain newer known dates.
+The [database history contract](database.md#listening-history) defines retention
+across removal, reimport and restart.
+
 ## Local audio playback
 
 [`osu-radio-player`](../../crates/osu-radio-player/src/lib.rs) wraps Rodio 0.22.2
@@ -87,9 +112,27 @@ Queue transitions select the current track and carry its title, cover and durati
 even outside search results. Stop preserves an independently selected row. The
 current-track metadata is kept separately from the visible library. Qt's existing
 Next/Previous buttons use server availability and preserve pause; Previous on the
-first item restarts it. Seek and volume remain local; seeks also verify the
-launch token so a delayed same-ID seek cannot affect a duplicate queue item.
+first item restarts it. Seeking remains local and checks the launch token so a
+delayed same-ID seek cannot affect a duplicate queue item. Volume preferences
+are persisted through the API and applied by the local worker.
 Position updates arrive every 100 ms while playing and state changes immediately.
+Qt's title-bar layers button, immediately before the window controls, opens
+[`QueuePanel.qml`](../../apps/osu-radio-qt/qml/components/QueuePanel.qml) over the
+player with a dark gradient and rounded artwork cards showing title, artist and
+duration. The scrollable list contains the pending playable queue, retaining
+order and duplicates. Cards are read-only; opening the panel does not select or
+start a track. Close, Escape and outside click dismiss it and restore focus.
+The shared controller loads `/api/queue` only while open, refreshes on committed
+playback revisions and discards stale/closed-panel replies. Queue metadata and
+bounded artwork/duration requests remain independent of Songs search. Loading,
+empty and retryable error states are explicit; Qt owns popup presentation and
+decoded artwork. Probed durations retain their values as entries leave and re-enter
+the pending list, including a queue rewind outside search. Queue media updates
+preserve existing QML delegates and their displayed images when the row count
+is unchanged; duplicate audio entries share cached URLs. The existing Qt probe
+covers these interactions offscreen.
+Qt's [progress slider](../../apps/osu-radio-qt/qml/Songs.qml) fills the elapsed
+portion with `Theme.accent`, following its position during playback and seeking.
 Shutdown cancels the event stream and downloads, joins the worker, releases its
 files, then ends the backend session.
 
@@ -97,47 +140,109 @@ Coverage lives in [worker tests](../../crates/osu-radio-client/src/playback.rs),
 [controller queue tests](../../crates/osu-radio-client/src/controller/queue/tests.rs),
 [stream tests](../../crates/osu-radio-client/src/api/playback_tests.rs), and the
 [Qt probe](../../apps/osu-radio-qt/tests/AdapterProbe.qml). Galleries remain offline.
-Shuffle, repeat, output-device selection and persisted volume remain deferred.
+Shuffle, repeat and output-device selection remain deferred.
 Physical output, desktop slider interaction and Windows require separate manual
 checks.
+
+## Individual track volume
+
+The shared [volume workflow](../../crates/osu-radio-client/src/controller/volume.rs)
+loads audio settings before sending playback commands or assignments to the audio
+worker. Loading failures expose retry and block playback. Preferences are separate
+from engine snapshots; worker notifications never overwrite the selected slider.
+Every assignment carries its calculated volume before any load/play operation,
+including queue transitions, cached restarts and resumed playback.
+
+Qt Settings groups audio preferences, status and Retry under **Audio**. It uses
+the existing `AppSwitch` for **Individual track volume**
+and shows **Global volume** when enabled. The player popup edits the selected
+audio's absolute percentage, or the global percentage while disabled. Tracks
+without an override inherit global volume. Global 20%, track 10%, then global
+40% leaves that track at 10%. **Use global volume** removes the override. Disabling
+uses global volume for every track and retains overrides for re-enabling.
+Selecting B while A plays edits B without changing A's volume. Shared audio in
+different playlist rows has one setting. Unavailable/no selection disables the
+individual slider; selection/mode changes close the popup and end editing.
+
+Edits apply immediately. One serialized save lane coalesces each target's fast
+changes for 200 ms; selection changes finish pending editing. Responses only
+acknowledge saves, so delayed reads/responses cannot undo local edits. Save errors
+expose retry in Settings and the popup. Normal shutdown awaits pending writes
+before terminating the backend; a failed final write is reported without an
+unbounded retry loop. All persistence stays in the application's database.
+Vizia receives shared-type compatibility only; Qt remains the active GUI.
+
+[Client checks](../../crates/osu-radio-client/src/controller/volume/tests.rs),
+[worker checks](../../crates/osu-radio-client/src/playback.rs) and the
+[Qt probe](../../apps/osu-radio-qt/tests/AdapterProbe.qml) cover absolute values,
+selection/current independence, reset, mode retention, 0/100 bounds, loading/save
+errors, debounce, stale responses, first-play volume and shutdown flush. Manual
+slider interaction and physical output on Linux/Windows remain separate checks.
 
 ## User playlists
 
 The shared [`playlist controller`](../../crates/osu-radio-client/src/controller/playlists.rs)
-owns playlist HTTP requests, modal state, errors, selected item IDs and independent
-list/detail request epochs. Qt adapts this state; it does not access persistence.
+owns navigation, independent playlist query, HTTP requests, inline editor drafts,
+selected item IDs and request epochs. Songs always displays the library. The
+Playlists tab beside Songs restores its last list/detail and selected difficulty
+for this session; the back arrow returns to the list. Settings is the third
+navigation tab after Songs and Playlists.
+The player stays on the right with the existing window and sidebar dimensions.
+
+[`PlaylistPane.qml`](../../apps/osu-radio-qt/qml/components/PlaylistPane.qml) shares
+its list, editor and track cards with the offline gallery. List cards show square
+artwork, names and counts including unavailable entries. Their rounded dark menu
+contains **Add to queue**, **Edit**, **Delete**, in that order, with trailing SVG
+icons and red Delete text. Add to queue reads the saved insertion order, skips
+unavailable entries and appends audio IDs through the existing serialized queue
+lane, preserving duplicate difficulties. It retains active playback or pause;
+an empty/exhausted queue follows the existing first-append launch behavior.
+An empty or wholly unavailable playlist adds nothing. These additions use the
+ordinary queue API and carry no playlist-item identity. The offline gallery
+dispatches the same action without a server or audio device.
+`+` opens the inline new-playlist card; the detail pencil
+opens the same name/cover editor. Success closes it; failure retains the draft.
+[`PlaylistEditor.qml`](../../apps/osu-radio-qt/qml/components/PlaylistEditor.qml)
+uses a full-width Create/Save button. The editor requests its saved cover when
+opened; detail navigation preserves the decoded-image cache.
+If creation succeeded before a cover upload failed, retry updates the saved ID
+instead of creating another playlist. Playlist search uses the shared filtered
+projection; the add dialog keeps the complete list of targets.
+
+[`PlaylistTrackCard.qml`](../../apps/osu-radio-qt/qml/components/PlaylistTrackCard.qml)
+shows each concrete difficulty separately with background artwork and a white
+selected border with blue glow. Click selects only; existing Play launches the
+selected item. Unavailable entries stay selectable/removable with Play disabled.
+Right click, Menu or Shift+F10 opens removal. Display sorting retains selected
+item identity without changing insertion order or the queue snapshot. Pause,
+resume and seeking match `current_playlist_item_id`, including shared audio.
+
 [`PlaylistsModal.qml`](../../apps/osu-radio-qt/qml/components/PlaylistsModal.qml)
-uses the existing `AppModal` for creation, renaming, deletion and selecting a
-playlist. The add dialog offers checkboxes for the selected song's concrete
-difficulties; if search results omit that song, the client reloads its complete
-group without changing the library query. Late results from another opening are
-ignored. A failed mutation retains the dialog and choices for retry;
-mutations disable editing and dismissal until their result arrives.
+is only the add-difficulties dialog. If library search omits the selected song,
+the client loads its complete difficulty group without changing that search.
+Late openings/results are ignored; failed mutations retain selections for retry.
+The former playlist-management entrance and modal are removed.
 
-Opening a playlist replaces the Songs presentation with one row per item,
-including separate difficulties sharing an audio ID and saved unavailable rows.
-Selection uses `playlistItemId`, independently of playback. All songs returns to
-the library; each row can be removed from its playlist. Explicit Play starts the
-playlist at that item, while Играть плейлист starts at the first available item.
-Pause/resume and seeking check the assignment's `current_playlist_item_id`, so
-selecting another difficulty with identical audio does not control the previous
-item. Duration updates preserve each row's difficulty subtitle. Unavailable
-items remain selectable and removable, with Play disabled.
+Qt's native FileDialog selects local PNG/JPEG up to 16 MiB and 16 megapixels.
+[`artwork.h`](../../apps/osu-radio-qt/src/artwork.h) applies image orientation,
+center-crops and prepares a 512×512 PNG; reusable upload/download behavior stays
+in the client. Picker epochs and latest-choice checks reject stale results.
+The shared 64 MiB decoded-image cache has separate playlist/version and draft
+keys; QML uses `cache: false`. Custom images persist in the database independently
+of the selected file; reset uses artwork from the first item in insertion order,
+then the neutral placeholder if unavailable. Summary loading excludes PNG bytes.
+Use automatic cover previews that fallback immediately in the editor while the
+saved custom cover stays intact until Save; closing the editor discards the reset.
 
-The queue is a snapshot taken by the backend; editing a playlist does not change
-it. Library refresh also resolves the open playlist against the new import.
-Persistence, stable membership and unavailable-copy selection are specified in
-[database](database.md#user-playlists); HTTP/status behavior is in
-[backend](backend.md#user-playlists). Vizia keeps its existing presentation and
-does not expose playlist controls.
-
-The offline [`mock playlist workflow`](../../crates/osu-radio-client/src/mock/playlists.rs)
-demonstrates CRUD, difficulty selection, duplicate audio and unavailable items
-without a server or device. Coverage lives in
-[controller tests](../../crates/osu-radio-client/src/controller/playlists/tests.rs),
-[the native Qt adapter](../../apps/osu-radio-qt/src/app_bridge.rs), and
-[offscreen/real-backend probes](../../apps/osu-radio-qt/tests/launch_smoke.rs).
-Desktop input, GPU rendering and physical audio remain separate acceptance checks.
+Persistence and HTTP contracts are specified in [database](database.md#user-playlists)
+and [backend](backend.md#user-playlists). Vizia keeps its existing presentation
+and receives compatibility updates only. Coverage is in
+[client tests](../../crates/osu-radio-client/src/controller/playlists/tests.rs),
+[queue append tests](../../crates/osu-radio-client/src/controller/queue/tests.rs),
+[native Qt checks](../../apps/osu-radio-qt/src/native_tests.h) and
+[Qt probes](../../apps/osu-radio-qt/tests/launch_smoke.rs). Desktop input, GPU
+rendering, native picker appearance, physical audio and Windows remain separate
+acceptance checks. Manual cropping, track reordering and queue UI remain deferred.
 
 ## Session and server supervision
 
@@ -185,16 +290,22 @@ Selection is retained by audio ID when present. The client receives filtered ser
 results and does no local Songs filtering. Settings search remains a placeholder;
 component galleries stay offline. See [backend search](backend.md#library-search).
 
-Visible and selected rows request media with the GUI's actual artwork-cache state.
-The controller prioritizes selection, deduplicates work and remembers completed
-durations and unavailable covers, without mirroring GUI cache membership. Four
-pipelines remain occupied until decoding and installation are acknowledged;
-refresh cannot release a slot while a non-cancelable decode is still running.
-Generation checks discard stale artwork/results. Evicted covers can reload
-without repeating duration requests. HTTP timeout is 30 seconds and encoded
-cover responses are limited to 16 MiB. Each GUI owns a 64 MiB decoded artwork
-cache, scales proportionally to at most 1280px, and uses neutral artwork and
-`--:--` when media is unavailable.
+Qt sends `AppCommand::SetVisibleMedia` snapshots of the currently visible Songs,
+playlist and queue rows with the provider's actual cache state. The controller removes
+offscreen pending work and cancels unwanted HTTP requests, retaining separate
+selected-track and open-queue demand. `RequestMedia` remains supported for the
+other adapter. Completed durations and unavailable covers survive navigation;
+evicted covers can reload without repeating duration requests.
+Ready cover bytes reach the adapter before a slow duration response. Four
+pipelines remain occupied until their HTTP work finishes and decoding/installation
+is acknowledged; cancellation and refresh cannot release a slot while a
+non-cancelable decode is still running. Ticket generations reject stale results
+independently of whether the Qt model needs a reset. `TracksReplaced` invalidates
+artwork only for a new session, explicit library refresh or import refresh;
+tab, playlist and search navigation retains the cache. HTTP timeout is 30 seconds
+and encoded cover responses are limited to 16 MiB. Each GUI owns a 64 MiB decoded
+artwork cache, scales proportionally to at most 1280px, and uses neutral artwork
+and `--:--` when media is unavailable.
 
 The songs pane retains Vizia's checked `VirtualList::new_generic` row lookup and
 106px slots (90px card plus 16px spacing). Vizia background work reaches signals
@@ -215,7 +326,7 @@ These are source-confirmed bindings, not a claim of interactive verification on 
 | Search fields | Songs searches the server through the shared controller; Settings only edits its independent placeholder query. | [search row](../../apps/osu-radio-gui-vizia/src/views/components/search_row.rs), [track list](../../apps/osu-radio-gui-vizia/src/views/songs/track_list.rs), [settings pane](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) |
 | Song filter chips | Static labels and visual hover treatment; no filter or picker actions. | [chip](../../apps/osu-radio-gui-vizia/src/views/components/chip.rs) |
 | Folder settings | Display-only dropdown selection, native directory picker with immediate registration, and failure-only retry. No GUI editing/removal, import or output-device selection. | [settings](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) |
-| Transport and volume | Central Play/Pause controls the selected track; volume opens a compact session-wide slider. Qt Next/Previous use the server queue; Vizia's corresponding buttons remain disabled. Shuffle, repeat and playlist controls remain disabled. | [controls](../../apps/osu-radio-gui-vizia/src/views/player/controls.rs), [icon helpers](../../apps/osu-radio-gui-vizia/src/views/components/icon.rs), [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs) |
+| Transport and volume | Central Play/Pause controls the selected track; volume opens a popup for the global or selected audio volume. Qt Next/Previous use the server queue; Vizia's corresponding buttons remain disabled. Shuffle, repeat and playlist controls remain disabled. | [controls](../../apps/osu-radio-gui-vizia/src/views/player/controls.rs), [icon helpers](../../apps/osu-radio-gui-vizia/src/views/components/icon.rs), [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs) |
 | Progress and elapsed time | Engine position for the selected current track; seek commits at drag completion and does not follow ticks while dragging. Other selected tracks show zero position with seek disabled. | [progress](../../apps/osu-radio-gui-vizia/src/views/player/progress.rs), [player stylesheet](../../apps/osu-radio-gui-vizia/styles/player.css) |
 | Window controls | Custom minimize/maximize/close actions and title-bar dragging; double-click handler requests maximize toggling. | [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs), [events](../../apps/osu-radio-gui-vizia/src/app.rs) |
 
@@ -369,6 +480,8 @@ never creates a runtime, session, audio device or database. Playback and seeking
 use the shared controller; filter chips remain unavailable. Playlists use the
 shared workflow described above. Qt folder additions import their source when
 Apply succeeds; Vizia retains its immediate registration chooser.
+The engine selects Basic before loading QML, matching the explicit Basic imports
+and keeping fallback file-dialog controls independent of KDE Breeze overrides.
 
 The production adapter exposes typed properties and a `QAbstractListModel` with
 `audioId`, `title`, `artist`, `subtitle`, `durationLabel`, `artworkUrl`,
@@ -379,22 +492,51 @@ typed `{id, label}` entries. Asynchronous controller updates are queued to the
 QObject thread and safely rejected after object destruction. Qt image URLs and
 decoded QImages remain GUI-owned. Provider images use `cache: false` in QML so
 Qt does not add an unbounded cache above the application's bounded cache.
+Qt restores cached URLs when replacing rows and skips resetting identical rows,
+including their playlist item IDs. Model replacement preserves the player and
+background URL until the final selection arrives. The cache protects that
+selection's cover from eviction. Eviction leaves already displayed card URLs
+intact; re-entering rows check cache membership and reload as needed. Provider
+URLs include an installation version so a reloaded cover updates QML after
+eviction or a previous provider error. A resident immutable key accepts earlier
+installation URLs in the same cache epoch; stale epochs and missing keys fail.
+Duplicate playlist-cover deliveries reuse a resident immutable key. The adapter
+stores new playlist state before exposing properties that can request artwork.
+Playlist-summary and queue delegates bind to collection indices instead of
+recreating every card when artwork or duration changes. They use empty fallback
+rows while a shrinking collection removes its delegates.
 
-[`Songs.qml`](../../apps/osu-radio-qt/qml/Songs.qml) owns Songs/Settings tabs,
+[`Songs.qml`](../../apps/osu-radio-qt/qml/Songs.qml) owns Songs/Playlists/Settings tabs,
 independent search strings, list/status presentation and the persistent player.
 It retains the 1024×640 minimum, 50px title bar, 480px sidebar, 90px cards and
 adaptive player geometry. Artwork uses centered cropping. Library refresh remains
 outside the scrolling list. Settings use folder IDs, wrapped options and a full
-label tooltip. Add is disabled during connection and folder loading; it opens the
+label tooltip. The **General** section holds the folder menu and `+`; **Audio**
+holds the individual-volume switch, conditional global slider, status and Retry.
+The Settings panel uses the bundled Nunito font, 20px side margins, a search icon
+on the right, 24px section icons and 44px dark fields with 8px corners.
+Settings search remains an independent placeholder. All panes stay constructed,
+retaining search text, selection and settings while the right-hand player remains
+visible. Output-device and other placeholder preferences remain deferred.
+Add is disabled during connection and folder loading; it opens the
 folder selection modal. Retry reloads a failed folder collection. Selection updates
 the card, player and backdrop together.
+
+[`Artwork.qml`](../../apps/osu-radio-qt/qml/components/Artwork.qml) owns the
+centered crop and rounded mask shared by the player, Songs cards, playlist covers,
+playlist track cards and inline cover editor. Playlist context menus use explicit
+card/button coordinates, including Menu/Shift+F10, and restore their opener's
+focus. They do not position keyboard menus at the desktop cursor.
+The volume popup receives keyboard focus, closes on Escape and restores the
+volume button; its opaque dark surface and explicit slider palette keep the
+value and handle readable over artwork.
 
 [`AppModal.qml`](../../apps/osu-radio-qt/qml/components/AppModal.qml) wraps Qt's native
 modal Popup with a centered, window-constrained panel, reusable body/footer, close
 control, Tab containment, Escape/backdrop dismissal and focus restoration. Both
 application roots capture an explicit scene container that excludes the overlay.
 ShaderEffectSource/MultiEffect blur that scene while the popup is visible; capture
-and blur are disabled while closed. The gallery playlist dialog uses the same modal.
+and blur are disabled while closed. The gallery add-difficulties dialog uses the same modal.
 
 [`FolderSelectionModal.qml`](../../apps/osu-radio-qt/qml/components/FolderSelectionModal.qml)
 uses a 740x620 panel constrained to the window, a scrolling list and fixed Apply
@@ -424,7 +566,9 @@ schema migration was added.
 for drag/resize/minimize/maximize/restore/close and observes actual window
 visibility. Qt 6.8 is the minimum for QML system move/resize methods.
 Inactive navigation tabs use the standard white text/icon foreground; selected
-tabs use dark text/icons on the white background.
+tabs use dark text/icons on the white background. Settings retains tab index 2
+and the `settingsButton` object name; it is visible but disabled in the offline
+gallery.
 Qt mouse-wheel scrolling uses twice the platform's default line count in both
 live and gallery modes; touch/drag scrolling retains its native behavior.
 

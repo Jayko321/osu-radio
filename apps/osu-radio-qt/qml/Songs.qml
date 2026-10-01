@@ -2,6 +2,7 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic as Basic
 import QtQuick.Effects
+import QtQuick.Dialogs
 import OsuRadio 1.0
 import "components"
 
@@ -13,53 +14,50 @@ Basic.ApplicationWindow {
     minimumWidth: 1024
     minimumHeight: 640
     visible: true
-    title: selectedTab === 0 ? "osu! radio — Songs" : "osu! radio — Settings"
+    title: selectedTab === 0 ? "osu! radio — Songs" : selectedTab === 1 ? "osu! radio — Playlists" : "osu! radio — Settings"
     color: Theme.background
     flags: Qt.Window | Qt.FramelessWindowHint
     font.family: Theme.fontFamily
 
     property int selectedTab: 0
+    property var mediaDelegates: []
+    function scheduleVisibleMedia() {
+        if (!visibleMediaTimer.running) visibleMediaTimer.start();
+    }
+    function addMediaDelegate(row) {
+        mediaDelegates.push(row);
+        scheduleVisibleMedia();
+    }
+    function removeMediaDelegate(row) {
+        const index = mediaDelegates.indexOf(row);
+        if (index >= 0) mediaDelegates.splice(index, 1);
+        scheduleVisibleMedia();
+    }
+    Timer {
+        id: visibleMediaTimer
+        interval: 0
+        onTriggered: {
+            const ids = [];
+            for (const row of root.mediaDelegates) {
+                if (row && row.inViewport && row.available && row.audioId >= 0) ids.push(row.audioId);
+            }
+            bridge.setVisibleMedia(ids);
+        }
+    }
+    onSelectedTabChanged: {
+        if (selectedTab === 0) bridge.showLibrary();
+        else if (selectedTab === 1) bridge.showPlaylists();
+        scheduleVisibleMedia();
+    }
     readonly property alias appBridge: bridge
     AppBridge {
         id: bridge
         objectName: "appBridge"
         Component.onCompleted: connectSession()
         onSelectedArtworkUrlChanged: if (hasSelection && selectedArtworkUrl.length === 0) requestMedia(selectedAudioId)
+        onMediaViewChanged: root.scheduleVisibleMedia()
     }
 
-    component Artwork: Item {
-        id: art
-        property url source
-        property real radius: 8
-        Rectangle { anchors.fill: parent; radius: art.radius; color: Theme.surface }
-        Image {
-            id: image
-            anchors.fill: parent
-            source: art.source
-            cache: false
-            fillMode: Image.PreserveAspectCrop
-            horizontalAlignment: Image.AlignHCenter
-            verticalAlignment: Image.AlignVCenter
-            smooth: true
-            visible: false
-        }
-        Rectangle {
-            id: mask
-            anchors.fill: parent
-            radius: art.radius
-            color: "white"
-            layer.enabled: true
-            visible: false
-        }
-        MultiEffect {
-            anchors.fill: parent
-            source: image
-            maskEnabled: true
-            maskSource: mask
-            maskThresholdMin: 0.5
-            maskSpreadAtMin: 1.0
-        }
-    }
 
     Item {
         id: applicationScene
@@ -70,8 +68,10 @@ Basic.ApplicationWindow {
             width: parent.width
             window: root
             selectedTab: root.selectedTab
+            queueEnabled: bridge.connected
+            queueVisible: queuePanel.visible
             onTabSelected: index => root.selectedTab = index
-            onPlaylistsRequested: bridge.openPlaylists()
+            onQueueRequested: queuePanel.visible ? queuePanel.close() : queuePanel.open()
         }
 
         Rectangle {
@@ -169,6 +169,7 @@ Basic.ApplicationWindow {
                 Rectangle { anchors.fill: parent; color: "transparent"; border.color: Theme.border }
                 Item {
                     id: songsPane
+                    objectName: "songsPane"
                     anchors.fill: parent
                     visible: root.selectedTab === 0
                     AppField {
@@ -179,7 +180,6 @@ Basic.ApplicationWindow {
                         width: parent.width - 40
                         leftPadding: 44
                         placeholderText: "Type to search songs..."
-                        enabled: bridge.activePlaylistId < 0
                         Accessible.name: "Search songs"
                         onTextChanged: bridge.searchLibrary(text)
                         AppIcon { x: 12; anchors.verticalCenter: parent.verticalCenter; name: "search"; color: Theme.muted }
@@ -189,8 +189,22 @@ Basic.ApplicationWindow {
                         x: 20
                         y: search.y + search.height + 16
                         spacing: 10
+                        AppMenu {
+                            objectName: "trackSortMenu"
+                            width: 172
+                            height: 32
+                            entries: [
+                                {index: 0, label: "Title A–Z"},
+                                {index: 1, label: "Artist A–Z"},
+                                {index: 2, label: "Recently played"}
+                            ]
+                            currentIndex: bridge.trackSortIndex
+                            onChosen: index => bridge.setTrackSort(index)
+                            Accessible.name: "Sort tracks"
+                            background: Rectangle { radius: 16; color: "transparent"; border.color: Theme.border }
+                        }
                         Repeater {
-                            model: ["Title", "All musics", "Tags"]
+                            model: ["All musics", "Tags"]
                             AppButton {
                                 required property string modelData
                                 height: 32
@@ -202,22 +216,13 @@ Basic.ApplicationWindow {
                             }
                         }
                     }
-                    Row {
-                        id: playlistTools
-                        x: 20
-                        y: filters.y + filters.height + 12
-                        visible: bridge.activePlaylistId >= 0
-                        spacing: 8
-                        AppButton { text: "All songs"; onClicked: bridge.selectPlaylist(-1) }
-                        AppButton { text: "Играть плейлист"; enabled: bridge.connected && bridge.trackCount > 0; onClicked: bridge.playPlaylist() }
-                    }
                     Text {
                         id: libraryStatus
                         objectName: "libraryStatus"
                         x: 20
-                        y: playlistTools.visible ? playlistTools.y + playlistTools.height + 12 : filters.y + filters.height + 20
+                        y: filters.y + filters.height + 20
                         width: parent.width - 40
-                        text: bridge.activePlaylistId >= 0 ? bridge.activePlaylistName + (bridge.playlistMessage.length > 0 ? " · " + bridge.playlistMessage : "") : bridge.libraryMessage
+                        text: bridge.libraryMessage
                         visible: text.length > 0
                         color: Theme.text
                         font.family: Theme.fontFamily
@@ -250,14 +255,16 @@ Basic.ApplicationWindow {
                             readonly property bool inViewport: songsPane.visible
                                 && y + height >= songList.contentY
                                 && y <= songList.contentY + songList.height
-                            onInViewportChanged: if (inViewport) bridge.requestMedia(audioId)
-                            onArtworkUrlChanged: if (inViewport && artworkUrl.length === 0) bridge.requestMedia(audioId)
-                            Component.onCompleted: if (inViewport) bridge.requestMedia(audioId)
+                            onAudioIdChanged: root.scheduleVisibleMedia()
+                            onInViewportChanged: root.scheduleVisibleMedia()
+                            onArtworkUrlChanged: if (inViewport && artworkUrl.length === 0) root.scheduleVisibleMedia()
+                            Component.onCompleted: root.addMediaDelegate(card)
+                            Component.onDestruction: root.removeMediaDelegate(card)
                             width: songList.width
                             height: 90
                             padding: 0
                             Accessible.name: title + ", " + artist
-                            onClicked: playlistItemId >= 0 ? bridge.selectPlaylistItem(playlistItemId) : bridge.selectTrack(audioId)
+                            onClicked: bridge.selectTrack(audioId)
                             background: Item {
                                 Artwork { anchors.fill: parent; source: card.artworkUrl }
                                 Rectangle {
@@ -274,25 +281,15 @@ Basic.ApplicationWindow {
                                     radius: 8
                                     color: "transparent"
                                     border.width: card.activeFocus ? 2 : 1
-                                    border.color: (card.playlistItemId >= 0 ? bridge.selectedPlaylistItemId === card.playlistItemId : bridge.selectedAudioId === card.audioId) ? Theme.accent
+                                    border.color: bridge.selectedAudioId === card.audioId ? Theme.accent
                                         : (card.hovered || card.activeFocus ? Theme.border : "transparent")
                                 }
                             }
                             contentItem: Item {
-                                IconButton {
-                                    anchors.right: parent.right
-                                    anchors.rightMargin: 12
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    visible: card.playlistItemId >= 0
-                                    iconName: "minus"
-                                    accessibleName: "Remove " + card.title + " from playlist"
-                                    enabled: !bridge.playlistBusy
-                                    onClicked: bridge.removePlaylistItem(card.playlistItemId)
-                                }
                                 Text {
                                     x: 20
                                     y: 17
-                                    width: parent.width - (card.playlistItemId >= 0 ? 80 : 40)
+                                    width: parent.width - 40
                                     height: 30
                                     text: card.title
                                     color: Theme.text
@@ -304,7 +301,7 @@ Basic.ApplicationWindow {
                                 Text {
                                     x: 20
                                     y: 49
-                                    width: parent.width - (card.playlistItemId >= 0 ? 80 : 40)
+                                    width: parent.width - 40
                                     height: 22
                                     text: card.subtitle
                                     color: Theme.text
@@ -330,26 +327,96 @@ Basic.ApplicationWindow {
                     }
                 }
 
+                PlaylistPane {
+                    id: playlistsPane
+                    objectName: "playlistsPane"
+                    anchors.fill: parent
+                    visible: root.selectedTab === 1
+                    playlists: bridge.filteredPlaylists
+                    activeId: bridge.activePlaylistId
+                    activeName: bridge.activePlaylistName
+                    query: bridge.playlistQuery
+                    connected: bridge.connected
+                    loading: bridge.playlistLoading
+                    busy: bridge.playlistBusy
+                    coverPreparing: bridge.playlistCoverPreparing
+                    message: bridge.playlistMessage
+                    editorOpen: bridge.playlistEditorOpen
+                    editorId: bridge.playlistEditorId
+                    editorName: bridge.playlistEditorName
+                    editorArtworkUrl: bridge.playlistEditorArtworkUrl
+                    tracksModel: bridge
+                    trackCount: bridge.trackCount
+                    sortIndex: bridge.trackSortIndex
+                    onSearchEdited: query => bridge.searchPlaylists(query)
+                    onCreateRequested: bridge.beginPlaylistCreate()
+                    onEditRequested: id => bridge.beginPlaylistEdit(id)
+                    onSelectRequested: id => bridge.selectPlaylist(id)
+                    onQueueRequested: id => bridge.addPlaylistToQueue(id)
+                    onDeleteRequested: id => bridge.deletePlaylist(id)
+                    onRequestArtwork: id => bridge.requestPlaylistArtwork(id)
+                    onNameEdited: name => bridge.setPlaylistEditorName(name)
+                    onCoverRequested: bridge.choosePlaylistCover()
+                    onCoverResetRequested: bridge.resetPlaylistCover()
+                    onSaveRequested: bridge.savePlaylistEditor()
+                    onCancelRequested: bridge.cancelPlaylistEditor()
+                    onRefreshRequested: bridge.refreshPlaylists()
+                    onSortChosen: index => bridge.setTrackSort(index)
+                    trackDelegate: PlaylistTrackCard {
+                        id: playlistTrack
+                        readonly property bool inViewport: playlistsPane.visible && y + height >= playlistsPane.tracksList.contentY
+                            && y <= playlistsPane.tracksList.contentY + playlistsPane.tracksList.height
+                        onAudioIdChanged: root.scheduleVisibleMedia()
+                        onInViewportChanged: root.scheduleVisibleMedia()
+                        onArtworkUrlChanged: if (inViewport && artworkUrl.length === 0) root.scheduleVisibleMedia()
+                        Component.onCompleted: root.addMediaDelegate(playlistTrack)
+                        Component.onDestruction: root.removeMediaDelegate(playlistTrack)
+                        width: playlistsPane.tracksList.width
+                        selected: bridge.selectedPlaylistItemId === playlistItemId
+                        busy: bridge.playlistBusy
+                        onClicked: bridge.selectPlaylistItem(playlistItemId)
+                        onRemoveRequested: itemId => bridge.removePlaylistItem(itemId)
+                    }
+                }
+
                 Item {
                     id: settingsPane
                     objectName: "settingsPane"
+                    readonly property string fontFamily: Theme.fallbackFont.name || "Nunito"
                     anchors.fill: parent
-                    visible: root.selectedTab === 1
+                    visible: root.selectedTab === 2
                     AppField {
                         id: settingsSearch
                         objectName: "settingsSearch"
                         x: 20
-                        y: 32
+                        y: 22
                         width: parent.width - 40
-                        leftPadding: 44
+                        height: 44
+                        leftPadding: 16
+                        rightPadding: 44
+                        font.family: settingsPane.fontFamily
                         placeholderText: "Type to search settings..."
                         Accessible.name: "Search settings"
-                        AppIcon { x: 12; anchors.verticalCenter: parent.verticalCenter; name: "search"; color: Theme.muted }
+                        background: Rectangle {
+                            radius: 8
+                            color: Theme.background
+                            border.color: settingsSearch.activeFocus ? Theme.text : settingsSearch.hovered ? Theme.muted : Theme.border
+                            border.width: settingsSearch.activeFocus ? 2 : 1
+                        }
+                        AppIcon {
+                            objectName: "settingsSearchIcon"
+                            anchors.right: parent.right
+                            anchors.rightMargin: 16
+                            anchors.verticalCenter: parent.verticalCenter
+                            name: "search-line"
+                            color: Theme.muted
+                        }
                     }
                     Basic.ScrollView {
                         id: settingsScroll
+                        objectName: "settingsScroll"
                         x: 20
-                        y: settingsSearch.y + settingsSearch.height + 32
+                        y: settingsSearch.y + settingsSearch.height + 30
                         width: parent.width - 40
                         height: parent.height - y - 20
                         contentWidth: availableWidth
@@ -357,61 +424,181 @@ Basic.ApplicationWindow {
                         Basic.ScrollBar.horizontal.policy: Basic.ScrollBar.AlwaysOff
                         Column {
                             width: settingsScroll.availableWidth
-                            spacing: 16
-                            Text {
-                                text: "General"
-                                color: Theme.text
-                                font.family: Theme.fontFamily
-                                font.pixelSize: 24
-                                font.weight: Font.DemiBold
-                            }
-                            Text {
-                                text: "osu! folders"
-                                color: Theme.text
-                                font.family: Theme.fontFamily
-                                font.pixelSize: 16
-                            }
-                            Row {
+                            spacing: 40
+                            Column {
+                                objectName: "generalSettingsSection"
                                 width: parent.width
-                                spacing: 12
-                                AppMenu {
-                                    id: folderMenu
-                                    objectName: "folderMenu"
-                                    width: parent.width - addFolder.width - parent.spacing
-                                    entries: bridge.folders
-                                    valueRole: "id"
-                                    currentIndex: entries.findIndex(entry => entry.id === bridge.selectedFolderId)
-                                    displayText: currentIndex >= 0 ? entries[currentIndex].label : "No osu! folders"
-                                    enabled: bridge.connected && !bridge.foldersLoading && !bridge.folderBusy && entries.length > 0
-                                    Accessible.name: "osu! folders"
-                                    Basic.ToolTip.visible: hovered && currentIndex >= 0
-                                    onChosen: value => bridge.selectFolder(value)
+                                spacing: 24
+                                Row {
+                                    height: 24
+                                    spacing: 12
+                                    AppIcon { name: "pencil-line" }
+                                    Text {
+                                        objectName: "generalSettingsHeader"
+                                        text: "General"
+                                        color: Theme.text
+                                        font.family: settingsPane.fontFamily
+                                        font.pixelSize: 24
+                                        font.weight: Font.Bold
+                                        height: parent.height
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
                                 }
-                                IconButton {
-                                    id: addFolder
-                                    objectName: "addFolder"
-                                    iconName: "plus"
-                                    accessibleName: "Add osu! folder"
-                                    enabled: bridge.connected && !bridge.connecting && !bridge.foldersLoading && !bridge.folderBusy
-                                    onClicked: { addFolder.forceActiveFocus(); bridge.addFolder(); }
+                                Column {
+                                    width: parent.width
+                                    spacing: 8
+                                    Text {
+                                        text: "osu! folders"
+                                        color: Theme.text
+                                        font.family: settingsPane.fontFamily
+                                        font.pixelSize: 16
+                                        height: 20
+                                    }
+                                    Row {
+                                        width: parent.width
+                                        spacing: 12
+                                        AppMenu {
+                                            id: folderMenu
+                                            objectName: "folderMenu"
+                                            width: parent.width - addFolder.width - parent.spacing
+                                            height: 44
+                                            leftPadding: 16
+                                            font.family: settingsPane.fontFamily
+                                            font.pixelSize: 16
+                                            entries: bridge.folders
+                                            valueRole: "id"
+                                            currentIndex: entries.findIndex(entry => entry.id === bridge.selectedFolderId)
+                                            displayText: currentIndex >= 0 ? entries[currentIndex].label : "No osu! folders"
+                                            enabled: bridge.connected && !bridge.foldersLoading && !bridge.folderBusy && entries.length > 0
+                                            Accessible.name: "osu! folders"
+                                            Basic.ToolTip.visible: hovered && currentIndex >= 0
+                                            onChosen: value => bridge.selectFolder(value)
+                                            indicator: AppIcon {
+                                                x: folderMenu.width - width - 16
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                name: "arrow-down-s-line"
+                                            }
+                                            background: Rectangle {
+                                                radius: 8
+                                                color: Theme.background
+                                                border.width: 1
+                                                border.color: folderMenu.hovered ? Theme.muted : Theme.border
+                                            }
+                                        }
+                                        IconButton {
+                                            id: addFolder
+                                            objectName: "addFolder"
+                                            width: 44
+                                            height: 44
+                                            iconName: "plus"
+                                            accessibleName: "Add osu! folder"
+                                            enabled: bridge.connected && !bridge.connecting && !bridge.foldersLoading && !bridge.folderBusy
+                                            onClicked: { addFolder.forceActiveFocus(); bridge.addFolder(); }
+                                            background: Rectangle {
+                                                radius: 8
+                                                color: addFolder.hovered ? Theme.surface : Theme.background
+                                                border.width: 1
+                                                border.color: Theme.border
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        objectName: "folderStatus"
+                                        width: parent.width
+                                        text: bridge.folderMessage
+                                        visible: text.length > 0
+                                        color: Theme.text
+                                        font.family: settingsPane.fontFamily
+                                        font.pixelSize: 14
+                                        wrapMode: Text.Wrap
+                                    }
+                                    AppButton {
+                                        objectName: "retryFolders"
+                                        text: "Retry"
+                                        font.family: settingsPane.fontFamily
+                                        visible: bridge.folderCanRetry
+                                        enabled: bridge.connected && !bridge.foldersLoading && !bridge.folderBusy
+                                        onClicked: bridge.retryFolders()
+                                    }
                                 }
                             }
-                            Text {
-                                objectName: "folderStatus"
+                            Column {
+                                objectName: "audioSettingsSection"
                                 width: parent.width
-                                text: bridge.folderMessage
-                                visible: text.length > 0
-                                color: Theme.text
-                                font.family: Theme.fontFamily
-                                font.pixelSize: 14
-                                wrapMode: Text.Wrap
-                            }
-                            AppButton {
-                                objectName: "retryFolders"
-                                text: "Retry"
-                                visible: bridge.folderCanRetry
-                                enabled: bridge.connected && !bridge.foldersLoading && !bridge.folderBusy
-                                onClicked: bridge.retryFolders()
+                                spacing: 24
+                                Row {
+                                    height: 24
+                                    spacing: 12
+                                    AppIcon { name: "volume-up-fill" }
+                                    Text {
+                                        objectName: "audioSettingsHeader"
+                                        text: "Audio"
+                                        color: Theme.text
+                                        font.family: settingsPane.fontFamily
+                                        font.pixelSize: 24
+                                        font.weight: Font.Bold
+                                        height: parent.height
+                                        verticalAlignment: Text.AlignVCenter
+                                    }
+                                }
+                                Column {
+                                    width: parent.width
+                                    spacing: 16
+                                    AppSwitch {
+                                        objectName: "individualVolumeSwitch"
+                                        width: parent.width
+                                        height: 44
+                                        text: "Individual track volume"
+                                        font.family: settingsPane.fontFamily
+                                        font.pixelSize: 16
+                                        checked: bridge.individualVolumeEnabled
+                                        enabled: bridge.connected && bridge.audioSettingsLoaded
+                                        onToggled: bridge.setIndividualVolumeEnabled(checked)
+                                    }
+                                    Column {
+                                        width: parent.width
+                                        spacing: 8
+                                        visible: bridge.individualVolumeEnabled
+                                        Text {
+                                            text: "Global volume — " + bridge.globalVolumePercent + "%"
+                                            color: Theme.text
+                                            font.family: settingsPane.fontFamily
+                                            font.pixelSize: 16
+                                        }
+                                        Basic.Slider {
+                                            objectName: "globalVolumeSlider"
+                                            palette.window: Theme.text
+                                            palette.dark: Theme.accent
+                                            palette.midlight: Theme.muted
+                                            width: parent.width
+                                            from: 0
+                                            to: 100
+                                            stepSize: 1
+                                            value: bridge.globalVolumePercent
+                                            enabled: bridge.audioSettingsLoaded
+                                            Accessible.name: "Global volume"
+                                            onMoved: bridge.setGlobalVolume(Math.round(value))
+                                        }
+                                    }
+                                    Text {
+                                        objectName: "audioSettingsMessage"
+                                        width: parent.width
+                                        text: bridge.audioSettingsMessage
+                                        visible: text.length > 0
+                                        color: Theme.text
+                                        font.family: settingsPane.fontFamily
+                                        font.pixelSize: 14
+                                        wrapMode: Text.Wrap
+                                    }
+                                    AppButton {
+                                        objectName: "retryAudioSettings"
+                                        text: "Retry"
+                                        font.family: settingsPane.fontFamily
+                                        visible: bridge.audioSettingsCanRetry
+                                        enabled: bridge.connected
+                                        onClicked: bridge.retryAudioSettings()
+                                    }
+                                }
                             }
                         }
                     }
@@ -420,6 +607,7 @@ Basic.ApplicationWindow {
 
             Item {
                 id: player
+                objectName: "playerPane"
                 x: sidebar.width
                 width: parent.width - x
                 height: parent.height
@@ -427,6 +615,22 @@ Basic.ApplicationWindow {
                 readonly property real contentWidth: Math.min(650 * geometryScale, 960, width * 0.85)
                 readonly property real contentLeft: (width - contentWidth) * 138 / 310
                 readonly property real coverSize: Math.min(340 * geometryScale, 640, contentWidth, Math.max(height - 225, 0))
+
+                QueuePanel {
+                    id: queuePanel
+                    objectName: "queuePanel"
+                    host: player
+                    tracks: bridge.queueTracks
+                    loading: bridge.queueLoading
+                    message: bridge.queueMessage
+                    onOpened: bridge.setQueueVisible(true)
+                    onClosed: bridge.setQueueVisible(false)
+                    onMediaRequested: id => bridge.requestMedia(id)
+                    onMediaDelegateAdded: row => root.addMediaDelegate(row)
+                    onMediaDelegateRemoved: row => root.removeMediaDelegate(row)
+                    onVisibleMediaChanged: root.scheduleVisibleMedia()
+                    onRetryRequested: bridge.setQueueVisible(true)
+                }
 
                 Item {
                     x: player.contentLeft
@@ -498,7 +702,20 @@ Basic.ApplicationWindow {
                             function onSelectedAudioIdChanged() { if (!progress.pressed) progress.value = bridge.playbackPosition; }
                             function onSelectedPlaylistItemIdChanged() { if (!progress.pressed) progress.value = bridge.playbackPosition; }
                         }
-                        background: Rectangle { y: 6; width: progress.width; height: 4; radius: 2; color: Theme.muted }
+                        background: Rectangle {
+                            y: 6
+                            width: progress.width
+                            height: 4
+                            radius: 2
+                            color: Theme.muted
+                            scale: progress.mirrored ? -1 : 1
+                            Rectangle {
+                                width: progress.position * parent.width
+                                height: parent.height
+                                radius: parent.radius
+                                color: Theme.accent
+                            }
+                        }
                         handle: Rectangle { x: progress.visualPosition * (progress.width - width); width: 16; height: 16; radius: 8; color: Theme.accent }
                     }
                     Text {
@@ -535,21 +752,69 @@ Basic.ApplicationWindow {
                                 objectName: "volumePopup"
                                 y: -height - 8
                                 width: 180
-                                height: 80
+                                height: contentItem.implicitHeight + topPadding + bottomPadding
+                                property int editAudioId: -1
+                                onOpened: { editAudioId = bridge.selectedAudioId; volumeSlider.value = bridge.volume; volumeSlider.forceActiveFocus(); }
+                                Connections {
+                                    target: bridge
+                                    function onSelectedAudioIdChanged() { volumePopup.close(); }
+                                    function onSelectedPlaylistItemIdChanged() { volumePopup.close(); }
+                                    function onIndividualVolumeEnabledChanged() { volumePopup.close(); }
+                                }
                                 padding: 12
-                                background: Rectangle { radius: 8; color: Theme.surface; border.color: Theme.muted }
+                                focus: true
+                                closePolicy: Basic.Popup.CloseOnEscape | Basic.Popup.CloseOnPressOutside
+                                onClosed: volumeButton.forceActiveFocus()
+                                background: Rectangle { radius: 8; color: "#f20d0d0d"; border.color: Theme.muted }
                                 contentItem: Column {
                                     spacing: 4
                                     Text { text: Math.round(bridge.volume * 100) + "%"; color: Theme.text; font.family: Theme.fontFamily; font.pixelSize: 12 }
                                     Basic.Slider {
                                         id: volumeSlider
                                         objectName: "volumeSlider"
+                                        palette.window: Theme.text
+                                        palette.dark: Theme.accent
+                                        palette.midlight: Theme.muted
                                         width: parent.width
                                         from: 0
                                         to: 1
                                         value: bridge.volume
-                                        Accessible.name: "Volume percentage"
-                                        onMoved: bridge.changeVolume(value)
+                                        stepSize: 0.01
+                                        enabled: bridge.volumeEnabled
+                                        Accessible.name: bridge.individualVolumeEnabled ? "Selected track volume" : "Global volume"
+                                        Connections {
+                                            target: bridge
+                                            function onVolumeChanged() { if (!volumeSlider.pressed) volumeSlider.value = bridge.volume; }
+                                        }
+                                        onPressedChanged: if (!pressed) value = bridge.volume
+                                        onMoved: {
+                                            if (bridge.individualVolumeEnabled) bridge.changeTrackVolume(volumePopup.editAudioId, Math.round(value * 100));
+                                            else bridge.changeVolume(value);
+                                        }
+                                    }
+                                    AppButton {
+                                        objectName: "useGlobalVolumeButton"
+                                        text: "Use global volume"
+                                        width: parent.width
+                                        visible: bridge.individualVolumeEnabled
+                                        enabled: bridge.volumeEnabled && bridge.volumeHasOverride
+                                        onClicked: bridge.useGlobalVolume()
+                                    }
+                                    Text {
+                                        width: parent.width
+                                        text: bridge.audioSettingsMessage
+                                        visible: bridge.audioSettingsCanRetry
+                                        color: Theme.text
+                                        font.family: Theme.fontFamily
+                                        font.pixelSize: 12
+                                        wrapMode: Text.Wrap
+                                    }
+                                    AppButton {
+                                        objectName: "retryVolumeSave"
+                                        text: "Retry"
+                                        visible: bridge.audioSettingsCanRetry
+                                        enabled: bridge.connected
+                                        onClicked: bridge.retryAudioSettings()
                                     }
                                 }
                             }
@@ -557,7 +822,7 @@ Basic.ApplicationWindow {
                         Row {
                             anchors.centerIn: parent
                             spacing: 28
-                            IconButton { anchors.verticalCenter: parent.verticalCenter; iconName: "shuffle"; accessibleName: "Shuffle (unavailable)"; enabled: false }
+                            IconButton { objectName: "shuffleButton"; anchors.verticalCenter: parent.verticalCenter; iconName: "shuffle"; accessibleName: "Shuffle (unavailable)"; enabled: false }
                             IconButton { objectName: "previousTrackButton"; anchors.verticalCenter: parent.verticalCenter; iconName: "skip-back"; accessibleName: "Previous track"; enabled: bridge.connected && bridge.canPrevious; onClicked: bridge.previousTrack() }
                             IconButton {
                                 width: 48
@@ -565,14 +830,14 @@ Basic.ApplicationWindow {
                                 objectName: "playPauseButton"
                                 iconName: bridge.selectedIsPlaying ? "pause" : "play"
                                 accessibleName: bridge.selectedIsPlaying ? "Pause" : "Play"
-                                enabled: bridge.hasSelection && bridge.selectedAvailable && bridge.connected
+                                enabled: bridge.hasSelection && bridge.selectedAvailable && bridge.connected && bridge.audioSettingsLoaded
                                 onClicked: bridge.togglePlayback()
                                 background: Rectangle { radius: 24; color: Theme.accent }
                             }
                             IconButton { objectName: "nextTrackButton"; anchors.verticalCenter: parent.verticalCenter; iconName: "skip-forward"; accessibleName: "Next track"; enabled: bridge.connected && bridge.canNext; onClicked: bridge.nextTrack() }
-                            IconButton { anchors.verticalCenter: parent.verticalCenter; iconName: "repeat-2"; accessibleName: "Repeat (unavailable)"; enabled: false }
+                            IconButton { objectName: "repeatButton"; anchors.verticalCenter: parent.verticalCenter; iconName: "repeat-2"; accessibleName: "Repeat (unavailable)"; enabled: false }
                         }
-                        IconButton { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; iconName: "circle-plus"; objectName: "addToPlaylistButton"; accessibleName: "В плейлист"; enabled: bridge.canAddPlaylist && bridge.connected; onClicked: bridge.openPlaylistAdd() }
+                        IconButton { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; iconName: "circle-plus"; objectName: "addToPlaylistButton"; accessibleName: "Add to playlist"; enabled: bridge.canAddPlaylist && bridge.connected; onClicked: bridge.openPlaylistAdd() }
                     }
                     Text {
                         objectName: "playbackMessage"
@@ -603,10 +868,6 @@ Basic.ApplicationWindow {
         loading: bridge.playlistLoading
         message: bridge.playlistMessage
         targetId: bridge.playlistTargetId
-        onCreateRequested: name => bridge.createPlaylist(name)
-        onRenameRequested: (id, name) => bridge.renamePlaylist(id, name)
-        onDeleteRequested: id => bridge.deletePlaylist(id)
-        onSelectRequested: id => { root.selectedTab = 0; bridge.selectPlaylist(id); }
         onTargetRequested: id => bridge.choosePlaylistTarget(id)
         onDifficultyRequested: id => bridge.togglePlaylistDifficulty(id)
         onAddRequested: bridge.addPlaylistItems()
@@ -616,8 +877,25 @@ Basic.ApplicationWindow {
     Connections {
         target: bridge
         function onPlaylistOpenChanged() {
-            if (bridge.playlistOpen) playlistsDialog.open();
+            if (bridge.playlistOpen && bridge.playlistAdding) playlistsDialog.open();
             else playlistsDialog.close();
+        }
+    }
+    FileDialog {
+        id: playlistCoverPicker
+        objectName: "playlistCoverPicker"
+        property double editorEpoch: 0
+        title: "Choose playlist cover"
+        fileMode: FileDialog.OpenFile
+        nameFilters: ["Images (*.png *.jpg *.jpeg)"]
+        onAccepted: bridge.completePlaylistCoverPick(editorEpoch, selectedFile.toString())
+        onRejected: bridge.completePlaylistCoverPick(editorEpoch, "")
+    }
+    Connections {
+        target: bridge
+        function onPlaylistCoverPickerRequested(epoch) {
+            playlistCoverPicker.editorEpoch = epoch;
+            playlistCoverPicker.open();
         }
     }
     FolderSelectionModal {

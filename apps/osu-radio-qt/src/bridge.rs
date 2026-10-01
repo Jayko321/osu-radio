@@ -29,7 +29,15 @@ pub struct MockBridgeRust {
 }
 
 fn snapshot(state: &MockState) -> QString {
-    let mut value = json!({"gallery": state.gallery});
+    let mut value = json!({
+        "gallery": state.gallery,
+        "tracks": state.tracks,
+        "selected": state.selected,
+        "playlists": state.gallery.playlists.view,
+        "filtered_playlists": state.gallery.playlists.view.filtered_playlists(),
+        "playlist_cover_present": state.gallery.playlists.view.editor_cover_png.is_some(),
+        "track_sort_index": crate::app_bridge::track_sort_index(state.track_sort),
+    });
     let results = json!(
         state
             .gallery
@@ -59,6 +67,31 @@ impl Default for MockBridgeRust {
 
 fn action_from_qml(action: &str, value: String) -> Option<Action> {
     Some(match action {
+        "trackSort" => Action::SetTrackSort(crate::app_bridge::track_sort_from_index(
+            value.parse().ok()?,
+        )?),
+        "playlistShow" => Action::Playlist(PlaylistAction::ShowPlaylists),
+        "playlistLibrary" => Action::Playlist(PlaylistAction::ShowLibrary),
+        "playlistSearch" => Action::Playlist(PlaylistAction::Search(value)),
+        "playlistBeginCreate" => Action::Playlist(PlaylistAction::BeginCreate),
+        "playlistBeginEdit" => Action::Playlist(PlaylistAction::BeginEdit(value.parse().ok()?)),
+        "playlistEditorName" => Action::Playlist(PlaylistAction::SetEditorName(value)),
+        "playlistEditorCancel" => Action::Playlist(PlaylistAction::CancelEditor),
+        "playlistEditorSave" => Action::Playlist(PlaylistAction::SaveEditor),
+        "playlistCoverReset" => Action::Playlist(PlaylistAction::ResetEditorCover),
+        "playlistCoverChoose" => {
+            // The offline gallery demonstrates the same editor state with bundled imagery.
+            let epoch = value.parse().ok()?;
+            Action::Playlist(PlaylistAction::CompleteCoverPick {
+                epoch,
+                png: Ok(Some(vec![1])),
+            })
+        }
+        "playlistItemSelect" => Action::Playlist(PlaylistAction::SelectItem(value.parse().ok()?)),
+        "playlistPlay" => Action::Playlist(PlaylistAction::Play {
+            id: value.parse().ok()?,
+            start_item_id: None,
+        }),
         "playlistOpen" => Action::Playlist(PlaylistAction::Open),
         "playlistClose" => Action::Playlist(PlaylistAction::Close),
         "playlistAddOpen" => Action::Playlist(PlaylistAction::OpenAdd),
@@ -71,7 +104,11 @@ fn action_from_qml(action: &str, value: String) -> Option<Action> {
             })
         }
         "playlistDelete" => Action::Playlist(PlaylistAction::Delete(value.parse().ok()?)),
-        "playlistSelect" => Action::Playlist(PlaylistAction::Select(Some(value.parse().ok()?))),
+        "playlistQueue" => Action::Playlist(PlaylistAction::AddToQueue(value.parse().ok()?)),
+        "playlistSelect" => {
+            let id = value.parse().ok()?;
+            Action::Playlist(PlaylistAction::Select((id >= 0).then_some(id)))
+        }
         "playlistTarget" => Action::Playlist(PlaylistAction::ChooseTarget(value.parse().ok()?)),
         "playlistDifficulty" => {
             Action::Playlist(PlaylistAction::ToggleDifficulty(value.parse().ok()?))
@@ -125,6 +162,8 @@ mod tests {
             ("search", "unused"),
             ("selectTab", "abc"),
             ("galleryDisabled", "1"),
+            ("trackSort", "3"),
+            ("trackSort", "invalid"),
         ] {
             assert!(action_from_qml(action, value.to_owned()).is_none());
         }
@@ -137,7 +176,7 @@ mod tests {
         assert!(state.apply(Action::MenuQuery(query.clone())));
         let value: serde_json::Value =
             serde_json::from_str(&String::from(snapshot(&state))).unwrap();
-        assert_eq!(value.as_object().unwrap().len(), 1);
+        assert_eq!(value["track_sort_index"], 0);
         assert_eq!(value["gallery"]["menu_results"][0]["label"], query);
         assert_eq!(
             value["gallery"]["menu_results"][0]["index"],

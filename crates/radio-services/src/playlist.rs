@@ -1,9 +1,12 @@
 use anyhow::Result;
+use image::{ImageDecoder, codecs::png::PngDecoder};
 use radio_db::Database;
 pub use radio_db::model::{Playlist, PlaylistItem, PlaylistSummary};
 use std::{collections::HashMap, error::Error, fmt};
 
-use crate::{PlaybackAssignment, QueueService};
+use crate::{ListeningHistoryService, PlaybackAssignment, QueueService};
+
+pub const MAX_PLAYLIST_COVER_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistError {
@@ -14,6 +17,8 @@ pub enum PlaylistError {
     MissingHash(i32),
     NoAvailableItems,
     UnavailableItem(i32),
+    InvalidCover,
+    CoverTooLarge,
 }
 impl fmt::Display for PlaylistError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -31,6 +36,8 @@ impl fmt::Display for PlaylistError {
             ),
             Self::NoAvailableItems => write!(f, "This playlist has no available entries."),
             Self::UnavailableItem(id) => write!(f, "Playlist item {id} is unavailable."),
+            Self::InvalidCover => write!(f, "Playlist cover must be a valid 512×512 PNG image."),
+            Self::CoverTooLarge => write!(f, "Playlist cover must not exceed 2 MiB."),
         }
     }
 }
@@ -41,12 +48,19 @@ pub struct PlaylistService<'a> {
 }
 impl PlaylistService<'_> {
     pub async fn all(&self) -> Result<Vec<PlaylistSummary>> {
-        self.database.playlists().all().await
+        let transaction = self.database.begin_read().await?;
+        let result = transaction.playlists().all().await?;
+        transaction.commit().await?;
+        Ok(result)
     }
 
     pub async fn get(&self, id: i32) -> Result<Option<Playlist>> {
         let transaction = self.database.begin_read().await?;
-        let result = transaction.playlists().get(id).await?;
+        let mut result = transaction.playlists().get(id).await?;
+        if let Some(playlist) = &mut result {
+            ListeningHistoryService::fill_playlist(&transaction, playlist).await?;
+            crate::AudioSettingsService::fill_playlist(&transaction, playlist).await?;
+        }
         transaction.commit().await?;
         Ok(result)
     }
@@ -67,11 +81,42 @@ impl PlaylistService<'_> {
         if !transaction.playlists().rename(id, name).await? {
             return Err(PlaylistError::NotFound(id).into());
         }
+        let result = transaction
+            .playlists()
+            .summary(id)
+            .await?
+            .ok_or(PlaylistError::NotFound(id))?;
         transaction.commit().await?;
-        Ok(PlaylistSummary {
-            id,
-            name: name.to_owned(),
-        })
+        Ok(result)
+    }
+
+    pub async fn cover(&self, id: i32) -> Result<Option<Vec<u8>>> {
+        self.database.playlists().cover(id).await
+    }
+
+    pub async fn set_cover(&self, id: i32, png: &[u8]) -> Result<PlaylistSummary> {
+        validate_cover(png)?;
+        let transaction = self.database.begin().await?;
+        transaction.user_data().lock().await?;
+        if !transaction.playlists().set_cover(id, png).await? {
+            return Err(PlaylistError::NotFound(id).into());
+        }
+        let result = transaction
+            .playlists()
+            .summary(id)
+            .await?
+            .ok_or(PlaylistError::NotFound(id))?;
+        transaction.commit().await?;
+        Ok(result)
+    }
+
+    pub async fn clear_cover(&self, id: i32) -> Result<()> {
+        let transaction = self.database.begin().await?;
+        transaction.user_data().lock().await?;
+        if !transaction.playlists().clear_cover(id).await? {
+            return Err(PlaylistError::NotFound(id).into());
+        }
+        transaction.commit().await
     }
 
     pub async fn delete(&self, id: i32) -> Result<()> {
@@ -111,11 +156,13 @@ impl PlaylistService<'_> {
                 transaction.playlists().add(id, map).await?;
             }
         }
-        let result = transaction
+        let mut result = transaction
             .playlists()
             .get(id)
             .await?
             .ok_or(PlaylistError::NotFound(id))?;
+        ListeningHistoryService::fill_playlist(&transaction, &mut result).await?;
+        crate::AudioSettingsService::fill_playlist(&transaction, &mut result).await?;
         transaction.commit().await?;
         Ok(result)
     }
@@ -178,4 +225,21 @@ fn checked_name(name: &str) -> Result<&str> {
         return Err(PlaylistError::EmptyName.into());
     }
     Ok(name)
+}
+
+fn validate_cover(png: &[u8]) -> Result<()> {
+    if png.len() > MAX_PLAYLIST_COVER_BYTES {
+        return Err(PlaylistError::CoverTooLarge.into());
+    }
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(512);
+    limits.max_image_height = Some(512);
+    limits.max_alloc = Some(8 * 1024 * 1024);
+    let decoder = PngDecoder::with_limits(std::io::Cursor::new(png), limits)
+        .map_err(|_| PlaylistError::InvalidCover)?;
+    if decoder.dimensions() != (512, 512) {
+        return Err(PlaylistError::InvalidCover.into());
+    }
+    image::DynamicImage::from_decoder(decoder).map_err(|_| PlaylistError::InvalidCover)?;
+    Ok(())
 }

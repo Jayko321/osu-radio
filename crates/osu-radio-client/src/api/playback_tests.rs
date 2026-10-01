@@ -121,6 +121,10 @@ fn playback_command_wire_shapes_are_explicit_and_token_bound() {
             serde_json::json!({"command":"previous"}),
         ),
         (
+            PlaybackCommand::Started { playback_token: 8 },
+            serde_json::json!({"command":"started","playback_token":8}),
+        ),
+        (
             PlaybackCommand::Finished { playback_token: 8 },
             serde_json::json!({"command":"finished","playback_token":8}),
         ),

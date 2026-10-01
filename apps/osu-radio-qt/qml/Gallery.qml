@@ -18,10 +18,13 @@ Basic.ApplicationWindow {
     font.family: Theme.fontFamily
     font.pixelSize: 16
     readonly property var demo: store.state.gallery
-    onDemoChanged: {
-        if (demo.playlists.view.open) demoPlaylistsDialog.open();
+    property int selectedTab: 0
+    readonly property var playlistView: store.state.playlists
+    onPlaylistViewChanged: {
+        if (playlistView.open && playlistView.adding) demoPlaylistsDialog.open();
         else demoPlaylistsDialog.close();
     }
+    onSelectedTabChanged: store.send(selectedTab === 1 ? "playlistShow" : "playlistLibrary")
     Store { id: store }
     readonly property alias galleryStore: store
 
@@ -45,10 +48,12 @@ Basic.ApplicationWindow {
     Item {
         id: applicationScene
         anchors.fill: parent
-        WindowBar { id: titleBar; width: parent.width; window: root; gallery: true; onPlaylistsRequested: store.send("playlistOpen") }
+        WindowBar { id: titleBar; width: parent.width; window: root; gallery: true; selectedTab: root.selectedTab; onTabSelected: index => root.selectedTab = index }
 
         Basic.ScrollView {
             id: scroll
+            objectName: "galleryScroll"
+            visible: root.selectedTab === 0
             anchors.top: titleBar.bottom
             anchors.left: parent.left
             anchors.right: parent.right
@@ -183,6 +188,23 @@ Basic.ApplicationWindow {
                     DemoSection {
                         Heading { text: "Menus" }
                         AppMenu {
+                            objectName: "demoTrackSortMenu"
+                            width: 172
+                            entries: [
+                                {index: 0, label: "Title A–Z"},
+                                {index: 1, label: "Artist A–Z"},
+                                {index: 2, label: "Recently played"}
+                            ]
+                            currentIndex: store.state.track_sort_index
+                            onChosen: index => store.send("trackSort", index)
+                            Accessible.name: "Sort demo tracks"
+                        }
+                        Caption {
+                            width: parent.width
+                            text: store.state.tracks.map(track => track.title).join(" · ")
+                        }
+                        Caption { text: "Selected track: " + store.state.tracks[store.state.selected].title }
+                        AppMenu {
                             width: parent.width
                             entries: root.demo.menu_items.map((label, index) => ({index: index, label: label}))
                             currentIndex: root.demo.menu_selected
@@ -216,21 +238,11 @@ Basic.ApplicationWindow {
 
                     DemoSection {
                         Heading { text: "Playlists" }
-                        Caption { text: "Each difficulty is a separate entry. These playlists stay in memory." }
+                        Caption { text: "The Playlists tab shares the application's list, editor and track cards. Changes stay in memory." }
                         Row {
                             spacing: 12
-                            AppButton { objectName: "demoOpenPlaylists"; text: "Playlists"; onClicked: store.send("playlistOpen") }
-                            AppButton { objectName: "demoAddToPlaylist"; text: "В плейлист"; onClicked: store.send("playlistAddOpen") }
-                        }
-                        Repeater {
-                            model: root.demo.playlists.view.active ? root.demo.playlists.view.active.items : []
-                            Row {
-                                id: demoItem
-                                required property var modelData
-                                spacing: 12
-                                Caption { color: Theme.text; text: demoItem.modelData.title + " | " + demoItem.modelData.difficulty_name + (demoItem.modelData.audio_source_id === null ? " · Недоступно" : "") }
-                                IconButton { iconName: "minus"; accessibleName: "Remove demo difficulty"; onClicked: store.send("playlistRemoveItem", demoItem.modelData.id) }
-                            }
+                            AppButton { objectName: "demoOpenPlaylists"; text: "Playlists"; onClicked: { root.selectedTab = 1; store.send("playlistSelect", -1); } }
+                            AppButton { objectName: "demoAddToPlaylist"; text: "Add difficulties"; onClicked: store.send("playlistAddOpen") }
                         }
                     }
                     DemoSection {
@@ -319,7 +331,7 @@ Basic.ApplicationWindow {
                         width: parent.width
                         spacing: 20
                         Repeater {
-                            model: ["music", "settings", "search", "chevron-down", "pencil", "plus", "circle-plus", "layers", "play", "skip-back", "skip-forward", "shuffle", "repeat-2", "volume-2", "rotate-cw", "minus", "square", "copy", "x"]
+                            model: ["music", "arrow-left", "settings", "search", "chevron-down", "pencil", "plus", "circle-plus", "layers", "play", "skip-back", "skip-forward", "shuffle", "repeat-2", "volume-2", "rotate-cw", "minus", "square", "copy", "x"]
                             Column {
                                 id: iconSample
                                 required property string modelData
@@ -335,6 +347,75 @@ Basic.ApplicationWindow {
             }
         }
 
+        Item {
+            anchors.top: titleBar.bottom
+            anchors.bottom: parent.bottom
+            width: parent.width
+            visible: root.selectedTab === 1
+            Rectangle { width: 480; height: parent.height; color: "#200e0e0e"; border.color: Theme.border }
+            PlaylistPane {
+                id: demoPlaylistPane
+                objectName: "demoPlaylistPane"
+                width: 480
+                height: parent.height
+                enabled: !root.demo.disabled
+                playlists: store.state.filtered_playlists.map(playlist => ({
+                    id: playlist.id, name: playlist.name, itemCount: playlist.item_count,
+                    artworkUrl: playlist.custom_cover_revision !== null ? "qrc:/assets/logos/lazer.png" : ""
+                }))
+                activeId: root.playlistView.active_id === null ? -1 : root.playlistView.active_id
+                activeName: root.playlistView.active ? root.playlistView.active.name : ""
+                query: root.playlistView.query
+                message: root.playlistView.message
+                editorOpen: root.playlistView.editor_open
+                editorId: root.playlistView.editor_id === null ? -1 : root.playlistView.editor_id
+                editorName: root.playlistView.editor_name
+                editorArtworkUrl: store.state.playlist_cover_present
+                    || (!root.playlistView.editor_cover_reset && root.playlistView.playlists.some(playlist =>
+                        playlist.id === root.playlistView.editor_id && playlist.custom_cover_revision !== null))
+                    ? "qrc:/assets/logos/lazer.png" : ""
+                sortIndex: store.state.track_sort_index
+                tracksModel: root.playlistView.active ? root.playlistView.active.items : []
+                trackCount: root.playlistView.active ? root.playlistView.active.items.length : 0
+                onSearchEdited: query => store.send("playlistSearch", query)
+                onCreateRequested: store.send("playlistBeginCreate")
+                onEditRequested: id => store.send("playlistBeginEdit", id)
+                onSelectRequested: id => store.send("playlistSelect", id)
+                onQueueRequested: id => store.send("playlistQueue", id)
+                onDeleteRequested: id => store.send("playlistDelete", id)
+                onNameEdited: name => store.send("playlistEditorName", name)
+                onCoverRequested: store.send("playlistCoverChoose", root.playlistView.editor_epoch)
+                onCoverResetRequested: store.send("playlistCoverReset")
+                onSaveRequested: store.send("playlistEditorSave")
+                onCancelRequested: store.send("playlistEditorCancel")
+                onRefreshRequested: store.send("playlistRefresh")
+                onSortChosen: index => store.send("trackSort", index)
+                trackDelegate: PlaylistTrackCard {
+                    required property var modelData
+                    width: demoPlaylistPane.tracksList.width
+                    audioId: modelData.audio_source_id === null ? -1 : modelData.audio_source_id
+                    playlistItemId: modelData.id
+                    available: modelData.audio_source_id !== null
+                    title: modelData.title || "Unknown title"
+                    artist: modelData.artist || "Unknown artist"
+                    subtitle: artist + " | " + (modelData.difficulty_name || "Unknown difficulty") + (available ? "" : " · Unavailable")
+                    durationLabel: "--:--"
+                    artworkUrl: ""
+                    selected: root.playlistView.selected_item_id === playlistItemId
+                    onClicked: store.send("playlistItemSelect", playlistItemId)
+                    onRemoveRequested: itemId => store.send("playlistRemoveItem", itemId)
+                }
+            }
+            Column {
+                x: 520
+                y: 80
+                width: Math.max(0, parent.width - x - 40)
+                spacing: 16
+                Heading { width: parent.width; text: "Playlist presentation"; elide: Text.ElideRight }
+                Caption { width: parent.width; text: "Open Evening to compare shared-audio difficulties and an unavailable entry. Use + to test the inline editor, its cover preview and reset. Right click a track, or press Menu / Shift+F10, to remove it." }
+                AppButton { objectName: "galleryAddDifficulties"; text: "Add difficulties"; onClicked: store.send("playlistAddOpen") }
+            }
+        }
     }
     AppModal {
         id: playlistDialog
@@ -375,20 +456,16 @@ Basic.ApplicationWindow {
         id: demoPlaylistsDialog
         objectName: "demoPlaylistsDialog"
         scene: applicationScene
-        playlists: root.demo.playlists.view.playlists
-        candidates: root.demo.playlists.view.candidates.map(candidate => ({id: candidate.beatmap_id, name: candidate.name, checked: candidate.checked}))
-        adding: root.demo.playlists.view.adding
-        message: root.demo.playlists.view.message
-        targetId: root.demo.playlists.view.target_id === null ? -1 : root.demo.playlists.view.target_id
-        onCreateRequested: name => store.send("playlistCreate", name)
-        onRenameRequested: (id, name) => store.send("playlistRename", JSON.stringify({id, name}))
-        onDeleteRequested: id => store.send("playlistDelete", id)
-        onSelectRequested: id => store.send("playlistSelect", id)
+        playlists: root.playlistView.playlists
+        candidates: root.playlistView.candidates.map(candidate => ({id: candidate.beatmap_id, name: candidate.name, checked: candidate.checked}))
+        adding: root.playlistView.adding
+        message: root.playlistView.message
+        targetId: root.playlistView.target_id === null ? -1 : root.playlistView.target_id
         onTargetRequested: id => store.send("playlistTarget", id)
         onDifficultyRequested: id => store.send("playlistDifficulty", id)
         onAddRequested: store.send("playlistAdd")
         onRefreshRequested: store.send("playlistRefresh")
-        onClosed: if (root.demo.playlists.view.open) store.send("playlistClose")
+        onClosed: if (root.playlistView.open) store.send("playlistClose")
     }
     FolderSelectionModal {
         id: folderDialog

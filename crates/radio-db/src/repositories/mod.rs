@@ -1,4 +1,6 @@
 pub mod audio_source;
+pub mod audio_volume;
+pub use audio_volume::AudioVolumeRepository;
 pub mod beatmap;
 pub mod beatmap_metadata;
 pub mod beatmap_set;
@@ -18,3 +20,5 @@ pub mod queue;
 pub use queue::QueueRepository;
 pub mod playlist;
 pub use playlist::PlaylistRepository;
+pub mod listening_history;
+pub use listening_history::ListeningHistoryRepository;

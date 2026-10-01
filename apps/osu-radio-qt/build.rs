@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .qt_module("QuickControls2")
         .qt_module("Network")
         .files(["src/bridge.rs", "src/runtime.rs", "src/app_bridge.rs"])
-        .qrc_resources(["tests/AdapterProbe.qml"])
+        .qrc_resources(["tests/AdapterProbe.qml", "tests/VisualProbe.qml"])
         .qrc_resources(
             QResources::new().resource(
                 QResource::new()

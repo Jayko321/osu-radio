@@ -1,12 +1,17 @@
 use anyhow::{Context, Result};
 use radio_db::{Database, Transaction};
-use std::{collections::HashSet, error::Error, fmt};
+use std::{
+    collections::{HashMap, HashSet},
+    error::Error,
+    fmt,
+};
 
-use crate::LibraryTrack;
+use crate::{LibraryTrack, ListeningHistoryService};
 pub use radio_db::model::{PlaybackMode, QueueState};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaybackAssignment {
+    pub volume_percent: Option<u8>,
     pub current_audio_source_id: Option<i32>,
     pub current_playlist_item_id: Option<i32>,
     pub track: Option<LibraryTrack>,
@@ -25,6 +30,7 @@ pub enum PlaybackCommand {
     Stop,
     Next,
     Previous,
+    Started { playback_token: u64 },
     Finished { playback_token: u64 },
     Failed { playback_token: u64 },
 }
@@ -83,6 +89,33 @@ impl QueueService<'_> {
         self.database.queue().get().await
     }
 
+    /// Pending playable entries and their metadata from the same queue snapshot.
+    pub async fn upcoming(&self) -> Result<(QueueState, Vec<LibraryTrack>)> {
+        let transaction = self.database.begin_read().await?;
+        let state = transaction.queue().get().await?;
+        let start = state
+            .current_index
+            .map_or(0, |index| index.saturating_add(1));
+        let ids = state.audio_source_ids.get(start..).unwrap_or_default();
+        let playable = transaction.audio_sources().playable_ids(ids).await?;
+        let mut metadata = HashMap::new();
+        let mut tracks = Vec::new();
+        for id in ids {
+            if !playable.contains(id) {
+                continue;
+            }
+            let track = match metadata.entry(*id) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(track_in(&transaction, *id, None).await?)
+                }
+            };
+            tracks.push(track.clone());
+        }
+        transaction.commit().await?;
+        Ok((state, tracks))
+    }
+
     pub async fn playback(&self) -> Result<PlaybackAssignment> {
         let transaction = self.database.begin_read().await?;
         let state = transaction.queue().get().await?;
@@ -127,6 +160,7 @@ impl QueueService<'_> {
             _ => {}
         }
         let playable = transaction.audio_sources().playable_ids(&ids).await?;
+        let mut history_changed = false;
         match change {
             Change::Append(incoming) => {
                 for id in &incoming {
@@ -153,6 +187,23 @@ impl QueueService<'_> {
                     invalidate(&mut state)?;
                 }
             }
+            Change::Command(PlaybackCommand::Started { playback_token }) => {
+                if state.playback_token == playback_token
+                    && state.mode != PlaybackMode::Stopped
+                    && let Some(id) = state
+                        .current_index
+                        .and_then(|index| state.audio_source_ids.get(index))
+                    && playable.contains(id)
+                    && let Some(source) = transaction.audio_sources().get(*id).await?
+                {
+                    history_changed = ListeningHistoryService::record_started(
+                        &transaction,
+                        &source.s_type,
+                        playback_token,
+                    )
+                    .await?;
+                }
+            }
             Change::Command(command) => apply(&mut state, command, &playable)?,
             Change::Recover => {
                 if state
@@ -164,7 +215,7 @@ impl QueueService<'_> {
                 }
             }
         }
-        if state != original {
+        if state != original || history_changed {
             state.revision = state
                 .revision
                 .checked_add(1)
@@ -237,6 +288,7 @@ fn transition_mode(state: &QueueState) -> PlaybackMode {
 
 fn apply(state: &mut QueueState, command: PlaybackCommand, playable: &HashSet<i32>) -> Result<()> {
     match command {
+        PlaybackCommand::Started { .. } => {} // History is recorded in the outer queue transaction.
         PlaybackCommand::Play { audio_source_id } => play(state, audio_source_id, playable)?,
         PlaybackCommand::PauseIfCurrent { playback_token }
             if state.playback_token != playback_token => {}
@@ -357,58 +409,21 @@ async fn assignment(
         .and_then(|index| state.playlist_item_ids.get(index))
         .copied()
         .flatten();
-    let playlist_item = if let Some(id) = current_playlist_item_id {
-        transaction.playlists().item(id).await?
+    let mut track = if let Some(id) = current {
+        Some(track_in(transaction, id, current_playlist_item_id).await?)
     } else {
         None
     };
-    let track = if let Some(id) = current {
-        if let Some(item) = playlist_item {
-            Some(LibraryTrack {
-                audio_source_id: id,
-                title: item.title,
-                title_unicode: None,
-                artist: item.artist,
-                artist_unicode: None,
-                cover_beatmap_id: item.cover_beatmap_id,
-                difficulties: item
-                    .beatmap_id
-                    .zip(item.beatmap_set_id)
-                    .map(|(beatmap_id, beatmap_set_id)| crate::TrackDifficulty {
-                        beatmap_id,
-                        beatmap_set_id,
-                        difficulty_name: item.difficulty_name,
-                        set_has_multiple_audio_sources: true,
-                    })
-                    .into_iter()
-                    .collect(),
-            })
-        } else {
-            Some(
-                crate::beatmap_set::tracks::from_sets(
-                    transaction.beatmap_sets().for_audio_source(id).await?,
-                )
-                .into_iter()
-                .next()
-                .unwrap_or(LibraryTrack {
-                    audio_source_id: id,
-                    title: None,
-                    title_unicode: None,
-                    artist: None,
-                    artist_unicode: None,
-                    cover_beatmap_id: None,
-                    difficulties: Vec::new(),
-                }),
-            )
-        }
-    } else {
-        None
-    };
+    if let Some(track) = &mut track {
+        ListeningHistoryService::fill_tracks(transaction, std::slice::from_mut(track)).await?;
+        crate::AudioSettingsService::fill_tracks(transaction, std::slice::from_mut(track)).await?;
+    }
     let next = state
         .current_index
         .map_or(0, |index| index.saturating_add(1));
     let previous = state.current_index.unwrap_or(0).saturating_add(1);
     Ok(PlaybackAssignment {
+        volume_percent: track.as_ref().and_then(|track| track.volume_percent),
         current_audio_source_id: current,
         current_playlist_item_id,
         track,
@@ -425,5 +440,57 @@ async fn assignment(
             .iter()
             .take(previous)
             .any(|id| playable.contains(id)),
+    })
+}
+
+async fn track_in(
+    transaction: &Transaction,
+    id: i32,
+    playlist_item_id: Option<i32>,
+) -> Result<LibraryTrack> {
+    let playlist_item = if let Some(id) = playlist_item_id {
+        transaction.playlists().item(id).await?
+    } else {
+        None
+    };
+    Ok(if let Some(item) = playlist_item {
+        LibraryTrack {
+            audio_source_id: id,
+            last_played_at_ms: None,
+            volume_percent: None,
+            title: item.title,
+            title_unicode: None,
+            artist: item.artist,
+            artist_unicode: None,
+            cover_beatmap_id: item.cover_beatmap_id,
+            difficulties: item
+                .beatmap_id
+                .zip(item.beatmap_set_id)
+                .map(|(beatmap_id, beatmap_set_id)| crate::TrackDifficulty {
+                    beatmap_id,
+                    beatmap_set_id,
+                    difficulty_name: item.difficulty_name,
+                    set_has_multiple_audio_sources: true,
+                })
+                .into_iter()
+                .collect(),
+        }
+    } else {
+        crate::beatmap_set::tracks::from_sets(
+            transaction.beatmap_sets().for_audio_source(id).await?,
+        )
+        .into_iter()
+        .next()
+        .unwrap_or(LibraryTrack {
+            audio_source_id: id,
+            last_played_at_ms: None,
+            volume_percent: None,
+            title: None,
+            title_unicode: None,
+            artist: None,
+            artist_unicode: None,
+            cover_beatmap_id: None,
+            difficulties: Vec::new(),
+        })
     })
 }

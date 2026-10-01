@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Deterministic subprocess fixture for the real Session and HTTP adapter path."""
 import json
+import struct
+import zlib
 import os
 from pathlib import Path
 import sys
@@ -19,8 +21,52 @@ if starts == 1 and case == "fixture":
     print("fixture: first startup intentionally unsuccessful", file=sys.stderr)
     sys.exit(1)
 
-counts = {"library": 0, "folders": 0, "retry": 0}
+audio_settings = {"individual_volume_enabled": False, "global_volume_percent": 100}
+audio_volumes = {}
+volume_loads = 0
+volume_puts = 0
+if case == "volume":
+    audio_settings["global_volume_percent"] = 20
+playlists = {}
+playlist_covers = {}
+cover_puts = 0
+
+def make_png(width, height, color=(80, 100, 120), rgba=False):
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6 if rgba else 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress((b"\0" + bytes((*color, 255) if rgba else color) * width) * height)) + chunk(b"IEND", b""))
+
+if case == "playlist-covers":
+    (root / "source.png").write_bytes(make_png(800, 400))
+
+if case == "playlist-cover-preview":
+    playlists[1] = {"id": 1, "name": "With artwork", "cover_revision": 1, "items": [
+        {"id": 1, "playlist_id": 1, "source_kind": "stable", "beatmap_hash": "fixture-7",
+         "title": "Track 7", "artist": "Fixture artist", "difficulty_name": "Hard",
+         "beatmap_id": 7, "beatmap_set_id": 1, "audio_source_id": 7, "cover_beatmap_id": 7}
+    ]}
+    playlist_covers[1] = make_png(512, 512)
+
+if case == "visual-flicker":
+    playlists[1] = {"id": 1, "name": "Warm artwork", "cover_revision": 1, "items": [
+        {"id": identifier, "playlist_id": 1, "source_kind": "stable", "beatmap_hash": "same-audio-" + name,
+         "title": "Track 0001", "artist": "Fixture artist", "difficulty_name": name,
+         "beatmap_id": identifier, "beatmap_set_id": 1, "audio_source_id": 1, "cover_beatmap_id": 1}
+        for identifier, name in [(1, "Easy"), (2, "Hard")]
+    ]}
+    playlist_covers[1] = make_png(512, 512, (80, 100, 120), True)
+flicker_covers = {}
+
+def playlist_summary(identifier):
+    playlist = playlists[identifier]
+    return {"id": identifier, "name": playlist["name"], "item_count": len(playlist["items"]),
+            "cover_beatmap_id": playlist["items"][0]["cover_beatmap_id"] if playlist["items"] else None,
+            "custom_cover_revision": playlist.get("cover_revision")}
+
+counts = {"library": 0, "folders": 0, "retry": 0, "queue": 0, "playlists": 0}
 library_pending = threading.Event()
+playlist_tab_opened = threading.Event()
 saved_folders = [31, 52]
 imports = {}
 metadata_calls = {}
@@ -29,19 +75,43 @@ metadata_lock = threading.Lock()
 
 
 def folder(identifier):
-    return {"id": identifier, "kind": "lazer", "root_path": "/fixtures/" + str(identifier),
+    path = "/fixtures/" + str(identifier)
+    if case.startswith("visual"):
+        path += "/Очень длинный путь / 日本語 / " + "directory/" * 10
+    return {"id": identifier, "kind": "lazer", "root_path": path,
             "marker_path": "/fixtures/" + str(identifier) + "/client.realm",
             "label": "Stored label", "enabled": True, "last_scanned_at": None}
 
 
 def library(ids):
-    return [{"audio_source_id": i, "title": "Track " + str(i), "title_unicode": None,
+    tracks = [{"audio_source_id": i, "title": "Track " + str(i), "title_unicode": None,
              "artist": "Fixture artist", "artist_unicode": None, "cover_beatmap_id": i,
+             "volume_percent": audio_volumes.get(i),
              "difficulties": [{"beatmap_id": i, "beatmap_set_id": 1, "difficulty_name": "Hard",
                                "set_has_multiple_audio_sources": True}]} for i in ids]
+    if case == "sorting":
+        for track in tracks:
+            identifier = track["audio_source_id"]
+            track["artist"] = {7: "Zulu", 42: "Alpha", 103: "Beta"}[identifier]
+            track["last_played_at_ms"] = {7: 3000, 42: 1000, 103: None}[identifier]
+    if case == "visual-queue":
+        titles = {7: "Miku", 42: "Guitar to Kodoku to Aoi Hoshi", 103: "Bling-Bang-Bang-Born (TV Size)"}
+        artists = {7: "Anamanaguchi", 42: "kessoku band", 103: "Creepy Nuts"}
+        for track in tracks:
+            identifier = track["audio_source_id"]
+            track["title"] = titles.get(identifier, "Other song")
+            track["artist"] = artists.get(identifier, "Artist")
+    elif case == "visual-flicker":
+        for track in tracks:
+            track["title"] = "Track " + str(track["audio_source_id"]).zfill(4)
+    elif case.startswith("visual"):
+        for track in tracks:
+            track["title"] = "長い曲名 — Очень длинное название композиции " + str(track["audio_source_id"]) * 12
+            track["artist"] = "Long artist / Исполнитель / アーティスト"
+    return tracks
 
 
-queue = [7, 42, 103] if case == "queue" else []
+queue = ([1] + list(range(101, 117))) if case == "visual-flicker" else [7, 42, 103] if case in ("queue", "volume", "visual-queue") else []
 queue_index = 0
 playback_condition = threading.Condition()
 playback = {"current_audio_source_id": 7 if queue else None,
@@ -49,6 +119,8 @@ playback = {"current_audio_source_id": 7 if queue else None,
             "duration_ms": 125000 if queue else None,
             "mode": "paused" if queue else "stopped", "revision": 1 if queue else 0,
             "playback_token": 1 if queue else 0, "can_next": bool(queue), "can_previous": bool(queue)}
+if case == "visual-flicker":
+    playback.update(current_audio_source_id=1, track=library([1])[0], duration_ms=None)
 
 
 def playback_command(body):
@@ -113,6 +185,10 @@ class Handler(BaseHTTPRequestHandler):
             with (root / "playback_commands").open("a") as log:
                 log.write(json.dumps(body) + "\n")
             self.reply(200, playback_command(body))
+        elif self.path == "/api/playlists":
+            identifier = max(playlists, default=0) + 1
+            playlists[identifier] = {"id": identifier, "name": body["name"].strip(), "items": []}
+            self.reply(201, playlist_summary(identifier))
         elif self.path.endswith("/discover"):
             events = [{"event": "candidate", "kind": "lazer", "root_path": "/fixtures/31",
                        "marker_path": "/fixtures/31/client.realm", "registered_id": 31}]
@@ -164,9 +240,66 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.reply(404, {"error": "Unknown fixture operation"})
 
+    def do_PATCH(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+        if self.path == "/api/user-data/audio-settings":
+            audio_settings.update(body)
+            (root / "audio-settings.json").write_text(json.dumps(audio_settings))
+            self.reply(200, dict(audio_settings))
+        elif self.path.startswith("/api/playlists/"):
+            identifier = int(self.path.split("/")[3])
+            playlists[identifier]["name"] = body["name"].strip()
+            self.reply(200, playlist_summary(identifier))
+        else:
+            self.reply(404, {"error": "Unknown fixture operation"})
+
+    def do_PUT(self):
+        global volume_puts, cover_puts
+        if self.path.startswith("/api/playlists/") and self.path.endswith("/cover"):
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            with (root / "requests").open("a") as log:
+                log.write("PUT " + self.path + "\n")
+            cover_puts += 1
+            if cover_puts == 1:
+                (root / "source.png").unlink()
+                self.reply(500, {"error": "fixture cover upload unavailable"})
+                return
+            identifier = int(self.path.split("/")[3])
+            playlist_covers[identifier] = body
+            (root / "uploaded-cover.png").write_bytes(body)
+            playlists[identifier]["cover_revision"] = cover_puts
+            self.reply(200, playlist_summary(identifier))
+            return
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+        identifier = int(self.path.split("/")[3])
+        volume_puts += 1
+        if case == "volume" and volume_puts == 1:
+            self.reply(500, {"error": "fixture volume save unavailable"})
+            return
+        audio_volumes[identifier] = body["volume_percent"]
+        (root / "audio-volumes.json").write_text(json.dumps(audio_volumes))
+        self.send_response(204)
+        self.end_headers()
+
     def do_DELETE(self):
         with (root / "requests").open("a") as log:
             log.write("DELETE " + self.path + "\n")
+        if self.path.startswith("/api/playlists/"):
+            identifier = int(self.path.split("/")[3])
+            if self.path.endswith("/cover"):
+                playlist_covers.pop(identifier, None)
+                playlists[identifier].pop("cover_revision", None)
+            else:
+                playlists.pop(identifier, None)
+            self.send_response(204)
+            self.end_headers()
+            return
+        if self.path.endswith("/volume"):
+            audio_volumes.pop(int(self.path.split("/")[3]), None)
+            (root / "audio-volumes.json").write_text(json.dumps(audio_volumes))
+            self.send_response(204)
+            self.end_headers()
+            return
         i = int(self.path.rsplit("/", 1)[1])
         if i in saved_folders:
             saved_folders.remove(i)
@@ -174,11 +307,52 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        global volume_loads
         with (root / "requests").open("a") as log:
             log.write(self.path + "\n")
         status = 200
         content_type = "application/json"
-        if self.path == "/api/playback":
+        if self.path == "/api/playlists":
+            if case == "playlist-cover-preview":
+                counts["playlists"] += 1
+                if counts["playlists"] == 1:
+                    # ShowPlaylists sends a second list request after the tab opens.
+                    playlist_tab_opened.wait(5)
+                else:
+                    playlist_tab_opened.set()
+                    time.sleep(0.05)
+            payload = [playlist_summary(identifier) for identifier in playlists]
+        elif self.path.startswith("/api/playlists/"):
+            identifier = int(self.path.split("/")[3])
+            if self.path.endswith("/cover"):
+                if identifier in playlist_covers:
+                    payload, content_type = playlist_covers[identifier], "image/png"
+                else:
+                    status, payload = 404, {"error": "No custom cover"}
+            elif identifier in playlists:
+                if case == "visual-flicker":
+                    time.sleep(0.12)
+                payload = playlists[identifier]
+            else:
+                status, payload = 404, {"error": "Playlist missing"}
+        elif self.path == "/api/user-data/audio-settings":
+            volume_loads += 1
+            if case == "volume" and volume_loads == 1:
+                self.reply(500, {"error": "fixture volume load unavailable"})
+                return
+            payload = audio_settings
+        elif self.path == "/api/queue":
+            counts["queue"] += 1
+            if case == "queue" and counts["queue"] == 1:
+                self.reply(500, {"error": "fixture queue unavailable"})
+                return
+            with playback_condition:
+                payload = {"audio_source_ids": list(queue), "playlist_item_ids": [None] * len(queue),
+                           "current_index": queue_index if queue else None,
+                           "upcoming_tracks": library(queue[queue_index + 1:]),
+                           "mode": playback["mode"], "revision": playback["revision"],
+                           "playback_token": playback["playback_token"]}
+        elif self.path == "/api/playback":
             with playback_condition:
                 payload = dict(playback)
         elif self.path == "/api/playback/events":
@@ -210,7 +384,15 @@ class Handler(BaseHTTPRequestHandler):
             if case == "queue":
                 query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
                 payload = library([] if query == "missing" else [7, 42, 103])
-            elif case in ("playback", "folders"):
+            elif case == "visual-flicker":
+                payload = library(range(1, 81))
+            elif case.startswith("visual"):
+                query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
+                if query == "visual-error":
+                    status, payload = 500, {"message": "visual fixture error: " + "Длинное описание ошибки / 日本語 / " * 6}
+                else:
+                    payload = library([] if query == "missing" else [7, 42, 103] + list(range(200, 225)))
+            elif case in ("playback", "folders", "sorting", "volume", "playlist-covers", "playlist-cover-preview") or case.startswith("native"):
                 payload = library([7, 42, 103])
             elif case == "search":
                 query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
@@ -238,7 +420,29 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(0.3)
             status, payload = 404, {"error": "fixture audio unavailable"}
         elif self.path.endswith("/duration"):
-            payload = {"duration_ms": 125000}
+            if case == "visual-flicker":
+                identifier = int(self.path.split("/")[-2])
+                with (root / "media-events").open("a") as log:
+                    log.write(str(round(time.time() * 1000)) + " duration " + str(identifier) + "\n")
+                time.sleep(1.6 if identifier == 1 else 0.10)
+            payload = {"duration_ms": 261000 if case == "visual-queue" else 125000}
+        elif self.path.endswith("/cover") and case == "visual-flicker":
+            identifier = int(self.path.split("/")[-2])
+            with (root / "media-events").open("a") as log:
+                log.write(str(round(time.time() * 1000)) + " cover " + str(identifier) + "\n")
+            time.sleep(0.025)
+            if identifier not in flicker_covers:
+                color = (80, 100, 120) if identifier == 1 else (40 + identifier * 37 % 180, 40 + identifier * 53 % 180, 40 + identifier * 79 % 180)
+                flicker_covers[identifier] = make_png(1280, 1280, color, True)
+            payload, content_type = flicker_covers[identifier], "image/png"
+        elif self.path.endswith("/cover") and case == "visual-queue":
+            identifier = self.path.split("/")[-2]
+            path = root / ("cover-" + identifier + ".png")
+            payload = path.read_bytes() if path.exists() else make_png(512, 512)
+            content_type = "image/png"
+        elif self.path.endswith("/cover") and case.startswith("visual") and (root / "source.png").exists():
+            payload = (root / "source.png").read_bytes()
+            content_type = "image/png"
         elif self.path.endswith("/cover"):
             # Valid PPM is decoded by Qt's built-in image plugins without external fixtures.
             payload = b"P6\n2 2\n255\n" + bytes([80, 100, 120]) * 4

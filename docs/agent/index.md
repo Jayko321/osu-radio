@@ -37,7 +37,7 @@ Tokio runtime dependency. The helper is a separate .NET project.
 | `osu-radio-player` | [Local player](../../crates/osu-radio-player/src/lib.rs) | Local MP3, Ogg/Vorbis and WAV decoding/output, transport, seek and session volume; no source IDs or HTTP. |
 | `osu-radio-client` | [Public facade](../../crates/osu-radio-client/src/lib.rs), [session](../../crates/osu-radio-client/src/session.rs), [view models](../../crates/osu-radio-client/src/view_models/track.rs) | Changing reusable frontend communication, supervision or toolkit-free UI data. |
 | `osu-radio-gui-vizia` | [App state/events](../../apps/osu-radio-gui-vizia/src/app.rs), [view shell](../../apps/osu-radio-gui-vizia/src/views/mod.rs), [assets](../../apps/osu-radio-gui-vizia/src/assets.rs) | Changing desktop presentation and interactions. |
-| `osu-radio-qt` | [Rust launch/adapter](../../apps/osu-radio-qt/src/main.rs), [QML views](../../apps/osu-radio-qt/qml/Songs.qml) | Live Qt Songs/Settings and standalone component gallery; shares the client application controller with Vizia. |
+| `osu-radio-qt` | [Rust launch/adapter](../../apps/osu-radio-qt/src/main.rs), [QML views](../../apps/osu-radio-qt/qml/Songs.qml) | Live Qt Songs/Playlists/Settings tabs and standalone component gallery; shares the client application controller with Vizia. |
 
 ## Architecture
 
@@ -86,9 +86,11 @@ Tests and their limits are linked in the component guides.
 | Optional OpenAPI/Scalar build | Implemented | [Backend](backend.md); both documentation feature states need verification. |
 | Songs/settings tabs, library selection, window actions | Implemented UI bindings | [Frontend interaction table](frontend.md#implemented-interactions-and-placeholders). Source binding is not cross-platform interaction validation. |
 | Songs search | Implemented | Server substring search through the shared controller, 200 ms debounce; Settings search remains a placeholder. See [frontend](frontend.md). |
+| Track sorting and listening dates | Implemented | Shared session sort for library/search/playlists; source-keyed successful-start history. See [frontend](frontend.md#track-sorting-and-listening-dates) and [database](database.md#listening-history). |
 | Library and folder settings | Implemented | [Frontend](frontend.md); server rows, bounded artwork loading, optional durations, folder dropdown, Qt staged discovery/import/removal and Vizia native chooser registration. Selection is presentation only. |
-| Server playback queue, transport, seeking and volume | Implemented | [Database](database.md), [backend](backend.md), [frontend](frontend.md); persisted queue and token-bound assignments, client downloads and plays locally. Seek and volume remain local. |
-| User playlists of individual difficulties | Implemented | [Storage and service](database.md#user-playlists), [HTTP](backend.md#database-backed-http-contracts), [Qt/client](frontend.md#user-playlists); stable source keys, unavailable entries and queue launch snapshots. Collection import remains deferred. |
+| Server playback queue, transport, seeking and volume | Implemented | [Database](database.md), [backend](backend.md), [frontend](frontend.md); persisted queue and token-bound assignments, client downloads and plays locally. Seeking and audio output remain local; volume preferences are persisted. |
+| Individual track volume | Implemented | Absolute source-keyed overrides, retained mode/global settings, pre-play assignment volume and Qt controls; see [frontend](frontend.md#individual-track-volume) and [database](database.md#audio-volume-settings). |
+| User playlists of individual difficulties | Implemented | [Storage and service](database.md#user-playlists), [HTTP](backend.md#database-backed-http-contracts), [Qt/client](frontend.md#user-playlists); stable source keys, unavailable entries, separate Qt tab, persisted custom covers and queue launch snapshots. Collection import remains deferred. |
 | Qt Songs, Settings and component gallery | Connected client; offline gallery | [Qt frontend](frontend.md#qt-frontend); shared session/controller, playback, library/media and staged folder selection/import/removal. |
 | Local audio playback | Implemented in source | Explicit Play; deterministic engine/HTTP tests do not establish physical output or Windows behavior. |
 | Hosted sources | Future direction | Provider, protocol and hosting remain undecided. |
@@ -110,9 +112,8 @@ needs a local installation.
 The shared services coordinate concrete repositories, installation-owned
 snapshots and shared immutable metadata. Read [database](database.md),
 [backend](backend.md) and the [API skill](../../.agents/skills/osu-radio-api/SKILL.md)
-for those contracts. Hosting, providers, mobile implementation, output-device selection and persisted
-volume remain open. One shared server queue and automatic advance are implemented;
-queue-list UI, shuffle and repeat remain deferred.
+for those contracts. Hosting, providers, mobile implementation and output-device selection remain open. One shared server queue and automatic advance are implemented;
+Qt's pending-queue panel is implemented; shuffle and repeat remain deferred.
 
 ## Evidence and maintenance
 

@@ -60,6 +60,7 @@ async fn http_queue_validates_atomically_and_translates_every_command() {
     assert_eq!(empty["audio_source_ids"], json!([]));
     assert_eq!(empty["current_index"], Value::Null);
     assert_eq!(empty["mode"], "stopped");
+    assert_eq!(empty["upcoming_tracks"], json!([]));
     let (status, first) = request(
         &state,
         "POST",
@@ -77,6 +78,11 @@ async fn http_queue_validates_atomically_and_translates_every_command() {
     assert_eq!(first["can_next"], true);
     let token = first["playback_token"].as_u64().unwrap();
     let (_, before) = request(&state, "GET", "/api/queue", Value::Null).await;
+    assert_eq!(before["upcoming_tracks"][0]["audio_source_id"], b);
+    assert_eq!(
+        before["upcoming_tracks"][0]["title"],
+        tracks[1].title.as_ref().unwrap().as_str()
+    );
     let online = state
         .services()
         .audio_sources()
@@ -117,6 +123,8 @@ async fn http_queue_validates_atomically_and_translates_every_command() {
     let (_, queue) = request(&state, "GET", "/api/queue", Value::Null).await;
     assert_eq!(queue["audio_source_ids"], json!([a, x, b]));
     assert_eq!(queue["current_index"], 1);
+    assert_eq!(queue["upcoming_tracks"].as_array().unwrap().len(), 1);
+    assert_eq!(queue["upcoming_tracks"][0]["audio_source_id"], b);
     let token = immediate["playback_token"].as_u64().unwrap();
     let finished =
         command_request(&state, json!({"command":"finished","playback_token":token})).await;
@@ -209,6 +217,64 @@ async fn assignment_frame(body: &mut Body) -> Value {
     let bytes = frame.into_data().unwrap();
     assert!(bytes.ends_with(b"\n"));
     serde_json::from_slice(&bytes).unwrap()
+}
+
+#[tokio::test]
+async fn started_publishes_date_without_relaunching_and_updates_library_and_playlist() {
+    let state = state_with(&[beatmap_set(1, "/history.mp3")]).await;
+    let (_, tracks) = request(&state, "GET", "/api/tracks", Value::Null).await;
+    let audio = tracks[0]["audio_source_id"].as_i64().unwrap();
+    assert_eq!(tracks[0]["last_played_at_ms"], Value::Null);
+    let beatmap = tracks[0]["difficulties"][0]["beatmap_id"].as_i64().unwrap();
+    let (_, playlist) = request(&state, "POST", "/api/playlists", json!({"name":"Listened"})).await;
+    let playlist_id = playlist["id"].as_i64().unwrap();
+    let path = format!("/api/playlists/{playlist_id}");
+    request(
+        &state,
+        "POST",
+        &format!("{path}/items"),
+        json!({"beatmap_ids":[beatmap]}),
+    )
+    .await;
+    let (_, launch) = request(&state, "POST", &format!("{path}/play"), json!({})).await;
+    assert_eq!(launch["track"]["last_played_at_ms"], Value::Null);
+    let paused = command_request(&state, json!({"command":"pause"})).await;
+    let mut stream = events(State(state.clone())).await.unwrap().into_body();
+    assert_eq!(assignment_frame(&mut stream).await, paused);
+    let started = json!({"command":"started","playback_token":launch["playback_token"]});
+    let accounted = command_request(&state, started.clone()).await;
+    assert_eq!(accounted["mode"], "paused");
+    assert_eq!(accounted["playback_token"], launch["playback_token"]);
+    assert_eq!(
+        accounted["revision"].as_u64().unwrap(),
+        paused["revision"].as_u64().unwrap() + 1
+    );
+    let date = &accounted["track"]["last_played_at_ms"];
+    assert!(date.as_i64().unwrap() > 0);
+    assert_eq!(assignment_frame(&mut stream).await, accounted);
+    assert_eq!(command_request(&state, started).await, accounted);
+    let (_, tracks) = request(&state, "GET", "/api/tracks?q=song", Value::Null).await;
+    assert_eq!(tracks[0]["audio_source_id"], audio);
+    assert_eq!(&tracks[0]["last_played_at_ms"], date);
+    let (_, playlist) = request(&state, "GET", &path, Value::Null).await;
+    assert_eq!(&playlist["items"][0]["last_played_at_ms"], date);
+    let stopped = command_request(&state, json!({"command":"stop"})).await;
+    assert_eq!(
+        command_request(
+            &state,
+            json!({"command":"started","playback_token":stopped["playback_token"]})
+        )
+        .await,
+        stopped
+    );
+    let (status, _) = request(
+        &state,
+        "POST",
+        "/api/playback/commands",
+        json!({"command":"started"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
 
 #[tokio::test]
@@ -331,4 +397,10 @@ async fn playback_routes_and_tagged_commands_are_documented() {
     let schema = &document["components"]["schemas"]["CommandRequest"];
     assert!(schema.to_string().contains("playback_token"));
     assert!(schema.to_string().contains("previous"));
+    assert!(schema.to_string().contains("started"));
+    assert!(
+        document["components"]["schemas"]["TrackResponse"]["properties"]["last_played_at_ms"]
+            .is_object()
+    );
+    assert!(document["components"]["schemas"]["PlaylistItemResponse"]["properties"]["last_played_at_ms"].is_object());
 }

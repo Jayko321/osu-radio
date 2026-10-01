@@ -1,8 +1,9 @@
 //! Bundled, in-memory demonstration state. No session, persistence, media I/O or toolkit.
 //!
-//! The order of the four samples is stable so frontends can associate their own artwork.
+//! Sample IDs are stable so frontends can associate their own artwork after sorting.
 //! Durations are demonstration values; selecting a song does not start playback.
 
+use crate::controller::TrackSort;
 use serde::Serialize;
 mod playlists;
 pub use playlists::MockPlaylists;
@@ -14,11 +15,13 @@ pub struct MockTrack {
     pub artist: String,
     pub subtitle: String,
     pub duration_seconds: u32,
+    pub last_played_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MockState {
     pub tracks: Vec<MockTrack>,
+    pub track_sort: TrackSort,
     pub selected: usize,
     pub search: String,
     pub gallery: GalleryState,
@@ -93,6 +96,7 @@ pub enum Action {
     FolderBrowse,
     FolderApply,
     SelectTrack(usize),
+    SetTrackSort(TrackSort),
     Search(String),
     GalleryDisabled(bool),
     Press,
@@ -110,7 +114,7 @@ pub enum Action {
 
 impl Default for MockState {
     fn default() -> Self {
-        Self {
+        let mut state = Self {
             tracks: [
                 (1, "Karakara", "Kessoku Band", "結束バンド", 265),
                 (2, "Alice", "FELT", "Bundled sample", 238),
@@ -125,13 +129,22 @@ impl Default for MockState {
                     artist: artist.into(),
                     subtitle: subtitle.into(),
                     duration_seconds,
+                    last_played_at_ms: match id {
+                        1 | 4 => Some(2_000),
+                        3 => Some(3_000),
+                        _ => None,
+                    },
                 },
             )
             .collect(),
             selected: 0,
+            track_sort: TrackSort::default(),
             search: String::new(),
             gallery: GalleryState::default(),
-        }
+        };
+        state.sort_tracks();
+        state.selected = 0;
+        state
     }
 }
 
@@ -200,6 +213,23 @@ impl GalleryState {
 }
 
 impl MockState {
+    fn sort_tracks(&mut self) {
+        let selected = self.tracks.get(self.selected).map(|track| track.id);
+        self.tracks.sort_by_cached_key(|track| {
+            self.track_sort.key(
+                &track.title,
+                &track.artist,
+                track.last_played_at_ms,
+                i64::from(track.id),
+            )
+        });
+        self.selected = self
+            .tracks
+            .iter()
+            .position(|track| Some(track.id) == selected)
+            .unwrap_or(0);
+        self.gallery.playlists.set_track_sort(self.track_sort);
+    }
     /// Applies an action and reports whether an observer needs a new snapshot.
     ///
     /// Invalid selections, unchanged values and disabled gallery actions are no-ops.
@@ -209,6 +239,13 @@ impl MockState {
         match action {
             Action::SelectTrack(index) => {
                 index < self.tracks.len() && replace(&mut self.selected, index)
+            }
+            Action::SetTrackSort(sort) => {
+                if !replace(&mut self.track_sort, sort) {
+                    return false;
+                }
+                self.sort_tracks();
+                true
             }
             Action::Search(value) => replace(&mut self.search, value),
             Action::GalleryDisabled(value) => replace(&mut self.gallery.disabled, value),
@@ -313,13 +350,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn demo_sorts_all_modes_by_stable_id_and_preserves_selected_song() {
+        let mut state = MockState::default();
+        assert_eq!(
+            state
+                .tracks
+                .iter()
+                .map(|track| track.id)
+                .collect::<Vec<_>>(),
+            [2, 4, 1, 3]
+        );
+        state.apply(Action::SelectTrack(2));
+        for (sort, expected) in [
+            (TrackSort::ArtistAsc, vec![4, 3, 2, 1]),
+            (TrackSort::RecentlyPlayed, vec![3, 4, 1, 2]),
+            (TrackSort::TitleAsc, vec![2, 4, 1, 3]),
+        ] {
+            assert!(state.apply(Action::SetTrackSort(sort)));
+            assert_eq!(
+                state
+                    .tracks
+                    .iter()
+                    .map(|track| track.id)
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(state.tracks.get(state.selected).unwrap().id, 1);
+            assert_eq!(
+                state.tracks.get(state.selected).unwrap().duration_seconds,
+                265
+            );
+            assert!(!state.apply(Action::SetTrackSort(sort)));
+        }
+    }
+
+    #[test]
     fn selection_starts_at_first_sample_and_ignores_invalid_or_repeated_indices() {
         let mut state = MockState::default();
         assert_eq!(state.tracks.len(), 4);
         assert_eq!(state.selected, 0);
-        assert_eq!(state.tracks.first().unwrap().title, "Karakara");
+        assert_eq!(state.tracks.first().unwrap().title, "Alice");
         assert!(!state.apply(Action::SelectTrack(0)));
-        assert!(state.apply(Action::SelectTrack(2)));
+        assert!(state.apply(Action::SelectTrack(3)));
         assert_eq!(
             state.tracks.get(state.selected).unwrap().title,
             "Rabbit Hole"
@@ -329,7 +401,7 @@ mod tests {
             161
         );
         let selected = state.clone();
-        for index in [2, state.tracks.len(), usize::MAX] {
+        for index in [3, state.tracks.len(), usize::MAX] {
             assert!(!state.apply(Action::SelectTrack(index)));
             assert_eq!(state, selected);
         }

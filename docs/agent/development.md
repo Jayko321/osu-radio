@@ -117,6 +117,7 @@ playback.
 | C# helper source | `dotnet build tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj --configuration Release --nologo` | Compiles the producer; no automated C# test project currently exists. Follow the [scanner skill](../../.agents/skills/osu-radio-scanner/SKILL.md) for contract checks. |
 | CLI wiring | `cargo test -p osu-radio-cli --locked` and `cargo clippy -p osu-radio-cli --all-targets --locked` | Argument tests reject removed `store --count` and retain `--clear`; memory SQLite connection check. No real source import. |
 | Local audio engine | `cargo test -p osu-radio-player --locked` | MP3 CBR/VBR, Ogg/Vorbis and WAV decoding/seek with controlled mixer consumption; no physical device. |
+| Persisted individual/global volume | Repository/service checks on SQLite/PostgreSQL, both server router variants, client mock off/on and Qt offscreen/lint | Verify defaults, upgrade/reimport, shared audio, A/B selection, debounce/retry/stale replies, volume before play and shutdown flush. Physical output and Linux/Windows slider checks remain manual. |
 | Persisted playback queue and assignment protocol | Repository/service tests on each backend, server tests with and without `docs`, client tests with and without `mock`, Qt tests and QML lint below | Use disposable databases; verify recovery, duplicates, stale callbacks/downloads, reconnect and current metadata outside search. Physical output and Windows remain separate. |
 | Client formatting, state, readiness parsing | `cargo test -p osu-radio-client --lib --locked` | [Client tests](../../crates/osu-radio-client/src/lib.rs), [Track tests](../../crates/osu-radio-client/src/view_models/track.rs), [readiness tests](../../crates/osu-radio-client/src/server.rs) and controller tests; process fixtures are isolated. |
 | GUI code and embedded stylesheet paths | `cargo check -p osu-radio-gui-vizia --release --locked` | Release `include_style!` resolves stylesheet paths at compile time. Debug can defer missing paths to runtime. |
@@ -365,7 +366,7 @@ turning this recommended-command matrix into a stale record of passing checks.
 ## Qt frontend
 
 Prerequisites: Qt **6.8+** development libraries/tools (Core, Gui, Qml, Quick,
-QuickControls2, Network), QML Basic Controls, Layouts and Effects modules, SVG/image
+QuickControls2, Network), QML Basic Controls, Layouts, Effects and Dialogs modules, SVG/image
 plugins, a compatible C++ compiler, and Rust. CXX-Qt 0.10 finds Qt through `qmake`;
 set `QMAKE=/path/to/qmake6` if multiple installations exist. The runtime must also
 be able to locate Qt libraries and plugins. QML/fonts/icons/covers are embedded,
@@ -399,7 +400,29 @@ independent list errors, media notifications, ID selections, shrinking/empty
 refreshes and child cleanup. Gallery mode uses no backend. The bundled
 [test probe](../../apps/osu-radio-qt/tests/AdapterProbe.qml) exits only after
 explicit assertions complete, with a native watchdog and outer process timeout.
+Settings checks activate its navigation tab, return through Songs and Playlists,
+retain the selected track and independent queries, and exercise the existing audio
+and folder retry controls. The gallery checks that Settings remains disabled.
+The [media controller tests](../../crates/osu-radio-client/src/controller.rs)
+cover replacement of visible demand, canceled HTTP, selected/queue demand,
+independent cover and duration completion, stale/repeated acknowledgments and
+shutdown. The [artwork continuity probe](../../apps/osu-radio-qt/tests/VisualProbe.qml)
+uses the `visual-flicker` fixture: a slow selected duration, duplicate playlist
+items, warmed navigation, rapid scrolling and more than 64 MiB of visible 1280px
+RGBA images. It checks actual `Image.Ready` states, player/background URL
+continuity and unchanged queue delegates. The
+[smoke test](../../apps/osu-radio-qt/tests/launch_smoke.rs) also rejects repeated
+selected-cover/duration requests and stationary cache-refill loops. Native
+[cache/model checks](../../apps/osu-radio-qt/src/native_tests.h) verify the byte
+budget, protected cover, installation versions and stale epochs separately.
 `OSU_RADIO_QT_SMOKE_TEST=1` is an internal test hook; do not set it interactively.
+Test roots stay hidden until the probe configures their screen and geometry.
+`OSU_RADIO_QT_PROBE_SCREEN`, `OSU_RADIO_QT_PROBE_WIDTH` and
+`OSU_RADIO_QT_PROBE_HEIGHT` affect only this test launch. Screen-targeted desktop
+probes require `QT_QPA_PLATFORM=xcb`: Wayland leaves window placement to the
+compositor. The probe checks the actual screen/geometry after showing the window.
+Probe steps restart their timer after input completes; QtTest input may process
+events, so a repeating poll could reenter an unfinished keyboard step.
 Help/error paths run with an invalid platform plugin to verify no GUI initialization.
 The Unix fixture requires Python 3; keyboard/backdrop probes also require the QtTest QML module. For real SQLite backend coverage:
 
@@ -423,12 +446,67 @@ source tree in a temporary import directory, then lints every app/probe QML file
 It requires Bash, Python 3 and ripgrep. Generated QObject type information is
 necessary for `Store.qml`; linting only source paths cannot resolve `MockBridge`.
 
+Queue-panel verification executed on Linux on 2026-10-01: SQLite and disposable
+PostgreSQL service contracts passed, including ordered/duplicate pending entries,
+empty/exhausted queues and deleted/Online source filtering. Server tests passed
+with `docs` on/off (37/32; one benchmark ignored each). Client tests passed with
+`mock` off/on (78/87; two benchmarks ignored each). Qt passed 18 ordinary tests
+(two disposable real-backend probes remained ignored); the queue probe checks
+retry, metadata/media outside search, live Next, long-list scrolling, empty state,
+Escape/close/outside dismissal and focus restoration. Debug server/Qt builds,
+scoped all-target Clippy with Rust warnings denied, Vizia compatibility, formatting
+and generated-import QML lint passed. Queue visual probes passed at 1440×952 and
+1024×640 through offscreen software and a separate xcb/OpenGL llvmpipe window.
+Only native rendering establishes artwork/mask appearance; software rendering
+omits shader effects. Visual data was synthetic; physical audio and Windows
+remain unverified.
+
+After moving the queue button into the title bar immediately before the window
+controls, all 18 ordinary Qt tests and generated-import QML lint passed again.
+The queue probe checks that placement and opens the panel with a mouse click.
+
+Artwork continuity verification executed on Linux on 2026-10-01 UTC: client
+tests passed with `mock` off/on (88/97; two benchmarks ignored each), and all
+19 ordinary Qt tests passed (two real-backend probes ignored). Fixture suites
+were run with `-- --test-threads=1`: parallel runs had intermittent process
+fixture failures and probe timing failures. The final split native helper was
+also rerun successfully. Locked Qt build, scoped all-target Clippy with Rust
+warnings denied, Vizia release compatibility, formatting, generated-import QML
+lint and local guide links passed. Separate xcb/OpenGL windows used the AMD
+Radeon RX 6750 XT at 1440×952 and 1024×640. Each captured ten navigation frames
+with identical player-artwork pixels and identical pixels in a sampled backdrop
+region. Both probes kept 21 distinct 1280px RGBA covers visibly ready under
+cache pressure; the stationary checkpoints produced no additional media HTTP
+requests. Selected artwork preceded the delayed duration, and navigation fetched
+the selected cover/duration once. These are synthetic Linux checks; the user's
+real library, physical audio and Windows remain separate validation.
+
 The user performs desktop visual/input checks: the existing gallery matrix above
 applies to Qt too, with 1024×640 through 2560×1440 and 100/150/200% scaling.
 Check crop/cover changes, typography, blur, scrolling, keyboard navigation,
 menu and modal focus restoration/trapping, disabled controls and native window
 move/resize/minimize/maximize/close. The automated software smoke tests cannot
 establish these results, physical playback or Windows compatibility.
+
+For an explicitly authorized visual audit, the [window-local visual probe](../../apps/osu-radio-qt/tests/VisualProbe.qml) can
+save Songs/Settings/player, playlist/editor/menu/modal and gallery screenshots:
+
+```sh
+python3 apps/osu-radio-qt/scripts/visual-audit.py /tmp/osu-radio-visual
+# Use the confirmed output name and sizes/scales that fit that physical screen.
+python3 apps/osu-radio-qt/scripts/visual-audit.py /tmp/osu-radio-gpu --platform xcb --screen DP-2 --sizes 1024x640 --scales 1 1.5 2
+python3 apps/osu-radio-qt/scripts/visual-audit.py /tmp/osu-radio-flicker --case visual-flicker --platform xcb --screen DP-2 --sizes 1024x640 1440x952 --scales 1
+```
+
+The default runs four logical sizes (1024x640, 1440x952, 1920x1080, 2560x1440)
+at 100/150/200%, with isolated fixture processes, temporary working directories
+and no workspace database. The fixture returns an audio error before decoding
+or opening an output device. Screenshots and `results.json` accompany each log.
+The script injects input only into its Qt windows and does not move the desktop
+cursor. GPU runs remain necessary to inspect blur, shadows and rounded masks;
+the offscreen software renderer cannot establish those effects. Native window
+operations and cover-picker cancellation have a separate internal `native` probe;
+the folder chooser, physical drag/resize and Windows require separate checks.
 
 ## Audio playback verification
 
@@ -522,7 +600,7 @@ two difficulties sharing audio and explicitly play each, check Pause/Resume and
 Next/Previous, remove/reimport a folder and restart the application. Repeat on
 Windows and check actual audio output. Offscreen software rendering and isolated
 backend checks do not establish these platform/device results. Collection import,
-manual reordering, descriptions, playlist covers and collection synchronization
+manual reordering, descriptions and collection synchronization
 remain deferred.
 
 Executed on Linux on 2026-10-01 for user playlists: SQLite repository/service
@@ -538,6 +616,73 @@ generated-import QML lint, formatting and affected guide links passed. Native
 Qt headers still emit their existing C++ compiler warning. Loopback/process
 checks ran outside the restricted sandbox; physical audio, desktop input/GPU
 rendering and Windows were not exercised.
+
+The separate Playlists tab and covers add the `playlist-covers` fixture probe
+in [launch_smoke.rs](../../apps/osu-radio-qt/tests/launch_smoke.rs). It checks the
+inline editor's create-success/upload-failure retry against the same ID, retains
+prepared bytes after the source file is deleted, cancels/stales picker results,
+loads a saved custom cover and resets it. The real-backend playlist probe checks
+tab restoration, independent search, counts, editing and keyboard context removal.
+Native [image checks](../../apps/osu-radio-qt/src/native_tests.h) exercise center
+crop, JPEG EXIF orientation, invalid/oversized input and separate cache versions.
+
+Manual acceptance also covers native image choice, replacing/resetting covers,
+application restart after deleting the source image, keyboard traversal and
+1024×640 through 2560×1440 at 100/150/200% scaling. Compare the gallery's list
+and detail screens with the supplied designs; offscreen software checks establish
+neither desktop/GPU rendering nor Windows behavior.
+
+Executed on Linux on 2026-10-01 for the separate Playlists tab and covers:
+SQLite repository/service suites passed (5/12), PostgreSQL suites passed (4/1)
+on two fresh disposable databases, and both HTTP configurations passed
+(37 with docs, 32 without; serialization benchmarks ignored). Client suites
+passed without/with `mock` (76/85; two benchmarks ignored each). Qt passed all
+18 tests including both real-backend probes, the image/EXIF/cache checks,
+offline gallery and create/upload retry after source-file deletion. The final
+read-only review found no remaining confirmed issue. SQLite/PostgreSQL and Qt
+all-target Clippy with warnings denied, Vizia compatibility, formatting,
+generated-import `qmllint` and 342 local guide paths passed. Two offscreen
+gallery screenshots were inspected for list/detail geometry; the original
+reference images were not supplied in this context, so exact comparison was
+not performed. Desktop input, native picker appearance, GPU effects, scaling,
+physical audio and Windows remain unverified. Qt's existing C++ header warning
+still appears during compilation.
+
+## Sorting and listening-history verification
+
+Use the repository/backend and Qt matrices above: SQLite and fresh disposable
+PostgreSQL separately, server `docs` on/off, client `mock` on/off, Qt offscreen
+and disposable real-backend probes, Vizia compatibility, scoped Clippy, QML lint,
+formatting and guide-link checks. The
+[repository history checks](../../crates/radio-db/src/tests/listening_history.rs)
+cover a populated upgrade, source identity, rollback, batched reads and reset;
+[service history checks](../../crates/radio-services/src/tests/listening_history.rs)
+cover durable dates, source removal/return, queue clear and token acknowledgements.
+[Client sorting checks](../../crates/osu-radio-client/src/controller/sorting/tests.rs)
+cover display keys, late responses and media-preserving reorder; worker and queue
+tests cover successful start, failures and callback retries. Qt model and QML
+probes exercise item identity, cache retention and menu keyboard controls.
+
+Physical sound, desktop input/rendering and Windows remain manual checks. Play
+from the library, a search and a sorted playlist; check recent ordering after
+start, pause/resume, Stop/Play, automatic advance, duplicate audio difficulties
+and application restart. Verify that sorting changes display order while playlist
+playback follows saved order, then remove/reimport a folder and check its dates.
+
+Executed on Linux on 2026-10-01 for sorting and listening history: SQLite
+repository/service suites passed (5/12), and PostgreSQL suites passed (4/1) on
+separate fresh disposable databases. Server suites passed with `docs` on/off
+(34/30), and client suites passed with `mock` off/on (62/70); existing timing
+benchmarks remained ignored. Qt passed 14 ordinary tests and both disposable
+actual-server probes; the final native model regression was repeated after lint
+fixes. CLI passed its two tests, Vizia compatibility compiled, and server/Qt
+debug builds passed. Scoped all-target Clippy with Rust warnings denied passed
+for SQLite and both PostgreSQL router configurations. Generated-import QML lint,
+workspace formatting, whitespace and 324 local guide links/anchors passed.
+An independent read-only review found no actionable issues. Loopback/process
+checks ran outside the restricted sandbox; native Qt headers retain their existing
+C++ compiler warning. Physical audio, desktop input/rendering and Windows were
+not exercised.
 
 ## Qt folder modal verification
 
@@ -571,3 +716,19 @@ containment, focus restoration, Escape and backdrop dismissal, row states and
 does not verify live GPU blur, native picker/browser behavior, actual Lazer Realm
 reading, Windows interaction or PostgreSQL execution. Existing benchmark tests
 remained ignored.
+
+## Qt Settings tab verification
+
+Executed on Linux on 2026-10-01: `cargo test -p osu-radio-qt --locked` passed
+18 tests; the two opt-in real-backend tests remained ignored. Generated-import
+QML lint and whitespace checks passed. Loopback fixtures required execution
+outside the restricted sandbox. The existing visual-audit script passed live
+fixture and offline gallery checks at 1440×952 and 1024×640, at scale 1.
+Settings screenshots were inspected, including wrapped folder options and a long
+audio status; the probe checks vertical scrolling, Tab traversal into the folder
+menu and Escape focus restoration. These checks use software rendering and
+temporary fixtures; desktop/GPU interaction and Windows remain unverified.
+Figma metadata was available, but its Starter tool limit blocked the source
+screenshot and asset export. Exact visual comparison and exported-icon equality
+were therefore not verified; icon origins are recorded in
+[asset sources](../../apps/osu-radio-qt/assets/SOURCES.md).

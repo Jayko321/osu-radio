@@ -10,6 +10,8 @@ use serde::Serialize;
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
 pub(crate) struct TrackResponse {
     pub audio_source_id: i32,
+    pub last_played_at_ms: Option<i64>,
+    pub volume_percent: Option<u8>,
     pub title: Option<String>,
     pub title_unicode: Option<String>,
     pub artist: Option<String>,
@@ -31,6 +33,8 @@ impl From<radio_services::LibraryTrack> for TrackResponse {
     fn from(track: radio_services::LibraryTrack) -> Self {
         Self {
             audio_source_id: track.audio_source_id,
+            last_played_at_ms: track.last_played_at_ms,
+            volume_percent: track.volume_percent,
             title: track.title,
             title_unicode: track.title_unicode,
             artist: track.artist,
