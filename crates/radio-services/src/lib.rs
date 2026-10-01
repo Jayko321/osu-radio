@@ -15,7 +15,9 @@ mod beatmap_set;
 mod folder_selection;
 mod osu_installation;
 pub use folder_selection::{DiscoveryDepth, DiscoveryOptions, FolderCandidate, FolderDiscovery};
+mod playlist;
 mod queue;
+pub use playlist::{Playlist, PlaylistError, PlaylistItem, PlaylistService, PlaylistSummary};
 mod tag;
 mod user_data;
 pub use queue::{
@@ -65,6 +67,12 @@ impl Services {
     #[must_use]
     pub const fn queue(&self) -> QueueService<'_> {
         QueueService {
+            database: &self.database,
+        }
+    }
+    #[must_use]
+    pub const fn playlists(&self) -> PlaylistService<'_> {
+        PlaylistService {
             database: &self.database,
         }
     }

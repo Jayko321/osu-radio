@@ -139,8 +139,45 @@ QtObject {
             break;
         case 16:
             if (folderDialog.visible) return;
+            findChild(window.contentItem, "demoOpenPlaylists").forceActiveFocus();
+            mock.dispatch("playlistOpen", "");
+            stage = 17;
+            break;
+        case 17: {
+            const playlists = findChild(window.contentItem, "demoPlaylistsDialog");
+            if (!playlists.opened) return;
+            check(contained(playlists.contentItem, window.activeFocusItem), "playlist manager focus");
+            const view = JSON.parse(mock.stateJson).gallery.playlists.view;
+            check(view.active.items.length === 3 && view.active.items[0].audio_source_id === view.active.items[1].audio_source_id, "separate demo difficulties share audio");
+            check(view.active.items[2].audio_source_id === null, "demo unavailable membership");
+            playlists.createRequested(" New ");
+            check(JSON.parse(mock.stateJson).gallery.playlists.view.playlists.length === 2, "offline create through modal");
+            playlists.close();
+            stage = 18;
+            break;
+        }
+        case 18: {
+            const playlists = findChild(window.contentItem, "demoPlaylistsDialog");
+            if (playlists.visible) return;
+            mock.dispatch("playlistAddOpen", "");
+            stage = 19;
+            break;
+        }
+        case 19: {
+            const playlists = findChild(window.contentItem, "demoPlaylistsDialog");
+            if (!playlists.opened || !playlists.adding) return;
+            check(playlists.candidates.length === 2, "add modal shows concrete difficulties");
+            playlists.difficultyRequested(1);
+            check(!playlists.candidates[0].checked && playlists.candidates[1].checked, "difficulty checkbox selection");
+            playlists.addRequested();
+            mock.dispatch("playlistSelect", "2");
+            const view = JSON.parse(mock.stateJson).gallery.playlists.view;
+            check(view.active.items.length === 1 && view.active.items[0].difficulty_name === "Hard", "only selected difficulty is added");
+            mock.dispatch("playlistRemoveItem", "2");
+            check(JSON.parse(mock.stateJson).gallery.playlists.view.active.items.length === 0, "remove separate demo item");
             finish();
             break;
+        }
         }
     }
     function folderProbe(): void {
@@ -325,6 +362,106 @@ QtObject {
             finish(); break;
         }
     }
+    function playlistsProbe(): void {
+        if (!bridge.connected || bridge.libraryLoading || bridge.foldersLoading || bridge.playlistBusy || bridge.playlistLoading) return;
+        const dialog = findChild(window.contentItem, "playlistsDialog");
+        switch (stage) {
+        case 0:
+            if (bridge.playlists.length !== 1 || bridge.trackCount !== 1) return;
+            findChild(window.contentItem, "playlistsButton").clicked();
+            stage = 1;
+            break;
+        case 1:
+            if (!dialog.opened) return;
+            check(contained(dialog.contentItem, window.activeFocusItem), "live playlist modal focus");
+            dialog.selectRequested(1);
+            stage = 2;
+            break;
+        case 2:
+            if (bridge.activePlaylistId !== 1 || bridge.trackCount !== 1 || bridge.playlistMessage.length > 0) return;
+            check(bridge.selectedSubtitle.includes("Недоступно") && !bridge.selectedAvailable, "missing entry remains selectable and unavailable");
+            check(!findChild(window.contentItem, "playPauseButton").enabled, "unavailable playlist entry cannot play");
+            bridge.selectPlaylist(-1);
+            bridge.openPlaylists();
+            stage = 3;
+            break;
+        case 3:
+            if (!dialog.opened || bridge.activePlaylistId >= 0) return;
+            dialog.createRequested(" New playlist ");
+            stage = 4;
+            break;
+        case 4:
+            if (bridge.playlists.length !== 2) return;
+            check(bridge.playlists[1].name === "New playlist", "live creation trims name");
+            bridge.closePlaylists();
+            findChild(window.contentItem, "addToPlaylistButton").clicked();
+            stage = 5;
+            break;
+        case 5:
+            if (!dialog.opened || !bridge.playlistAdding) return;
+            check(bridge.playlistCandidates.length === 2, "selected song exposes every concrete difficulty");
+            bridge.choosePlaylistTarget(2);
+            bridge.togglePlaylistDifficulty(2);
+            bridge.addPlaylistItems();
+            stage = 6;
+            break;
+        case 6:
+            if (bridge.playlistOpen) return;
+            bridge.searchLibrary("no-song-matches-playlists");
+            stage = 61;
+            break;
+        case 61:
+            if (bridge.trackCount !== 0 || bridge.libraryLoading) return;
+            bridge.selectPlaylist(2);
+            stage = 7;
+            break;
+        case 7:
+            if (bridge.activePlaylistId !== 2 || bridge.trackCount !== 1 || bridge.playlistMessage.length > 0) return;
+            check(bridge.selectedSubtitle.includes("Easy"), "chosen difficulty displayed separately");
+            bridge.openPlaylistAdd();
+            stage = 8;
+            break;
+        case 8:
+            if (!dialog.opened || !bridge.playlistAdding || bridge.playlistCandidates.length !== 2) return;
+            check(bridge.playlistCandidates.length === 2, "adding from a playlist outside search reloads all song difficulties");
+            bridge.choosePlaylistTarget(2);
+            bridge.addPlaylistItems();
+            stage = 9;
+            break;
+        case 9:
+            if (bridge.playlistOpen || bridge.trackCount !== 2 || bridge.playlistMessage.length > 0) return;
+            bridge.openPlaylists();
+            stage = 10;
+            break;
+        case 10:
+            if (!dialog.opened) return;
+            bridge.renamePlaylist(2, " Renamed ");
+            stage = 11;
+            break;
+        case 11:
+            if (bridge.activePlaylistName !== "Renamed") return;
+            bridge.closePlaylists();
+            bridge.removePlaylistItem(bridge.selectedPlaylistItemId);
+            stage = 12;
+            break;
+        case 12:
+            if (bridge.trackCount !== 1 || bridge.playlistMessage.length > 0) return;
+            check(bridge.selectedSubtitle.includes("Hard"), "removal retains the other shared-audio difficulty");
+            bridge.deletePlaylist(2);
+            stage = 13;
+            break;
+        case 13:
+            if (bridge.activePlaylistId >= 0 || bridge.playlists.length !== 1) return;
+            bridge.searchLibrary("");
+            stage = 14;
+            break;
+        case 14:
+            if (bridge.trackCount !== 1 || bridge.libraryLoading) return;
+            check(bridge.trackCount === 1 && bridge.selectedTitle === "Test song", "delete returns to full library");
+            finish();
+            break;
+        }
+    }
     function step(): void {
         if (passed) return;
         if (gallery) { galleryModalProbe(); return; }
@@ -332,6 +469,7 @@ QtObject {
         if (testCase === "search") { searchProbe(); return; }
         if (testCase === "playback") { playbackProbe(); return; }
         if (testCase === "queue") { queueProbe(); return; }
+        if (testCase === "playlists") { playlistsProbe(); return; }
         if (testCase === "requests") {
             if (!bridge.connected || bridge.folders.length !== 2) return;
             check(bridge.libraryLoading, "library HTTP request remains pending at close");

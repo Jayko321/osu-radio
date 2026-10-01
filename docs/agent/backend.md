@@ -140,12 +140,20 @@ continues to use its own [API DTOs](../../crates/osu-radio-client/src/api.rs).
 | --- | --- |
 | `GET /api/beatmap-sets` | Optional `q` searches the library; existing contract retained. Array of `{id, online_id, hash, has_multiple_audio_sources, audio_sources, beatmaps}`. Each audio source has `{id, kind, location}`; distinct sources per set, empty arrays allowed. |
 | `GET /api/tracks` | Optional `q`; one record per global audio ID with nullable representative metadata, cover ID and all difficulties. Used by Songs. |
-| `GET /api/queue` | Persisted `{audio_source_ids, current_index, mode, revision, playback_token}`. Duplicates and played history remain; an exhausted index equals list length. |
+| `GET /api/queue` | Persisted `{audio_source_ids, playlist_item_ids, current_index, mode, revision, playback_token}`. Parallel item IDs are nullable; duplicates and played history remain; an exhausted index equals list length. |
 | `POST /api/queue/items` | `{audio_source_ids:[...]}` appends atomically after validating every ID as Local/Copied. Unknown/Online IDs return 400 without changes. An empty/exhausted queue starts the first added item; paused playback stays paused. Returns the current assignment. |
 | `DELETE /api/queue` | Clears the queue, stops playback and invalidates the launch token. Returns the current assignment. |
 | `GET /api/playback` | Current assignment with metadata and duration independent of Songs search; the queue list is omitted. |
 | `GET /api/playback/events` | Current assignment immediately, followed by increasing committed revisions as NDJSON. Blank-line heartbeat every 15 seconds. Client uses a separate one-hour timeout and reconnects to synchronize. |
 | `POST /api/playback/commands` | Tagged `{command:...}`: `play` with optional `audio_source_id`, `pause`, `stop`, `next`, `previous`, `finished` or `failed`. Completion/error commands require `playback_token`; internal device pauses include it too. Stale callbacks return the current assignment without transitioning. |
+| `GET /api/playlists` | ID-ordered array of `{id, name}`. |
+| `POST /api/playlists` | `{name}` creates a trimmed nonempty name; 201 with `{id, name}`, 400 for blank names. Equal names are allowed. |
+| `GET /api/playlists/{id}` | `{id, name, items}`; each item includes stable source key, saved labels, item ID and nullable current library/audio/cover IDs. 404 for an absent playlist. |
+| `PATCH /api/playlists/{id}` | `{name}` renames; 200 with `{id, name}`, 400 for blank names, 404 if absent. |
+| `DELETE /api/playlists/{id}` | 204 and membership cascade; 404 if absent. Does not change the queue. |
+| `POST /api/playlists/{id}/items` | `{beatmap_ids:[...]}` atomically adds current difficulties and returns the full playlist. Repeated source keys are idempotent. Missing beatmap/hash is 400 with no partial additions. |
+| `DELETE /api/playlists/{id}/items/{item_id}` | 204 for a member of this playlist, otherwise 404. Does not change the queue. |
+| `POST /api/playlists/{id}/play` | Optional JSON `{start_item_id}` (or empty body). Resolves availability, replaces the queue and starts the requested/first available entry atomically. Returns an assignment. Empty/unavailable playlist or unavailable start is 400 without changing the queue; unknown playlist/item is 404. |
 | `GET /api/beatmaps/{id}/cover` | Stored background reference bytes, at most 16 MiB; absent/unreadable/oversized cover is 404. No path parameter or caller-supplied filesystem location. |
 | `GET /api/audio-sources/{id}/audio` | Original Local/Copied file streamed with `Content-Length` and `application/octet-stream`; 404 for unknown ID or missing/nonregular file, 400 for Online. No caller-supplied paths. |
 | `GET /api/audio-sources/{id}/duration` | `{duration_ms}` with nullable duration; absent audio ID is 404, missing/corrupt/unsupported media is null. Local/copied sources only. |
@@ -168,7 +176,7 @@ distinct, ID-ordered audio-source list per set. Existing fields remain unchanged
 
 The [playback routes](../../apps/osu-radio-server/src/routes/playback.rs) use
 `Services::queue()` exclusively. Each assignment contains
-`{current_audio_source_id, track, duration_ms, mode, revision, playback_token,
+`{current_audio_source_id, current_playlist_item_id, track, duration_ms, mode, revision, playback_token,
 can_next, can_previous}`; `track` uses the existing `/api/tracks` record shape.
 Modes are `stopped`, `paused` and `playing`. Track/ID are null after exhaustion
 or clearing. Metadata includes the cover ID and every difficulty even when the
@@ -201,6 +209,19 @@ initial/reconnected snapshots, duplicate-ID tokens, notification ordering,
 heartbeat detection and subscriber cancellation. The
 [media tests](../../apps/osu-radio-server/src/routes/media.rs) additionally check
 that duration probing rejects FIFO sources before opening them.
+
+### User playlists
+
+The [playlist routes](../../apps/osu-radio-server/src/routes/playlists.rs) use
+`Services::playlists()` and publish committed playback revisions through the same
+response path. Ordinary audio queue entries have a null playlist-item assignment;
+playlist entries distinguish difficulties sharing one audio ID. While the item
+exists, its assignment track contains that single difficulty. Queue content is
+fixed at launch and survives subsequent playlist edits. All eight playlist
+operations are registered in both router configurations and OpenAPI.
+[HTTP checks](../../apps/osu-radio-server/src/routes/playlists/tests.rs) verify
+CRUD/statuses, atomic validation, queue replacement/item IDs, documentation and
+the real `ApiClient` roundtrip on an isolated loopback server.
 
 ### Folder discovery and selection
 

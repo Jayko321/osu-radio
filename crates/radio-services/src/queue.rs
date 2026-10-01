@@ -8,6 +8,7 @@ pub use radio_db::model::{PlaybackMode, QueueState};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaybackAssignment {
     pub current_audio_source_id: Option<i32>,
+    pub current_playlist_item_id: Option<i32>,
     pub track: Option<LibraryTrack>,
     pub mode: PlaybackMode,
     pub revision: u64,
@@ -57,6 +58,27 @@ enum Change {
 }
 
 impl QueueService<'_> {
+    pub(crate) async fn replace_in(
+        transaction: &Transaction,
+        ids: Vec<i32>,
+        item_ids: Vec<Option<i32>>,
+        start: usize,
+    ) -> Result<PlaybackAssignment> {
+        let mut state = transaction.queue().get().await?;
+        state.audio_source_ids = ids;
+        state.playlist_item_ids = item_ids;
+        launch(&mut state, start, PlaybackMode::Playing)?;
+        state.revision = state
+            .revision
+            .checked_add(1)
+            .context("Playback revision exhausted")?;
+        let playable = transaction
+            .audio_sources()
+            .playable_ids(&state.audio_source_ids)
+            .await?;
+        transaction.queue().save(&state).await?;
+        assignment(transaction, &state, &playable).await
+    }
     pub async fn get(&self) -> Result<QueueState> {
         self.database.queue().get().await
     }
@@ -113,6 +135,9 @@ impl QueueService<'_> {
                 if !incoming.is_empty() {
                     let old_len = state.audio_source_ids.len();
                     let exhausted = state.current_index.is_none_or(|index| index >= old_len);
+                    state
+                        .playlist_item_ids
+                        .extend(std::iter::repeat_n(None, incoming.len()));
                     state.audio_source_ids.extend(incoming);
                     if exhausted {
                         launch(&mut state, old_len, PlaybackMode::Playing)?;
@@ -122,6 +147,7 @@ impl QueueService<'_> {
             Change::Clear => {
                 if !state.audio_source_ids.is_empty() {
                     state.audio_source_ids.clear();
+                    state.playlist_item_ids.clear();
                     state.current_index = None;
                     state.mode = PlaybackMode::Stopped;
                     invalidate(&mut state)?;
@@ -288,11 +314,17 @@ fn play(state: &mut QueueState, selected: Option<i32>, playable: &HashSet<i32>) 
             .current_index
             .and_then(|index| state.audio_source_ids.get(index))
             .copied();
-        if current != Some(id) {
+        let playlist_item = state
+            .current_index
+            .and_then(|index| state.playlist_item_ids.get(index))
+            .copied()
+            .flatten();
+        if current != Some(id) || playlist_item.is_some() {
             let index = state.current_index.map_or(0, |index| {
                 index.saturating_add(1).min(state.audio_source_ids.len())
             });
             state.audio_source_ids.insert(index, id);
+            state.playlist_item_ids.insert(index, None);
             return launch(state, index, PlaybackMode::Playing);
         }
     }
@@ -320,23 +352,55 @@ async fn assignment(
         .current_index
         .and_then(|index| state.audio_source_ids.get(index))
         .copied();
+    let current_playlist_item_id = state
+        .current_index
+        .and_then(|index| state.playlist_item_ids.get(index))
+        .copied()
+        .flatten();
+    let playlist_item = if let Some(id) = current_playlist_item_id {
+        transaction.playlists().item(id).await?
+    } else {
+        None
+    };
     let track = if let Some(id) = current {
-        Some(
-            crate::beatmap_set::tracks::from_sets(
-                transaction.beatmap_sets().for_audio_source(id).await?,
-            )
-            .into_iter()
-            .next()
-            .unwrap_or(LibraryTrack {
+        if let Some(item) = playlist_item {
+            Some(LibraryTrack {
                 audio_source_id: id,
-                title: None,
+                title: item.title,
                 title_unicode: None,
-                artist: None,
+                artist: item.artist,
                 artist_unicode: None,
-                cover_beatmap_id: None,
-                difficulties: Vec::new(),
-            }),
-        )
+                cover_beatmap_id: item.cover_beatmap_id,
+                difficulties: item
+                    .beatmap_id
+                    .zip(item.beatmap_set_id)
+                    .map(|(beatmap_id, beatmap_set_id)| crate::TrackDifficulty {
+                        beatmap_id,
+                        beatmap_set_id,
+                        difficulty_name: item.difficulty_name,
+                        set_has_multiple_audio_sources: true,
+                    })
+                    .into_iter()
+                    .collect(),
+            })
+        } else {
+            Some(
+                crate::beatmap_set::tracks::from_sets(
+                    transaction.beatmap_sets().for_audio_source(id).await?,
+                )
+                .into_iter()
+                .next()
+                .unwrap_or(LibraryTrack {
+                    audio_source_id: id,
+                    title: None,
+                    title_unicode: None,
+                    artist: None,
+                    artist_unicode: None,
+                    cover_beatmap_id: None,
+                    difficulties: Vec::new(),
+                }),
+            )
+        }
     } else {
         None
     };
@@ -346,6 +410,7 @@ async fn assignment(
     let previous = state.current_index.unwrap_or(0).saturating_add(1);
     Ok(PlaybackAssignment {
         current_audio_source_id: current,
+        current_playlist_item_id,
         track,
         mode: state.mode,
         revision: state.revision,

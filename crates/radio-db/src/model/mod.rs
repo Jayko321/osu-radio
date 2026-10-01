@@ -18,3 +18,5 @@ pub use tag::{SetTag, Tag};
 
 mod queue;
 pub use queue::{PlaybackMode, QueueState};
+mod playlist;
+pub use playlist::{Playlist, PlaylistBeatmap, PlaylistItem, PlaylistSummary};

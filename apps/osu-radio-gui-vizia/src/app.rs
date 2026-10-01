@@ -284,7 +284,9 @@ impl AppData {
             }
             AppUpdate::FoldersReplaced(folders) => self.state.folders.set(folders),
             AppUpdate::FolderSelected(id) => self.state.selected_folder.set(id),
-            AppUpdate::FolderSelection(_) | AppUpdate::FolderSelectionPickerRequested(_) => {}
+            AppUpdate::Playlists(_)
+            | AppUpdate::FolderSelection(_)
+            | AppUpdate::FolderSelectionPickerRequested(_) => {}
             AppUpdate::FolderPickerRequested => {
                 let controller = self.controller.clone();
                 self.runtime.spawn(async move {

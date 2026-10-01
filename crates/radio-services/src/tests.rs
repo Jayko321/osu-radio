@@ -72,6 +72,7 @@ async fn contracts(url: &str) {
     shared_source_variants(&database).await;
     source_files_remain_untouched(&database).await;
     queue::contracts(&database, &other_pool, url).await;
+    playlists::contracts(&database, &other_pool, url).await;
 }
 
 async fn assert_counts(database: &TestDatabase, expected: [i64; 4]) {
@@ -889,4 +890,5 @@ mod tags;
 
 mod search;
 
+mod playlists;
 mod queue;

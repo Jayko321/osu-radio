@@ -50,6 +50,7 @@ pub(super) async fn migration_contracts(database: &Database, url: &str) {
     );
     let empty = QueueState {
         audio_source_ids: vec![],
+        playlist_item_ids: vec![],
         current_index: None,
         mode: PlaybackMode::Stopped,
         revision: 0,
@@ -58,6 +59,7 @@ pub(super) async fn migration_contracts(database: &Database, url: &str) {
     assert_eq!(database.queue().get().await.unwrap(), empty);
     let state = QueueState {
         audio_source_ids: vec![audio.id, audio.id],
+        playlist_item_ids: vec![None, None],
         current_index: Some(1),
         mode: PlaybackMode::Playing,
         revision: 1,

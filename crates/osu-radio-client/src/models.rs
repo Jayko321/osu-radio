@@ -210,6 +210,8 @@ pub enum PlaybackMode {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct QueueState {
     pub audio_source_ids: Vec<i32>,
+    #[serde(default)]
+    pub playlist_item_ids: Vec<Option<i32>>,
     pub current_index: Option<usize>,
     pub mode: PlaybackMode,
     pub revision: u64,
@@ -219,6 +221,8 @@ pub struct QueueState {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PlaybackAssignment {
     pub current_audio_source_id: Option<i32>,
+    #[serde(default)]
+    pub current_playlist_item_id: Option<i32>,
     pub track: Option<LibraryTrack>,
     pub duration_ms: Option<u64>,
     pub mode: PlaybackMode,
@@ -249,4 +253,32 @@ pub enum PlaybackCommand {
     Failed {
         playback_token: u64,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PlaylistSummary {
+    pub id: i32,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PlaylistItem {
+    pub id: i32,
+    pub playlist_id: i32,
+    pub source_kind: String,
+    pub beatmap_hash: String,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub difficulty_name: Option<String>,
+    pub beatmap_id: Option<i32>,
+    pub beatmap_set_id: Option<i32>,
+    pub audio_source_id: Option<i32>,
+    pub cover_beatmap_id: Option<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct Playlist {
+    pub id: i32,
+    pub name: String,
+    pub items: Vec<PlaylistItem>,
 }

@@ -12,6 +12,7 @@ use tempfile::NamedTempFile;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Playback {
     pub current_audio_id: Option<i32>,
+    pub current_playlist_item_id: Option<i32>,
     pub loading_audio_id: Option<i32>,
     pub snapshot: Snapshot,
     pub error: Option<String>,

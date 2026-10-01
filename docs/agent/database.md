@@ -30,7 +30,9 @@ migration for subsequent changes.
 | `tags` | Generated `i32` ID; globally unique normalized name, SQLite `BINARY` / PostgreSQL `C` collation. |
 | `beatmap_set_tags` | Composite primary key `(beatmap_set_id, tag_id)`; set cascade, restrictive tag reference, index on `tag_id`. |
 | `audio_sources` | Generated `i32` ID; globally unique `(kind, location)`; `local`, `copied`, or `online`. |
-| `playback_queue` | Singleton `id = 1`; JSON audio-ID history, nullable current index, playback mode and monotonic revision/token counters. |
+| `playback_queue` | Singleton `id = 1`; JSON audio-ID history and parallel nullable playlist-item IDs, nullable current index, playback mode and monotonic revision/token counters. |
+| `playlists` | Generated `i32` ID and nonempty trimmed name; equal names are allowed. |
+| `playlist_items` | Generated `i32` ID; required playlist with deletion cascade; unique `(playlist_id, source_kind, beatmap_hash)` and saved title, artist and difficulty. No library foreign key. |
 
 Installation deletion cascades through sets, beatmaps and set-tag links. Shared references use
 restrictive foreign keys. Repository cleanup deletes only unreferenced metadata
@@ -120,6 +122,7 @@ there are no new standalone beatmap or set creation workflows.
 | `tags()` | `all`, `get`, `for_set`; lists use `ORDER BY name ASC` with SQLite `BINARY` / PostgreSQL `C`. |
 | `audio_sources()` | `get`, `find`, `get_or_insert`. |
 | `queue()` | `get`, `playback`, `append`, `clear`, `command`, `recover`; one persistent server queue. |
+| `playlists()` | `all`, `get`, `create`, `rename`, `delete`, `add_items`, `remove_item`, `play`; concrete difficulties with source-stable membership. |
 
 [Installation services](../../crates/radio-services/src/osu_installation.rs) own
 folder discovery validation, label trimming, snapshot replacement and deletion.
@@ -165,7 +168,9 @@ this optimization adds no schema or persistent index.
 The additive [queue migration](../../crates/radio-db/src/migrations/m20261001_000005_playback_queue.rs)
 creates one empty state row without changing the library. The concrete
 [repository](../../crates/radio-db/src/repositories/queue.rs) stores the ordered
-JSON ID array, including duplicates and played history. Empty queues have a null
+JSON ID array, including duplicates and played history. A parallel array carries
+playlist-item IDs; ordinary queue additions and explicit audio-ID plays carry null.
+There is no foreign key from queue history to playlist items. Empty queues have a null
 index; exhaustion retains the history with an index equal to its length. No
 foreign key binds history to audio rows, so source cleanup can remove deleted
 library sources while retaining the queue's previous positions.
@@ -218,6 +223,59 @@ concurrent append/clear, recovery, removed sources and search-independent metada
 Both run through the ordinary disposable SQLite/PostgreSQL contract harnesses.
 These deterministic storage/transition checks do not establish physical output.
 
+## User playlists
+
+The additive [playlist migration](../../crates/radio-db/src/migrations/m20261001_000006_playlists.rs)
+creates the two playlist tables, indexes `beatmaps.hash` for resolution, and adds
+the nullable queue JSON column without clearing the library or queue. A null
+column in a pre-playlist queue reads as one null item ID per existing audio ID.
+The repository validates equal array lengths on every queue save.
+
+[`PlaylistService`](../../crates/radio-services/src/playlist.rs) trims names and
+rejects whitespace-only names. Additions accept current beatmap IDs, validate all
+of them and their nonempty source hashes before inserting, and commit once under
+the existing singleton writer lock. Repeated keys are idempotent; first insertion
+order is retained by item ID. Names need not be unique. Current beatmap row IDs
+are returned when reading but never own membership.
+
+The [repository](../../crates/radio-db/src/repositories/playlist.rs) resolves
+`(installation kind, imported beatmap hash)` against the current library in bound
+queries of at most 500 parameters. For an equal key it chooses the lowest beatmap
+ID with Local/Copied audio. Without such a copy, current beatmap/audio/cover IDs are
+null; saved labels remain visible. Playlist reads use one consistent transaction.
+Entries sharing audio use its lowest-ID stored cover reference, matching the
+library projection and the existing audio-based client media scheduler.
+Snapshot replacement, empty snapshots and installation deletion retain membership;
+returning matching source data restores availability. Physical file existence and
+decoding remain the existing playback worker's responsibility.
+
+`play(id, start_item_id)` resolves the playlist and replaces the queue in one
+writer-locked transaction. Unavailable entries are skipped. An empty or wholly
+unavailable playlist, unknown start item, or unavailable requested start produces
+a typed error and leaves the old queue untouched. A successful launch stores
+both audio and item IDs, selects the requested or first available item and gets
+a new launch token. Later playlist edits/deletion leave the queue composition
+unchanged. Assignments retain `current_playlist_item_id` even after item deletion;
+while the item exists its saved labels and single difficulty are projected into
+the track. Deleted-item metadata falls back to the normal audio track projection.
+Next/Previous and completion callbacks reuse the existing position/token rules.
+
+[Migration/repository checks](../../crates/radio-db/src/tests/playlists.rs) cover
+a populated five-migration upgrade, old queue preservation, cascades and reset.
+[Service checks](../../crates/radio-services/src/tests/playlists.rs) cover CRUD,
+reopen, concurrent idempotent addition, atomic validation, reimported IDs, source
+removal/return, copy priority, distinct source kinds, 503 ordered items, queue
+replacement, shared audio, selected start, pause/resume and stale callbacks.
+
+Collection import is deferred. A future source adapter should resolve collection
+MD5 values to imported beatmaps, then call this service's ordinary additions.
+The [stable collection format](https://github.com/ppy/osu/wiki/Legacy-database-file-structure#collectiondb)
+and [lazer collections](https://github.com/ppy/osu/blob/master/osu.Game/Collections/BeatmapCollection.cs)
+use MD5 membership; lazer's [BeatmapInfo](https://github.com/ppy/osu/blob/master/osu.Game/Beatmaps/BeatmapInfo.cs)
+stores separate `Hash` and `MD5Hash` fields. Do not equate collection MD5 with the
+existing lazer source hash. Reordering, descriptions, playlist artwork and
+collection synchronization remain outside this version.
+
 ## Snapshot replacement
 
 Read the entire scanner result before calling `OsuInstallationService::replace_snapshot`. It requires an
@@ -263,7 +321,7 @@ its lock. Independent pools/processes therefore cannot select the same pending w
 
 Application tables without applied SeaORM migration history produce an actionable
 legacy-database error. There is no legacy data migration: choose a new database or
-explicit reset. Reset drops only the nine application tables and their SeaORM/
+explicit reset. Reset drops only the eleven application tables and their SeaORM/
 Diesel migration history, in child-first order, then recreates the schema in the
 same transaction. Unrelated tables are preserved; reset does not use a broad
 schema refresh or drop external objects.

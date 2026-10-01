@@ -406,10 +406,15 @@ The Unix fixture requires Python 3; keyboard/backdrop probes also require the Qt
 ```sh
 cargo build -p osu-radio-server -p osu-radio-qt --locked
 cargo test -p osu-radio-qt --locked --test launch_smoke real_backend_uses_a_disposable_database -- --ignored
+cargo test -p osu-radio-qt --locked --test launch_smoke real_backend_playlists_use_a_disposable_database -- --ignored
 ```
 
-That test removes inherited database URL variables and uses a temporary `.env`
-and SQLite file. It never opens the workspace database or runs discovery.
+These tests remove inherited database URL variables and use temporary `.env`
+and SQLite files. They never open the workspace database or run discovery.
+The playlist probe seeds synthetic rows after production migrations, then checks
+creation, renaming, deletion, concrete difficulty checkboxes, idempotent addition,
+row removal and the unavailable-item presentation through the real server/client
+and Qt adapter. It deliberately does not start physical audio.
 
 Run [`scripts/lint-qml.sh`](../../apps/osu-radio-qt/scripts/lint-qml.sh) after
 building. Set `QMLLINT=/path/to/qmllint` if needed (default `/usr/lib/qt6/bin/qmllint`).
@@ -490,6 +495,49 @@ passed. Loopback/process checks ran outside the sandbox. Native Qt headers emit
 a compiler warning; Rust Clippy with warnings denied passed. These checks do
 not establish physical audio, desktop input/GPU rendering or Windows behavior.
 Queue-list UI, shuffle and repeat were not added; the gallery remains offline.
+
+## Playlist verification
+
+Run the SQLite/PostgreSQL repository and service contracts separately, both
+server router configurations, client tests with `mock` off/on, the Qt suites and
+the disposable real-backend playlist probe above. Follow the existing backend
+matrix for scoped Clippy; include `osu-radio-qt` and generated-import QML lint.
+Never point these contracts at the configured application database.
+
+[`Repository tests`](../../crates/radio-db/src/tests/playlists.rs) cover upgrading
+an existing library/queue without reset and cascade boundaries.
+[`Service tests`](../../crates/radio-services/src/tests/playlists.rs) cover
+CRUD/reopen, atomic/idempotent adds across independent pools, unavailable items,
+reimport with new IDs, folder deletion/restoration, copy selection, batches larger
+than 500 items, same-audio difficulties, queue replacement/snapshot semantics,
+selected start and stale playback callbacks. Both routers exercise the
+[`HTTP contract`](../../apps/osu-radio-server/src/routes/playlists/tests.rs).
+Client and Qt tests additionally cover stale view responses, independent
+selection, item-specific pause/resume, retained retry choices and offline gallery
+actions.
+
+Manual acceptance remains separate: create/edit/remove playlists through desktop
+input, add only chosen difficulties, switch between library and playlist, select
+two difficulties sharing audio and explicitly play each, check Pause/Resume and
+Next/Previous, remove/reimport a folder and restart the application. Repeat on
+Windows and check actual audio output. Offscreen software rendering and isolated
+backend checks do not establish these platform/device results. Collection import,
+manual reordering, descriptions, playlist covers and collection synchronization
+remain deferred.
+
+Executed on Linux on 2026-10-01 for user playlists: SQLite repository/service
+suites passed (5/12 tests; two service benchmarks ignored), and PostgreSQL
+repository/service suites passed (4/1 tests) on separate disposable databases.
+Both server router suites passed (33 with docs, 29 without; serialization
+benchmarks ignored). Client library suites passed without/with `mock` (54/61;
+two benchmarks ignored in each). Qt passed its 13 ordinary tests, then the real
+server playlist probe passed on temporary SQLite, including adding from a
+playlist whose song is absent from the active library search. Server/Qt builds,
+Vizia compatibility check, scoped all-target Clippy with warnings denied,
+generated-import QML lint, formatting and affected guide links passed. Native
+Qt headers still emit their existing C++ compiler warning. Loopback/process
+checks ran outside the restricted sandbox; physical audio, desktop input/GPU
+rendering and Windows were not exercised.
 
 ## Qt folder modal verification
 

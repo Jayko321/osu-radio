@@ -7,4 +7,6 @@ pub(crate) mod osu_installation;
 pub(crate) mod tag;
 pub(crate) mod user_data;
 
+pub(crate) mod playlist;
+pub(crate) mod playlist_item;
 pub(crate) mod queue;

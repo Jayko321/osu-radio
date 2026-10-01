@@ -16,8 +16,15 @@ impl QueueRepository<'_> {
             .one(&self.connection)
             .await?
             .context("Playback queue row is missing; apply database migrations first")?;
+        let audio_source_ids: Vec<i32> = serde_json::from_value(row.audio_source_ids)?;
+        let playlist_item_ids = row
+            .playlist_item_ids
+            .map(serde_json::from_value)
+            .transpose()?
+            .unwrap_or_else(|| vec![None; audio_source_ids.len()]);
         let state = QueueState {
-            audio_source_ids: serde_json::from_value(row.audio_source_ids)?,
+            audio_source_ids,
+            playlist_item_ids,
             current_index: row.current_index.map(usize::try_from).transpose()?,
             mode: match row.mode.as_str() {
                 "stopped" => PlaybackMode::Stopped,
@@ -38,6 +45,7 @@ impl QueueRepository<'_> {
         queue::ActiveModel {
             id: Set(1),
             audio_source_ids: Set(serde_json::to_value(&state.audio_source_ids)?),
+            playlist_item_ids: Set(Some(serde_json::to_value(&state.playlist_item_ids)?)),
             current_index: Set(state.current_index.map(i64::try_from).transpose()?),
             mode: Set(match state.mode {
                 PlaybackMode::Stopped => "stopped",
@@ -55,6 +63,10 @@ impl QueueRepository<'_> {
 }
 
 fn validate(state: &QueueState) -> Result<()> {
+    ensure!(
+        state.audio_source_ids.len() == state.playlist_item_ids.len(),
+        "Invalid playlist queue positions"
+    );
     ensure!(
         if state.audio_source_ids.is_empty() {
             state.current_index.is_none() && state.mode == PlaybackMode::Stopped

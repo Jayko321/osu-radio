@@ -8,6 +8,7 @@ pub enum PlaybackMode {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QueueState {
     pub audio_source_ids: Vec<i32>,
+    pub playlist_item_ids: Vec<Option<i32>>,
     /// `None` for an empty queue; the queue length marks exhaustion.
     pub current_index: Option<usize>,
     pub mode: PlaybackMode,

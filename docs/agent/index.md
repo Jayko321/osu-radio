@@ -88,6 +88,7 @@ Tests and their limits are linked in the component guides.
 | Songs search | Implemented | Server substring search through the shared controller, 200 ms debounce; Settings search remains a placeholder. See [frontend](frontend.md). |
 | Library and folder settings | Implemented | [Frontend](frontend.md); server rows, bounded artwork loading, optional durations, folder dropdown, Qt staged discovery/import/removal and Vizia native chooser registration. Selection is presentation only. |
 | Server playback queue, transport, seeking and volume | Implemented | [Database](database.md), [backend](backend.md), [frontend](frontend.md); persisted queue and token-bound assignments, client downloads and plays locally. Seek and volume remain local. |
+| User playlists of individual difficulties | Implemented | [Storage and service](database.md#user-playlists), [HTTP](backend.md#database-backed-http-contracts), [Qt/client](frontend.md#user-playlists); stable source keys, unavailable entries and queue launch snapshots. Collection import remains deferred. |
 | Qt Songs, Settings and component gallery | Connected client; offline gallery | [Qt frontend](frontend.md#qt-frontend); shared session/controller, playback, library/media and staged folder selection/import/removal. |
 | Local audio playback | Implemented in source | Explicit Play; deterministic engine/HTTP tests do not establish physical output or Windows behavior. |
 | Hosted sources | Future direction | Provider, protocol and hosting remain undecided. |

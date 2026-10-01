@@ -71,6 +71,7 @@ Basic.ApplicationWindow {
             window: root
             selectedTab: root.selectedTab
             onTabSelected: index => root.selectedTab = index
+            onPlaylistsRequested: bridge.openPlaylists()
         }
 
         Rectangle {
@@ -178,6 +179,7 @@ Basic.ApplicationWindow {
                         width: parent.width - 40
                         leftPadding: 44
                         placeholderText: "Type to search songs..."
+                        enabled: bridge.activePlaylistId < 0
                         Accessible.name: "Search songs"
                         onTextChanged: bridge.searchLibrary(text)
                         AppIcon { x: 12; anchors.verticalCenter: parent.verticalCenter; name: "search"; color: Theme.muted }
@@ -200,13 +202,22 @@ Basic.ApplicationWindow {
                             }
                         }
                     }
+                    Row {
+                        id: playlistTools
+                        x: 20
+                        y: filters.y + filters.height + 12
+                        visible: bridge.activePlaylistId >= 0
+                        spacing: 8
+                        AppButton { text: "All songs"; onClicked: bridge.selectPlaylist(-1) }
+                        AppButton { text: "Играть плейлист"; enabled: bridge.connected && bridge.trackCount > 0; onClicked: bridge.playPlaylist() }
+                    }
                     Text {
                         id: libraryStatus
                         objectName: "libraryStatus"
                         x: 20
-                        y: filters.y + filters.height + 20
+                        y: playlistTools.visible ? playlistTools.y + playlistTools.height + 12 : filters.y + filters.height + 20
                         width: parent.width - 40
-                        text: bridge.libraryMessage
+                        text: bridge.activePlaylistId >= 0 ? bridge.activePlaylistName + (bridge.playlistMessage.length > 0 ? " · " + bridge.playlistMessage : "") : bridge.libraryMessage
                         visible: text.length > 0
                         color: Theme.text
                         font.family: Theme.fontFamily
@@ -229,6 +240,8 @@ Basic.ApplicationWindow {
                         delegate: Basic.Button {
                             id: card
                             required property int audioId
+                            required property int playlistItemId
+                            required property bool available
                             required property string title
                             required property string artist
                             required property string subtitle
@@ -244,7 +257,7 @@ Basic.ApplicationWindow {
                             height: 90
                             padding: 0
                             Accessible.name: title + ", " + artist
-                            onClicked: bridge.selectTrack(audioId)
+                            onClicked: playlistItemId >= 0 ? bridge.selectPlaylistItem(playlistItemId) : bridge.selectTrack(audioId)
                             background: Item {
                                 Artwork { anchors.fill: parent; source: card.artworkUrl }
                                 Rectangle {
@@ -261,15 +274,25 @@ Basic.ApplicationWindow {
                                     radius: 8
                                     color: "transparent"
                                     border.width: card.activeFocus ? 2 : 1
-                                    border.color: bridge.selectedAudioId === card.audioId ? Theme.accent
+                                    border.color: (card.playlistItemId >= 0 ? bridge.selectedPlaylistItemId === card.playlistItemId : bridge.selectedAudioId === card.audioId) ? Theme.accent
                                         : (card.hovered || card.activeFocus ? Theme.border : "transparent")
                                 }
                             }
                             contentItem: Item {
+                                IconButton {
+                                    anchors.right: parent.right
+                                    anchors.rightMargin: 12
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    visible: card.playlistItemId >= 0
+                                    iconName: "minus"
+                                    accessibleName: "Remove " + card.title + " from playlist"
+                                    enabled: !bridge.playlistBusy
+                                    onClicked: bridge.removePlaylistItem(card.playlistItemId)
+                                }
                                 Text {
                                     x: 20
                                     y: 17
-                                    width: parent.width - 40
+                                    width: parent.width - (card.playlistItemId >= 0 ? 80 : 40)
                                     height: 30
                                     text: card.title
                                     color: Theme.text
@@ -281,7 +304,7 @@ Basic.ApplicationWindow {
                                 Text {
                                     x: 20
                                     y: 49
-                                    width: parent.width - 40
+                                    width: parent.width - (card.playlistItemId >= 0 ? 80 : 40)
                                     height: 22
                                     text: card.subtitle
                                     color: Theme.text
@@ -457,12 +480,13 @@ Basic.ApplicationWindow {
                         enabled: bridge.canSeek
                         padding: 0
                         property int dragAudioId: -1
+                        property int dragItemId: -1
                         Accessible.name: "Playback position"
                         Component.onCompleted: value = bridge.playbackPosition
                         onPressedChanged: {
-                            if (pressed) dragAudioId = bridge.selectedAudioId;
+                            if (pressed) { dragAudioId = bridge.selectedAudioId; dragItemId = bridge.selectedPlaylistItemId; }
                             else {
-                                if (enabled && dragAudioId === bridge.selectedAudioId) bridge.seekPlayback(value);
+                                if (enabled && dragAudioId === bridge.selectedAudioId && dragItemId === bridge.selectedPlaylistItemId) bridge.seekPlayback(value);
                                 value = bridge.playbackPosition;
                             }
                         }
@@ -472,6 +496,7 @@ Basic.ApplicationWindow {
                             function onPlaybackPositionChanged() { if (!progress.pressed) progress.value = bridge.playbackPosition; }
                             function onPlaybackDurationChanged() { if (!progress.pressed) progress.value = bridge.playbackPosition; }
                             function onSelectedAudioIdChanged() { if (!progress.pressed) progress.value = bridge.playbackPosition; }
+                            function onSelectedPlaylistItemIdChanged() { if (!progress.pressed) progress.value = bridge.playbackPosition; }
                         }
                         background: Rectangle { y: 6; width: progress.width; height: 4; radius: 2; color: Theme.muted }
                         handle: Rectangle { x: progress.visualPosition * (progress.width - width); width: 16; height: 16; radius: 8; color: Theme.accent }
@@ -540,14 +565,14 @@ Basic.ApplicationWindow {
                                 objectName: "playPauseButton"
                                 iconName: bridge.selectedIsPlaying ? "pause" : "play"
                                 accessibleName: bridge.selectedIsPlaying ? "Pause" : "Play"
-                                enabled: bridge.hasSelection && bridge.connected
+                                enabled: bridge.hasSelection && bridge.selectedAvailable && bridge.connected
                                 onClicked: bridge.togglePlayback()
                                 background: Rectangle { radius: 24; color: Theme.accent }
                             }
                             IconButton { objectName: "nextTrackButton"; anchors.verticalCenter: parent.verticalCenter; iconName: "skip-forward"; accessibleName: "Next track"; enabled: bridge.connected && bridge.canNext; onClicked: bridge.nextTrack() }
                             IconButton { anchors.verticalCenter: parent.verticalCenter; iconName: "repeat-2"; accessibleName: "Repeat (unavailable)"; enabled: false }
                         }
-                        IconButton { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; iconName: "circle-plus"; accessibleName: "Add to playlist (unavailable)"; enabled: false }
+                        IconButton { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; iconName: "circle-plus"; objectName: "addToPlaylistButton"; accessibleName: "В плейлист"; enabled: bridge.canAddPlaylist && bridge.connected; onClicked: bridge.openPlaylistAdd() }
                     }
                     Text {
                         objectName: "playbackMessage"
@@ -565,6 +590,34 @@ Basic.ApplicationWindow {
                     }
                 }
             }
+        }
+    }
+    PlaylistsModal {
+        id: playlistsDialog
+        objectName: "playlistsDialog"
+        scene: applicationScene
+        playlists: bridge.playlists
+        candidates: bridge.playlistCandidates
+        adding: bridge.playlistAdding
+        busy: bridge.playlistBusy
+        loading: bridge.playlistLoading
+        message: bridge.playlistMessage
+        targetId: bridge.playlistTargetId
+        onCreateRequested: name => bridge.createPlaylist(name)
+        onRenameRequested: (id, name) => bridge.renamePlaylist(id, name)
+        onDeleteRequested: id => bridge.deletePlaylist(id)
+        onSelectRequested: id => { root.selectedTab = 0; bridge.selectPlaylist(id); }
+        onTargetRequested: id => bridge.choosePlaylistTarget(id)
+        onDifficultyRequested: id => bridge.togglePlaylistDifficulty(id)
+        onAddRequested: bridge.addPlaylistItems()
+        onRefreshRequested: bridge.refreshPlaylists()
+        onClosed: if (bridge.playlistOpen) bridge.closePlaylists()
+    }
+    Connections {
+        target: bridge
+        function onPlaylistOpenChanged() {
+            if (bridge.playlistOpen) playlistsDialog.open();
+            else playlistsDialog.close();
         }
     }
     FolderSelectionModal {

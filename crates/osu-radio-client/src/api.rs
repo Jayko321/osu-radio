@@ -115,7 +115,7 @@ impl ApiClient {
         &self,
         audio_source_ids: &[i32],
     ) -> Result<crate::models::PlaybackAssignment, ApiError> {
-        self.playback_response(
+        self.json_response(
             "/api/queue/items",
             self.http
                 .post(self.url("/api/queue/items"))
@@ -124,7 +124,7 @@ impl ApiClient {
         .await
     }
     pub async fn clear_queue(&self) -> Result<crate::models::PlaybackAssignment, ApiError> {
-        self.playback_response("/api/queue", self.http.delete(self.url("/api/queue")))
+        self.json_response("/api/queue", self.http.delete(self.url("/api/queue")))
             .await
     }
     pub async fn playback_command(
@@ -132,14 +132,14 @@ impl ApiClient {
         command: &crate::models::PlaybackCommand,
     ) -> Result<crate::models::PlaybackAssignment, ApiError> {
         let path = "/api/playback/commands";
-        self.playback_response(path, self.http.post(self.url(path)).json(command))
+        self.json_response(path, self.http.post(self.url(path)).json(command))
             .await
     }
-    async fn playback_response(
+    async fn json_response<T: serde::de::DeserializeOwned>(
         &self,
         path: &str,
         request: reqwest::RequestBuilder,
-    ) -> Result<crate::models::PlaybackAssignment, ApiError> {
+    ) -> Result<T, ApiError> {
         let response = request.send().await.map_err(ApiError::Transport)?;
         if !response.status().is_success() {
             return Err(Self::failure(path, response).await);
@@ -184,6 +184,88 @@ impl ApiClient {
 
     pub async fn beatmap_sets(&self) -> Result<Vec<BeatmapSet>, ApiError> {
         self.get("/api/beatmap-sets").await
+    }
+
+    pub async fn playlists(&self) -> Result<Vec<crate::models::PlaylistSummary>, ApiError> {
+        self.get("/api/playlists").await
+    }
+    pub async fn playlist(&self, id: i32) -> Result<crate::models::Playlist, ApiError> {
+        self.get(&format!("/api/playlists/{id}")).await
+    }
+    pub async fn create_playlist(
+        &self,
+        name: &str,
+    ) -> Result<crate::models::PlaylistSummary, ApiError> {
+        let path = "/api/playlists";
+        self.json_response(
+            path,
+            self.http
+                .post(self.url(path))
+                .json(&serde_json::json!({"name":name})),
+        )
+        .await
+    }
+    pub async fn rename_playlist(
+        &self,
+        id: i32,
+        name: &str,
+    ) -> Result<crate::models::PlaylistSummary, ApiError> {
+        let path = format!("/api/playlists/{id}");
+        self.json_response(
+            &path,
+            self.http
+                .patch(self.url(&path))
+                .json(&serde_json::json!({"name":name})),
+        )
+        .await
+    }
+    pub async fn delete_playlist(&self, id: i32) -> Result<(), ApiError> {
+        self.delete(&format!("/api/playlists/{id}")).await
+    }
+    pub async fn add_playlist_items(
+        &self,
+        id: i32,
+        beatmap_ids: &[i32],
+    ) -> Result<crate::models::Playlist, ApiError> {
+        let path = format!("/api/playlists/{id}/items");
+        self.json_response(
+            &path,
+            self.http
+                .post(self.url(&path))
+                .json(&serde_json::json!({"beatmap_ids":beatmap_ids})),
+        )
+        .await
+    }
+    pub async fn remove_playlist_item(&self, id: i32, item_id: i32) -> Result<(), ApiError> {
+        self.delete(&format!("/api/playlists/{id}/items/{item_id}"))
+            .await
+    }
+    pub async fn play_playlist(
+        &self,
+        id: i32,
+        start_item_id: Option<i32>,
+    ) -> Result<crate::models::PlaybackAssignment, ApiError> {
+        let path = format!("/api/playlists/{id}/play");
+        self.json_response(
+            &path,
+            self.http
+                .post(self.url(&path))
+                .json(&serde_json::json!({"start_item_id":start_item_id})),
+        )
+        .await
+    }
+    async fn delete(&self, path: &str) -> Result<(), ApiError> {
+        let response = self
+            .http
+            .delete(self.url(path))
+            .send()
+            .await
+            .map_err(ApiError::Transport)?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(Self::failure(path, response).await)
+        }
     }
 
     pub async fn search_beatmap_sets(&self, query: &str) -> Result<Vec<BeatmapSet>, ApiError> {

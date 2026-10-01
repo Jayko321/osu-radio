@@ -11,6 +11,7 @@ pub(crate) const SCALAR_PATH: &str = "/docs";
     tags(
         (name = "tracks", description = "Songs grouped by global audio identity, with all difficulties."),
         (name = "playback", description = "Persistent shared playback queue and current client assignment."),
+        (name = "playlists", description = "User playlists of individually selected beatmap difficulties."),
         (name = "beatmap-sets", description = "Beatmap sets persisted from an osu! installation."),
         (name = "user-data", description = "Settings and the osu! folders registered for scanning.")
     )

@@ -18,6 +18,10 @@ Basic.ApplicationWindow {
     font.family: Theme.fontFamily
     font.pixelSize: 16
     readonly property var demo: store.state.gallery
+    onDemoChanged: {
+        if (demo.playlists.view.open) demoPlaylistsDialog.open();
+        else demoPlaylistsDialog.close();
+    }
     Store { id: store }
     readonly property alias galleryStore: store
 
@@ -41,7 +45,7 @@ Basic.ApplicationWindow {
     Item {
         id: applicationScene
         anchors.fill: parent
-        WindowBar { id: titleBar; width: parent.width; window: root; gallery: true }
+        WindowBar { id: titleBar; width: parent.width; window: root; gallery: true; onPlaylistsRequested: store.send("playlistOpen") }
 
         Basic.ScrollView {
             id: scroll
@@ -211,6 +215,25 @@ Basic.ApplicationWindow {
                     }
 
                     DemoSection {
+                        Heading { text: "Playlists" }
+                        Caption { text: "Each difficulty is a separate entry. These playlists stay in memory." }
+                        Row {
+                            spacing: 12
+                            AppButton { objectName: "demoOpenPlaylists"; text: "Playlists"; onClicked: store.send("playlistOpen") }
+                            AppButton { objectName: "demoAddToPlaylist"; text: "В плейлист"; onClicked: store.send("playlistAddOpen") }
+                        }
+                        Repeater {
+                            model: root.demo.playlists.view.active ? root.demo.playlists.view.active.items : []
+                            Row {
+                                id: demoItem
+                                required property var modelData
+                                spacing: 12
+                                Caption { color: Theme.text; text: demoItem.modelData.title + " | " + demoItem.modelData.difficulty_name + (demoItem.modelData.audio_source_id === null ? " · Недоступно" : "") }
+                                IconButton { iconName: "minus"; accessibleName: "Remove demo difficulty"; onClicked: store.send("playlistRemoveItem", demoItem.modelData.id) }
+                            }
+                        }
+                    }
+                    DemoSection {
                         Heading { text: "Modal" }
                         AppButton {
                             id: openModal
@@ -347,6 +370,25 @@ Basic.ApplicationWindow {
             enabled: !root.demo.disabled
             onClicked: { store.send("press"); playlistDialog.close(); }
         }
+    }
+    PlaylistsModal {
+        id: demoPlaylistsDialog
+        objectName: "demoPlaylistsDialog"
+        scene: applicationScene
+        playlists: root.demo.playlists.view.playlists
+        candidates: root.demo.playlists.view.candidates.map(candidate => ({id: candidate.beatmap_id, name: candidate.name, checked: candidate.checked}))
+        adding: root.demo.playlists.view.adding
+        message: root.demo.playlists.view.message
+        targetId: root.demo.playlists.view.target_id === null ? -1 : root.demo.playlists.view.target_id
+        onCreateRequested: name => store.send("playlistCreate", name)
+        onRenameRequested: (id, name) => store.send("playlistRename", JSON.stringify({id, name}))
+        onDeleteRequested: id => store.send("playlistDelete", id)
+        onSelectRequested: id => store.send("playlistSelect", id)
+        onTargetRequested: id => store.send("playlistTarget", id)
+        onDifficultyRequested: id => store.send("playlistDifficulty", id)
+        onAddRequested: store.send("playlistAdd")
+        onRefreshRequested: store.send("playlistRefresh")
+        onClosed: if (root.demo.playlists.view.open) store.send("playlistClose")
     }
     FolderSelectionModal {
         id: folderDialog

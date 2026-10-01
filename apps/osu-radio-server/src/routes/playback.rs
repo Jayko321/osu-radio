@@ -38,6 +38,7 @@ impl From<radio_services::PlaybackMode> for PlaybackMode {
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
 pub(crate) struct QueueResponse {
     audio_source_ids: Vec<i32>,
+    playlist_item_ids: Vec<Option<i32>>,
     current_index: Option<usize>,
     mode: PlaybackMode,
     revision: u64,
@@ -48,6 +49,7 @@ impl From<QueueState> for QueueResponse {
     fn from(queue: QueueState) -> Self {
         Self {
             audio_source_ids: queue.audio_source_ids,
+            playlist_item_ids: queue.playlist_item_ids,
             current_index: queue.current_index,
             mode: queue.mode.into(),
             revision: queue.revision,
@@ -60,6 +62,7 @@ impl From<QueueState> for QueueResponse {
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
 pub(crate) struct PlaybackResponse {
     current_audio_source_id: Option<i32>,
+    current_playlist_item_id: Option<i32>,
     track: Option<TrackResponse>,
     duration_ms: Option<u64>,
     mode: PlaybackMode,
@@ -85,6 +88,7 @@ impl PlaybackResponse {
         };
         Ok(Self {
             current_audio_source_id: assignment.current_audio_source_id,
+            current_playlist_item_id: assignment.current_playlist_item_id,
             track: assignment.track.map(TrackResponse::from),
             duration_ms,
             mode: assignment.mode.into(),
@@ -142,7 +146,7 @@ fn queue_error(error: anyhow::Error) -> ApiError {
     error.into()
 }
 
-async fn committed_response(
+pub(super) async fn committed_response(
     state: &AppState,
     assignment: PlaybackAssignment,
 ) -> Result<Json<PlaybackResponse>, ApiError> {

@@ -101,6 +101,44 @@ Shuffle, repeat, output-device selection and persisted volume remain deferred.
 Physical output, desktop slider interaction and Windows require separate manual
 checks.
 
+## User playlists
+
+The shared [`playlist controller`](../../crates/osu-radio-client/src/controller/playlists.rs)
+owns playlist HTTP requests, modal state, errors, selected item IDs and independent
+list/detail request epochs. Qt adapts this state; it does not access persistence.
+[`PlaylistsModal.qml`](../../apps/osu-radio-qt/qml/components/PlaylistsModal.qml)
+uses the existing `AppModal` for creation, renaming, deletion and selecting a
+playlist. The add dialog offers checkboxes for the selected song's concrete
+difficulties; if search results omit that song, the client reloads its complete
+group without changing the library query. Late results from another opening are
+ignored. A failed mutation retains the dialog and choices for retry;
+mutations disable editing and dismissal until their result arrives.
+
+Opening a playlist replaces the Songs presentation with one row per item,
+including separate difficulties sharing an audio ID and saved unavailable rows.
+Selection uses `playlistItemId`, independently of playback. All songs returns to
+the library; each row can be removed from its playlist. Explicit Play starts the
+playlist at that item, while Играть плейлист starts at the first available item.
+Pause/resume and seeking check the assignment's `current_playlist_item_id`, so
+selecting another difficulty with identical audio does not control the previous
+item. Duration updates preserve each row's difficulty subtitle. Unavailable
+items remain selectable and removable, with Play disabled.
+
+The queue is a snapshot taken by the backend; editing a playlist does not change
+it. Library refresh also resolves the open playlist against the new import.
+Persistence, stable membership and unavailable-copy selection are specified in
+[database](database.md#user-playlists); HTTP/status behavior is in
+[backend](backend.md#user-playlists). Vizia keeps its existing presentation and
+does not expose playlist controls.
+
+The offline [`mock playlist workflow`](../../crates/osu-radio-client/src/mock/playlists.rs)
+demonstrates CRUD, difficulty selection, duplicate audio and unavailable items
+without a server or device. Coverage lives in
+[controller tests](../../crates/osu-radio-client/src/controller/playlists/tests.rs),
+[the native Qt adapter](../../apps/osu-radio-qt/src/app_bridge.rs), and
+[offscreen/real-backend probes](../../apps/osu-radio-qt/tests/launch_smoke.rs).
+Desktop input, GPU rendering and physical audio remain separate acceptance checks.
+
 ## Session and server supervision
 
 `Session::start` starts `EmbeddedServer`, then creates an `ApiClient` at the reported URL. `Session` exposes `api`, `base_url`, and asynchronous `shutdown`. It does not itself perform an HTTP readiness request. After `Connected`, the GUI loads library and folders independently, each with loading, empty and error states. Songs have a “Refresh library” button in the bottom-left footer, outside the scrolling list; it also retries failures and is disabled while loading. Status messages remain above the list and are hidden when empty. Settings show Retry only after a failure.
@@ -328,11 +366,14 @@ session; build the server and provide its `.env` as described in
 [development](development.md#qt-frontend). `--help` and invalid arguments are
 handled before GUI initialization. `--component-gallery` remains standalone and
 never creates a runtime, session, audio device or database. Playback and seeking
-use the shared controller; filter chips and playlists remain unavailable. Qt folder additions now import their source when Apply succeeds; Vizia retains its immediate registration chooser.
+use the shared controller; filter chips remain unavailable. Playlists use the
+shared workflow described above. Qt folder additions import their source when
+Apply succeeds; Vizia retains its immediate registration chooser.
 
 The production adapter exposes typed properties and a `QAbstractListModel` with
-`audioId`, `title`, `artist`, `subtitle`, `durationLabel` and `artworkUrl` roles.
-Media arrival changes individual rows; selection uses database IDs, with `-1`
+`audioId`, `title`, `artist`, `subtitle`, `durationLabel`, `artworkUrl`,
+`playlistItemId` and `available` roles.
+Media arrival changes individual rows; selection uses database/item IDs, with `-1`
 representing no selected ID at the QML boundary. The small folder collection uses
 typed `{id, label}` entries. Asynchronous controller updates are queued to the
 QObject thread and safely rejected after object destruction. Qt image URLs and
@@ -394,7 +435,10 @@ Its bounded JSON snapshot is not used for the production library. Shared
 [`components`](../../apps/osu-radio-qt/qml/components) preserve native control
 keyboard behavior, popup/modal focus handling and disabled demonstrations.
 The menu's configurable value role uses folder IDs in Settings and original
-indices in the gallery. Gallery actions still do not create playlists. Its folder examples exercise registered/new rows, zero and failed counts, Computing, staged actions and partial-success retry without filesystem or backend access.
+indices in the gallery. Gallery playlist actions modify only in-memory mock data.
+Its folder examples exercise registered/new rows, zero and failed counts,
+Computing, staged actions and partial-success retry without filesystem or backend
+access.
 
 [`build.rs`](../../apps/osu-radio-qt/build.rs) embeds QML and assets; resource
 loading does not depend on the working directory. Server configuration still does.

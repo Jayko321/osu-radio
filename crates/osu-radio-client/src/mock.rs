@@ -4,6 +4,8 @@
 //! Durations are demonstration values; selecting a song does not start playback.
 
 use serde::Serialize;
+mod playlists;
+pub use playlists::MockPlaylists;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MockTrack {
@@ -24,6 +26,7 @@ pub struct MockState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GalleryState {
+    pub playlists: MockPlaylists,
     pub folder_rows: Vec<MockFolderRow>,
     pub folder_message: String,
     pub disabled: bool,
@@ -83,6 +86,7 @@ fn folder_rows() -> Vec<MockFolderRow> {
 /// Frontends translate their events to these toolkit-independent actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    Playlist(crate::controller::PlaylistAction),
     FolderReset,
     FolderToggle(String),
     FolderCount(String),
@@ -135,6 +139,7 @@ impl Default for GalleryState {
     fn default() -> Self {
         Self {
             folder_rows: folder_rows(),
+            playlists: MockPlaylists::default(),
             folder_message: String::new(),
             disabled: false,
             presses: 0,
@@ -208,6 +213,7 @@ impl MockState {
             Action::Search(value) => replace(&mut self.search, value),
             Action::GalleryDisabled(value) => replace(&mut self.gallery.disabled, value),
             _ if self.gallery.disabled => false,
+            Action::Playlist(action) => self.gallery.playlists.apply(action),
             Action::FolderReset => {
                 self.gallery.folder_rows = folder_rows();
                 self.gallery.folder_message.clear();

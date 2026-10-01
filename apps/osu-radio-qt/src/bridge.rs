@@ -1,6 +1,7 @@
 //! Qt-only projection of the shared, memory-only component gallery.
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
+use osu_radio_client::controller::PlaylistAction;
 use osu_radio_client::mock::{Action, MockState};
 use serde_json::json;
 use std::pin::Pin;
@@ -58,6 +59,26 @@ impl Default for MockBridgeRust {
 
 fn action_from_qml(action: &str, value: String) -> Option<Action> {
     Some(match action {
+        "playlistOpen" => Action::Playlist(PlaylistAction::Open),
+        "playlistClose" => Action::Playlist(PlaylistAction::Close),
+        "playlistAddOpen" => Action::Playlist(PlaylistAction::OpenAdd),
+        "playlistCreate" => Action::Playlist(PlaylistAction::Create(value)),
+        "playlistRename" => {
+            let body: serde_json::Value = serde_json::from_str(&value).ok()?;
+            Action::Playlist(PlaylistAction::Rename {
+                id: i32::try_from(body.get("id")?.as_i64()?).ok()?,
+                name: body.get("name")?.as_str()?.into(),
+            })
+        }
+        "playlistDelete" => Action::Playlist(PlaylistAction::Delete(value.parse().ok()?)),
+        "playlistSelect" => Action::Playlist(PlaylistAction::Select(Some(value.parse().ok()?))),
+        "playlistTarget" => Action::Playlist(PlaylistAction::ChooseTarget(value.parse().ok()?)),
+        "playlistDifficulty" => {
+            Action::Playlist(PlaylistAction::ToggleDifficulty(value.parse().ok()?))
+        }
+        "playlistAdd" => Action::Playlist(PlaylistAction::Add),
+        "playlistRemoveItem" => Action::Playlist(PlaylistAction::RemoveItem(value.parse().ok()?)),
+        "playlistRefresh" => Action::Playlist(PlaylistAction::Refresh),
         "folderReset" => Action::FolderReset,
         "folderToggle" => Action::FolderToggle(value),
         "folderCount" => Action::FolderCount(value),

@@ -276,6 +276,52 @@ fn real_backend_uses_a_disposable_database() {
     assert!(directory.path().join("library.sqlite").is_file());
 }
 
+#[cfg(unix)]
+#[test]
+#[ignore = "needs cargo build -p osu-radio-server --locked (SQLite)"]
+fn real_backend_playlists_use_a_disposable_database() {
+    let directory = tempfile::tempdir().expect("isolated playlist backend directory");
+    std::fs::write(
+        directory.path().join(".env"),
+        "SQLITE_DATABASE_URL=library.sqlite\n",
+    )
+    .expect("isolated env");
+    let server = Path::new(env!("CARGO_BIN_EXE_osu-radio-qt")).with_file_name("osu-radio-server");
+    assert!(
+        server.is_file(),
+        "build the server before running this test"
+    );
+    assert_probe(&run(&[], "offscreen", directory.path(), &server, "empty"));
+    // Test-only SQL after the real server creates its versioned schema. No application DB or files.
+    let seeded = Command::new("python3").args(["-c", r"
+import hashlib, json, sqlite3
+with sqlite3.connect('library.sqlite') as db:
+    db.execute('PRAGMA foreign_keys=ON')
+    db.execute('INSERT INTO osu_installations (id,user_data_id,kind,root_path,marker_path) VALUES (1,1,?,?,?)', ('stable',json.dumps('/test/osu'),json.dumps('/test/osu/osu!.db')))
+    db.execute('INSERT INTO beatmap_sets (id,installation_id) VALUES (1,1)')
+    metadata = ['radio-db:metadata:v2','Test song',None,'Test artist',None,None,None,None,'audio.mp3',None]
+    key = hashlib.sha256(json.dumps(metadata,separators=(',',':')).encode()).hexdigest()
+    db.execute('INSERT INTO beatmap_metadata (hash,title,artist,audio_file) VALUES (?,?,?,?)',(key,'Test song','Test artist','audio.mp3'))
+    db.execute('INSERT INTO audio_sources (id,kind,location) VALUES (1,?,?)',('local','/test/missing-audio'))
+    for identifier,name in [(1,'Easy'),(2,'Hard')]:
+        db.execute('INSERT INTO beatmaps (id,beatmap_set_id,hash,difficulty_name,metadata_hash,audio_source_id) VALUES (?,1,?,?,?,1)',(identifier,'test-'+name,name,key))
+    db.execute('INSERT INTO playlists (id,name) VALUES (1,?)',('Unavailable',))
+    db.execute('INSERT INTO playlist_items (playlist_id,source_kind,beatmap_hash,title,artist,difficulty_name) VALUES (1,?,?,?,?,?)',('stable','missing','Ghost','Artist','Missing'))
+"]).current_dir(directory.path()).output().expect("seed disposable playlist fixture");
+    assert!(
+        seeded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&seeded.stderr)
+    );
+    assert_probe(&run(
+        &[],
+        "offscreen",
+        directory.path(),
+        &server,
+        "playlists",
+    ));
+}
+
 #[test]
 fn help_and_invalid_arguments_do_not_initialize_a_gui() {
     let directory = tempfile::tempdir().expect("empty directory");

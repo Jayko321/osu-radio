@@ -16,3 +16,5 @@ pub use tag::TagRepository;
 
 pub mod queue;
 pub use queue::QueueRepository;
+pub mod playlist;
+pub use playlist::PlaylistRepository;

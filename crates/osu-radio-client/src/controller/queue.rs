@@ -3,7 +3,8 @@ use crate::models::{PlaybackAssignment, PlaybackCommand, PlaybackMode};
 
 #[derive(Clone)]
 pub(super) struct PendingPlayback {
-    command: PlaybackCommand,
+    pub(super) command: PlaybackCommand,
+    pub(super) playlist: Option<(i32, Option<i32>)>,
     expected_token: Option<u64>,
 }
 impl Controller {
@@ -14,6 +15,20 @@ impl Controller {
         }
         self.playback_commands.push_back(PendingPlayback {
             command,
+            playlist: None,
+            expected_token: None,
+        });
+    }
+    pub(super) fn queue_playlist_play(&mut self, id: i32, start: Option<i32>) {
+        if self.session.is_none() {
+            self.playback_error("Connect to the server to play a playlist.".into());
+            return;
+        }
+        self.playback_commands.push_back(PendingPlayback {
+            command: PlaybackCommand::Play {
+                audio_source_id: None,
+            },
+            playlist: Some((id, start)),
             expected_token: None,
         });
     }
@@ -34,10 +49,12 @@ impl Controller {
             }
             self.playback_command_busy = true;
             self.task(async move {
-                let result = api
-                    .playback_command(&pending.command)
-                    .await
-                    .map_err(|error| describe(&error));
+                let result = if let Some((id, start)) = pending.playlist {
+                    api.play_playlist(id, start).await
+                } else {
+                    api.playback_command(&pending.command).await
+                }
+                .map_err(|error| describe(&error));
                 Completed::PlaybackCommand { pending, result }
             });
             break;
@@ -119,7 +136,19 @@ impl Controller {
             track
         });
         if restart && assignment.mode != PlaybackMode::Stopped && self.current_track.is_some() {
-            self.selected = assignment.current_audio_source_id;
+            if self.playlists.view.active_id.is_some() {
+                if self.playlists.view.active.as_ref().is_some_and(|playlist| {
+                    playlist
+                        .items
+                        .iter()
+                        .any(|item| Some(item.id) == assignment.current_playlist_item_id)
+                }) {
+                    self.playlists.view.selected_item_id = assignment.current_playlist_item_id;
+                    self.emit_playlists();
+                }
+            } else {
+                self.selected = assignment.current_audio_source_id;
+            }
         }
         let id = assignment.current_audio_source_id;
         let token = assignment.playback_token;
@@ -151,6 +180,7 @@ impl Controller {
                 command: PlaybackCommand::PauseIfCurrent {
                     playback_token: token,
                 },
+                playlist: None,
                 expected_token: Some(token),
             });
         }
@@ -165,12 +195,18 @@ impl Controller {
             playback.can_previous = assignment.can_previous;
         }
         self.worker_state = playback.clone();
+        playback.current_playlist_item_id = self
+            .assignment
+            .as_ref()
+            .and_then(|state| state.current_playlist_item_id);
         (self.emit)(AppUpdate::Playback(playback));
     }
     fn playback_error(&self, error: String) {
         let assignment = self.assignment.as_ref();
         let mut playback = self.worker_state.clone();
         playback.current_audio_id = assignment.and_then(|state| state.current_audio_source_id);
+        playback.current_playlist_item_id =
+            assignment.and_then(|state| state.current_playlist_item_id);
         playback.playback_token = assignment.map_or(0, |state| state.playback_token);
         playback.can_next = assignment.is_some_and(|state| state.can_next);
         playback.can_previous = assignment.is_some_and(|state| state.can_previous);
@@ -219,6 +255,7 @@ impl Controller {
         {
             self.playback_commands.push_back(PendingPlayback {
                 command,
+                playlist: None,
                 expected_token: Some(token),
             });
         }

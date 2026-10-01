@@ -6,6 +6,7 @@ use std::sync::Arc;
 fn assignment(revision: u64, token: u64, id: i32, mode: PlaybackMode) -> PlaybackAssignment {
     PlaybackAssignment {
         current_audio_source_id: Some(id),
+        current_playlist_item_id: None,
         track: Some(LibraryTrack {
             audio_source_id: id,
             title: Some(format!("Track {id}")),
@@ -134,6 +135,7 @@ async fn delayed_callback_retry_is_dropped_after_a_new_token_and_does_not_block_
     state.playback_command_busy = true;
     state.playback_command_completed(
         PendingPlayback {
+            playlist: None,
             command: PlaybackCommand::PauseIfCurrent { playback_token: 4 },
             expected_token: Some(4),
         },

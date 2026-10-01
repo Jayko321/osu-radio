@@ -9,7 +9,7 @@ use osu_radio_client::{
     ServerOptions, Track,
     controller::{
         AppCommand, AppController, AppUpdate, ConnectionStatus, FolderAction, FolderSelection,
-        MediaTicket,
+        MediaTicket, PlaylistAction, PlaylistsState,
     },
     playback::{Playback, PlayerState},
 };
@@ -170,7 +170,80 @@ pub mod ffi {
         )]
         #[qproperty(QString, playback_message, cxx_name = "playbackMessage", READ, NOTIFY)]
         #[qproperty(f32, volume, cxx_name = "volume", READ, NOTIFY)]
+        #[qproperty(QVariantList, playlists, cxx_name = "playlists", READ, NOTIFY)]
+        #[qproperty(
+            QVariantList,
+            playlist_candidates,
+            cxx_name = "playlistCandidates",
+            READ,
+            NOTIFY
+        )]
+        #[qproperty(bool, playlist_open, cxx_name = "playlistOpen", READ, NOTIFY)]
+        #[qproperty(bool, playlist_adding, cxx_name = "playlistAdding", READ, NOTIFY)]
+        #[qproperty(bool, playlist_busy, cxx_name = "playlistBusy", READ, NOTIFY)]
+        #[qproperty(bool, playlist_loading, cxx_name = "playlistLoading", READ, NOTIFY)]
+        #[qproperty(QString, playlist_message, cxx_name = "playlistMessage", READ, NOTIFY)]
+        #[qproperty(i32, active_playlist_id, cxx_name = "activePlaylistId", READ, NOTIFY)]
+        #[qproperty(
+            QString,
+            active_playlist_name,
+            cxx_name = "activePlaylistName",
+            READ,
+            NOTIFY
+        )]
+        #[qproperty(
+            i32,
+            selected_playlist_item_id,
+            cxx_name = "selectedPlaylistItemId",
+            READ,
+            NOTIFY
+        )]
+        #[qproperty(i32, playlist_target_id, cxx_name = "playlistTargetId", READ, NOTIFY)]
+        #[qproperty(bool, selected_available, cxx_name = "selectedAvailable", READ, NOTIFY)]
+        #[qproperty(bool, can_add_playlist, cxx_name = "canAddPlaylist", READ, NOTIFY)]
         type AppBridge = super::AppBridgeRust;
+        #[qinvokable]
+        #[cxx_name = "openPlaylists"]
+        fn open_playlists(self: Pin<&mut AppBridge>);
+        #[qinvokable]
+        #[cxx_name = "closePlaylists"]
+        fn close_playlists(self: Pin<&mut AppBridge>);
+        #[qinvokable]
+        #[cxx_name = "refreshPlaylists"]
+        fn refresh_playlists(self: Pin<&mut AppBridge>);
+        #[qinvokable]
+        #[cxx_name = "createPlaylist"]
+        fn create_playlist(self: Pin<&mut AppBridge>, name: &QString);
+        #[qinvokable]
+        #[cxx_name = "renamePlaylist"]
+        fn rename_playlist(self: Pin<&mut AppBridge>, id: i32, name: &QString);
+        #[qinvokable]
+        #[cxx_name = "deletePlaylist"]
+        fn delete_playlist(self: Pin<&mut AppBridge>, id: i32);
+        #[qinvokable]
+        #[cxx_name = "selectPlaylist"]
+        fn select_playlist(self: Pin<&mut AppBridge>, id: i32);
+        #[qinvokable]
+        #[cxx_name = "selectPlaylistItem"]
+        fn select_playlist_item(self: Pin<&mut AppBridge>, id: i32);
+        #[qinvokable]
+        #[cxx_name = "playPlaylist"]
+        fn play_playlist(self: Pin<&mut AppBridge>);
+        #[qinvokable]
+        #[cxx_name = "openPlaylistAdd"]
+        fn open_playlist_add(self: Pin<&mut AppBridge>);
+        #[qinvokable]
+        #[cxx_name = "choosePlaylistTarget"]
+        fn choose_playlist_target(self: Pin<&mut AppBridge>, id: i32);
+        #[qinvokable]
+        #[cxx_name = "togglePlaylistDifficulty"]
+        fn toggle_playlist_difficulty(self: Pin<&mut AppBridge>, id: i32);
+        #[qinvokable]
+        #[cxx_name = "addPlaylistItems"]
+        fn add_playlist_items(self: Pin<&mut AppBridge>);
+        #[qinvokable]
+        #[cxx_name = "removePlaylistItem"]
+        fn remove_playlist_item(self: Pin<&mut AppBridge>, id: i32);
         #[qinvokable]
         #[cxx_override]
         fn data(self: &AppBridge, index: &QModelIndex, role: i32) -> QVariant;
@@ -266,6 +339,21 @@ pub mod ffi {
 // Independent operation flags are exposed as individual typed QML properties.
 #[allow(clippy::struct_excessive_bools)]
 pub struct AppBridgeRust {
+    playlist_state: PlaylistsState,
+    playlists: VariantList,
+    playlist_candidates: VariantList,
+    playlist_open: bool,
+    playlist_adding: bool,
+    playlist_busy: bool,
+    playlist_loading: bool,
+    playlist_message: QString,
+    active_playlist_id: i32,
+    active_playlist_name: QString,
+    selected_playlist_item_id: i32,
+    playlist_target_id: i32,
+    selected_available: bool,
+    can_add_playlist: bool,
+
     folder_selection_rows: VariantList,
     folder_selection_open: bool,
     folder_selection_applying: bool,
@@ -315,6 +403,20 @@ pub struct AppBridgeRust {
 impl Default for AppBridgeRust {
     fn default() -> Self {
         Self {
+            playlist_state: PlaylistsState::default(),
+            playlists: VariantList::default(),
+            playlist_candidates: VariantList::default(),
+            playlist_open: Default::default(),
+            playlist_adding: Default::default(),
+            playlist_busy: Default::default(),
+            playlist_loading: Default::default(),
+            playlist_message: QString::default(),
+            active_playlist_id: -1,
+            active_playlist_name: QString::default(),
+            selected_playlist_item_id: -1,
+            playlist_target_id: -1,
+            selected_available: Default::default(),
+            can_add_playlist: Default::default(),
             folder_selection_rows: VariantList::default(),
             folder_selection_open: false,
             folder_selection_applying: false,
@@ -364,16 +466,19 @@ impl Default for AppBridgeRust {
     }
 }
 struct Row {
+    playlist_item_id: Option<i32>,
     track: Track,
     artwork: QString,
 }
-const ROLES: [(i32, &str); 6] = [
+const ROLES: [(i32, &str); 8] = [
     (256, "audioId"),
     (257, "title"),
     (258, "artist"),
     (259, "subtitle"),
     (260, "durationLabel"),
     (261, "artworkUrl"),
+    (262, "playlistItemId"),
+    (263, "available"),
 ];
 macro_rules! property_setter {
     ($setter:ident, $field:ident, $notify:ident, $ty:ty) => {
@@ -388,6 +493,79 @@ macro_rules! property_setter {
     };
 }
 impl ffi::AppBridge {
+    property_setter!(set_playlists, playlists, playlists_changed, VariantList);
+    property_setter!(
+        set_playlist_candidates,
+        playlist_candidates,
+        playlist_candidates_changed,
+        VariantList
+    );
+    property_setter!(
+        set_playlist_open,
+        playlist_open,
+        playlist_open_changed,
+        bool
+    );
+    property_setter!(
+        set_playlist_adding,
+        playlist_adding,
+        playlist_adding_changed,
+        bool
+    );
+    property_setter!(
+        set_playlist_busy,
+        playlist_busy,
+        playlist_busy_changed,
+        bool
+    );
+    property_setter!(
+        set_playlist_loading,
+        playlist_loading,
+        playlist_loading_changed,
+        bool
+    );
+    property_setter!(
+        set_playlist_message,
+        playlist_message,
+        playlist_message_changed,
+        QString
+    );
+    property_setter!(
+        set_active_playlist_id,
+        active_playlist_id,
+        active_playlist_id_changed,
+        i32
+    );
+    property_setter!(
+        set_active_playlist_name,
+        active_playlist_name,
+        active_playlist_name_changed,
+        QString
+    );
+    property_setter!(
+        set_selected_playlist_item_id,
+        selected_playlist_item_id,
+        selected_playlist_item_id_changed,
+        i32
+    );
+    property_setter!(
+        set_playlist_target_id,
+        playlist_target_id,
+        playlist_target_id_changed,
+        i32
+    );
+    property_setter!(
+        set_selected_available,
+        selected_available,
+        selected_available_changed,
+        bool
+    );
+    property_setter!(
+        set_can_add_playlist,
+        can_add_playlist,
+        can_add_playlist_changed,
+        bool
+    );
     property_setter!(
         set_folder_selection_rows,
         folder_selection_rows,
@@ -577,6 +755,8 @@ impl ffi::AppBridge {
             259 => QVariant::from(&QString::from(&row.track.subtitle)),
             260 => QVariant::from(&QString::from(row.track.duration_label())),
             261 => QVariant::from(&row.artwork),
+            262 => QVariant::from(&row.playlist_item_id.unwrap_or(-1)),
+            263 => QVariant::from(&(row.track.audio_source_id >= 0)),
             _ => QVariant::default(),
         }
     }
@@ -643,6 +823,109 @@ impl ffi::AppBridge {
         }
         self.command(AppCommand::Connect);
     }
+    fn playlist_command(&self, action: PlaylistAction) {
+        self.command(AppCommand::Playlist(action));
+    }
+    pub fn open_playlists(self: Pin<&mut Self>) {
+        self.playlist_command(PlaylistAction::Open);
+    }
+    pub fn close_playlists(self: Pin<&mut Self>) {
+        self.playlist_command(PlaylistAction::Close);
+    }
+    pub fn refresh_playlists(self: Pin<&mut Self>) {
+        self.playlist_command(PlaylistAction::Refresh);
+    }
+    pub fn create_playlist(self: Pin<&mut Self>, name: &QString) {
+        self.playlist_command(PlaylistAction::Create(name.to_string()));
+    }
+    pub fn rename_playlist(self: Pin<&mut Self>, id: i32, name: &QString) {
+        self.playlist_command(PlaylistAction::Rename {
+            id,
+            name: name.to_string(),
+        });
+    }
+    pub fn delete_playlist(self: Pin<&mut Self>, id: i32) {
+        self.playlist_command(PlaylistAction::Delete(id));
+    }
+    pub fn select_playlist(self: Pin<&mut Self>, id: i32) {
+        self.playlist_command(PlaylistAction::Select((id >= 0).then_some(id)));
+    }
+    pub fn select_playlist_item(self: Pin<&mut Self>, id: i32) {
+        self.playlist_command(PlaylistAction::SelectItem(id));
+    }
+    pub fn play_playlist(self: Pin<&mut Self>) {
+        self.playlist_command(PlaylistAction::Play {
+            id: self.active_playlist_id,
+            start_item_id: None,
+        });
+    }
+    pub fn open_playlist_add(self: Pin<&mut Self>) {
+        self.playlist_command(PlaylistAction::OpenAdd);
+    }
+    pub fn choose_playlist_target(self: Pin<&mut Self>, id: i32) {
+        self.playlist_command(PlaylistAction::ChooseTarget(id));
+    }
+    pub fn toggle_playlist_difficulty(self: Pin<&mut Self>, id: i32) {
+        self.playlist_command(PlaylistAction::ToggleDifficulty(id));
+    }
+    pub fn add_playlist_items(self: Pin<&mut Self>) {
+        self.playlist_command(PlaylistAction::Add);
+    }
+    pub fn remove_playlist_item(self: Pin<&mut Self>, id: i32) {
+        self.playlist_command(PlaylistAction::RemoveItem(id));
+    }
+    fn project_playlists(mut self: Pin<&mut Self>, state: PlaylistsState) {
+        let playlists = state
+            .playlists
+            .iter()
+            .map(|playlist| {
+                let mut map = QMap::<QMapPair_QString_QVariant>::default();
+                map.insert(QString::from("id"), QVariant::from(&playlist.id));
+                map.insert(
+                    QString::from("name"),
+                    QVariant::from(&QString::from(&playlist.name)),
+                );
+                QVariant::from(&map)
+            })
+            .collect();
+        let candidates = state
+            .candidates
+            .iter()
+            .map(|candidate| {
+                let mut map = QMap::<QMapPair_QString_QVariant>::default();
+                map.insert(QString::from("id"), QVariant::from(&candidate.beatmap_id));
+                map.insert(
+                    QString::from("name"),
+                    QVariant::from(&QString::from(&candidate.name)),
+                );
+                map.insert(QString::from("checked"), QVariant::from(&candidate.checked));
+                QVariant::from(&map)
+            })
+            .collect();
+        self.as_mut().set_playlists(playlists);
+        self.as_mut().set_playlist_candidates(candidates);
+        self.as_mut().set_playlist_busy(state.busy);
+        self.as_mut().set_playlist_loading(state.loading);
+        self.as_mut().set_playlist_adding(state.adding);
+        self.as_mut()
+            .set_playlist_message(QString::from(&state.message));
+        self.as_mut()
+            .set_active_playlist_id(state.active_id.unwrap_or(-1));
+        self.as_mut().set_active_playlist_name(QString::from(
+            state
+                .active
+                .as_ref()
+                .map_or("Playlist", |playlist| playlist.name.as_str()),
+        ));
+        self.as_mut()
+            .set_selected_playlist_item_id(state.selected_item_id.unwrap_or(-1));
+        self.as_mut()
+            .set_playlist_target_id(state.target_id.unwrap_or(-1));
+        let open = state.open;
+        self.as_mut().rust_mut().playlist_state = state;
+        self.as_mut().project_playback();
+        self.set_playlist_open(open);
+    }
     pub fn search_library(self: Pin<&mut Self>, query: &QString) {
         self.command(AppCommand::SearchLibrary(query.to_string()));
     }
@@ -657,8 +940,11 @@ impl ffi::AppBridge {
         self.command(AppCommand::SelectTrack((id >= 0).then_some(id)));
     }
     fn transport_command(&self) -> Option<AppCommand> {
-        if !self.has_selection {
+        if !self.has_selection || !self.selected_available {
             return None;
+        }
+        if self.active_playlist_id >= 0 {
+            return Some(AppCommand::Playlist(PlaylistAction::TogglePlayback));
         }
         Some(
             if self.playback.current_audio_id == Some(self.selected_audio_id) {
@@ -699,7 +985,10 @@ impl ffi::AppBridge {
     }
     fn project_playback(mut self: Pin<&mut Self>) {
         let current = self.playback.current_audio_id;
-        let selected_current = self.has_selection && current == Some(self.selected_audio_id);
+        let selected_current = self.has_selection
+            && current == Some(self.selected_audio_id)
+            && (self.active_playlist_id < 0
+                || self.playback.current_playlist_item_id == Some(self.selected_playlist_item_id));
         let position = if selected_current {
             self.playback.snapshot.position
         } else {
@@ -723,7 +1012,8 @@ impl ffi::AppBridge {
             }
         });
         let volume = self.playback.snapshot.volume;
-        let can_seek = self.playback.has_source && duration.is_some_and(|d| !d.is_zero());
+        let can_seek =
+            selected_current && self.playback.has_source && duration.is_some_and(|d| !d.is_zero());
         let can_next = self.playback.can_next;
         let can_previous = self.playback.can_previous;
         self.as_mut().set_current_audio_id(current.unwrap_or(-1));
@@ -818,14 +1108,14 @@ impl ffi::AppBridge {
         self.command(AppCommand::RetryFolders);
     }
     pub fn request_media(self: Pin<&mut Self>, id: i32) {
-        let cover = if let Some(row) = self
+        let cover = if self.has_selection && id == self.selected_audio_id {
+            self.selected_cover_id
+        } else if let Some(row) = self
             .audio_rows
             .get(&id)
             .and_then(|index| self.rows.get(*index))
         {
             row.track.cover_beatmap_id
-        } else if self.has_selection && id == self.selected_audio_id {
-            self.selected_cover_id
         } else {
             return;
         };
@@ -857,6 +1147,10 @@ impl ffi::AppBridge {
         self.as_mut()
             .set_selected_audio_id(track.as_ref().map_or(-1, |t| t.audio_source_id));
         self.as_mut().set_has_selection(track.is_some());
+        self.as_mut()
+            .set_selected_available(track.as_ref().is_some_and(|t| t.audio_source_id >= 0));
+        self.as_mut()
+            .set_can_add_playlist(track.as_ref().is_some_and(|t| !t.difficulties.is_empty()));
         self.as_mut().set_selected_title(QString::from(
             track.as_ref().map_or("", |t| t.title.as_str()),
         ));
@@ -904,9 +1198,18 @@ impl ffi::AppBridge {
             self.as_mut().begin_reset_model();
         }
         self.as_mut().rust_mut().generation = generation;
+        let item_ids: Vec<_> = self
+            .playlist_state
+            .active
+            .as_ref()
+            .map_or_else(Vec::new, |playlist| {
+                playlist.items.iter().map(|item| item.id).collect()
+            });
         self.as_mut().rust_mut().rows = tracks
             .into_iter()
-            .map(|track| Row {
+            .enumerate()
+            .map(|(index, track)| Row {
+                playlist_item_id: item_ids.get(index).copied(),
                 track,
                 artwork: QString::default(),
             })
@@ -934,22 +1237,9 @@ impl ffi::AppBridge {
     }
     fn apply(mut self: Pin<&mut Self>, update: AppUpdate) {
         match update {
+            AppUpdate::Playlists(state) => self.project_playlists(state),
             AppUpdate::FolderSelection(selection) => self.project_folder_selection(selection),
-            AppUpdate::FolderSelectionPickerRequested(epoch) => {
-                if let (Some(context), Some(controller)) =
-                    (RuntimeContext::current(), self.controller.clone())
-                {
-                    let task = context.handle.spawn(async move {
-                        let path = rfd::AsyncFileDialog::new()
-                            .set_title("Select osu! installation")
-                            .pick_folder()
-                            .await
-                            .map(|file| file.path().to_path_buf());
-                        controller.send(AppCommand::CompleteFolderSelectionPick { epoch, path });
-                    });
-                    context.track(task);
-                }
-            }
+            AppUpdate::FolderSelectionPickerRequested(epoch) => self.pick_folder(Some(epoch)),
             AppUpdate::Playback(playback) => {
                 self.as_mut().rust_mut().playback = playback;
                 self.project_playback();
@@ -979,11 +1269,24 @@ impl ffi::AppBridge {
             }
             AppUpdate::TracksReplaced(tracks) => self.replace_tracks(tracks),
             AppUpdate::TrackChanged(track) => {
-                if let Some(index) = self.audio_rows.get(&track.audio_source_id).copied() {
+                let indices: Vec<_> = self
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, row)| {
+                        (row.track.audio_source_id == track.audio_source_id).then_some(index)
+                    })
+                    .collect();
+                for index in indices {
+                    let playlist = self.active_playlist_id >= 0;
                     if let Some(row) = self.as_mut().rust_mut().rows.get_mut(index) {
-                        row.track = track;
+                        if playlist {
+                            row.track.duration = track.duration;
+                        } else {
+                            row.track = track.clone();
+                        }
                     }
-                    self.notify_row(index, &[257, 258, 259, 260]);
+                    self.as_mut().notify_row(index, &[257, 258, 259, 260]);
                 }
             }
             AppUpdate::TrackSelected(track) => self.selection(track),
@@ -1006,22 +1309,26 @@ impl ffi::AppBridge {
                 self.set_folders(folders);
             }
             AppUpdate::FolderSelected(id) => self.set_selected_folder_id(id.unwrap_or(-1)),
-            AppUpdate::FolderPickerRequested => {
-                if let (Some(context), Some(controller)) =
-                    (RuntimeContext::current(), self.controller.clone())
-                {
-                    let task = context.handle.spawn(async move {
-                        let path = rfd::AsyncFileDialog::new()
-                            .set_title("Select osu! installation")
-                            .pick_folder()
-                            .await
-                            .map(|file| file.path().to_path_buf());
-                        controller.send(AppCommand::CompleteFolderPick(path));
-                    });
-                    context.track(task);
-                }
-            }
+            AppUpdate::FolderPickerRequested => self.pick_folder(None),
             AppUpdate::Artwork { .. } => {} // Dispatched with its acknowledgement guard.
+        }
+    }
+    fn pick_folder(self: Pin<&mut Self>, epoch: Option<u64>) {
+        if let (Some(context), Some(controller)) =
+            (RuntimeContext::current(), self.controller.clone())
+        {
+            let task = context.handle.spawn(async move {
+                let path = rfd::AsyncFileDialog::new()
+                    .set_title("Select osu! installation")
+                    .pick_folder()
+                    .await
+                    .map(|file| file.path().to_path_buf());
+                controller.send(match epoch {
+                    Some(epoch) => AppCommand::CompleteFolderSelectionPick { epoch, path },
+                    None => AppCommand::CompleteFolderPick(path),
+                });
+            });
+            context.track(task);
         }
     }
     fn decode(self: Pin<&mut Self>, mut ack: ArtworkAck, cover_id: i32, bytes: Vec<u8>) {
@@ -1173,6 +1480,7 @@ mod tests {
     #[test]
     fn native_model_cache_and_destroyed_object_contracts() {
         playback_projection_keeps_selection_current_track_and_loading_independent();
+        playlist_projection_keeps_duplicate_audio_rows_and_unavailable_selection_distinct();
         assert!(
             native::check_artwork_cache().is_empty(),
             "{}",
@@ -1234,5 +1542,55 @@ mod tests {
                 .is_err()
         );
         assert!(!executed.load(Ordering::Relaxed));
+    }
+
+    fn playlist_projection_keeps_duplicate_audio_rows_and_unavailable_selection_distinct() {
+        let mut object = native::new_app_bridge();
+        let mut model = object.pin_mut();
+        let mut view = osu_radio_client::mock::MockPlaylists::default().view;
+        let tracks = view.tracks();
+        model.as_mut().apply(AppUpdate::Playlists(view.clone()));
+        model
+            .as_mut()
+            .apply(AppUpdate::TracksReplaced(tracks.clone()));
+        model.as_mut().selection(tracks.first().cloned());
+        assert_eq!(model.track_count, 3);
+        let first = model.index(0, 0, &QModelIndex::default());
+        let second = model.index(1, 0, &QModelIndex::default());
+        assert_eq!(model.data(&first, 256), model.data(&second, 256));
+        assert_ne!(model.data(&first, 262), model.data(&second, 262));
+        let original_subtitle = model.data(&first, 259);
+        let mut duration = tracks.get(1).unwrap().clone();
+        duration.duration = Some(Duration::from_secs(90));
+        model.as_mut().apply(AppUpdate::TrackChanged(duration));
+        assert_eq!(model.data(&first, 259), original_subtitle);
+        assert_eq!(model.data(&first, 260), model.data(&second, 260));
+        let playback = Playback {
+            current_audio_id: Some(1),
+            current_playlist_item_id: Some(1),
+            has_source: true,
+            snapshot: osu_radio_client::playback::Snapshot {
+                state: PlayerState::Playing,
+                duration: Some(Duration::from_secs(90)),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        model.as_mut().apply(AppUpdate::Playback(playback));
+        assert!(model.selected_is_playing && model.can_seek);
+        view.selected_item_id = Some(2);
+        model.as_mut().apply(AppUpdate::Playlists(view.clone()));
+        model.as_mut().selection(tracks.get(1).cloned());
+        assert!(!model.selected_is_playing && !model.can_seek);
+        assert!(matches!(
+            model.transport_command(),
+            Some(AppCommand::Playlist(PlaylistAction::TogglePlayback))
+        ));
+        view.selected_item_id = Some(3);
+        model.as_mut().apply(AppUpdate::Playlists(view));
+        model.as_mut().selection(tracks.get(2).cloned());
+        assert!(model.has_selection && !model.selected_available);
+        assert!(model.transport_command().is_none());
+        assert!(model.selected_subtitle.to_string().contains("Недоступно"));
     }
 }

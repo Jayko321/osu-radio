@@ -9,6 +9,7 @@ Rectangle {
     property bool gallery: false
     property int selectedTab: 0
     signal tabSelected(int index)
+    signal playlistsRequested()
     readonly property bool maximized: window.visibility === Window.Maximized
     height: 50
     color: Theme.background
@@ -65,8 +66,9 @@ Rectangle {
         IconButton {
             anchors.verticalCenter: parent.verticalCenter
             iconName: "layers"
-            accessibleName: "Playlists (unavailable)"
-            enabled: false
+            objectName: "playlistsButton"
+            accessibleName: "Playlists"
+            onClicked: { forceActiveFocus(); bar.playlistsRequested(); }
         }
         Item { width: 16; height: 1 }
         Basic.Button {

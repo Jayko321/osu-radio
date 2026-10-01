@@ -17,8 +17,10 @@ use tokio::{
     task::{AbortHandle, JoinSet},
 };
 mod folders;
+mod playlists;
 mod queue;
 pub use folders::{FolderAction, FolderSelection, FolderSelectionRow};
+pub use playlists::{PlaylistAction, PlaylistCandidate, PlaylistsState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsRetry {
@@ -47,6 +49,7 @@ pub struct MediaTicket {
 }
 #[derive(Debug)]
 pub enum AppCommand {
+    Playlist(PlaylistAction),
     Connect,
     RefreshLibrary,
     SearchLibrary(String),
@@ -86,6 +89,7 @@ pub enum AppCommand {
 }
 #[derive(Clone, Debug)]
 pub enum AppUpdate {
+    Playlists(PlaylistsState),
     Playback(crate::playback::Playback),
     Connection(ConnectionStatus),
     LibraryStatus(OperationStatus),
@@ -138,6 +142,7 @@ impl AppController {
 }
 
 enum Completed {
+    Playlist(playlists::PlaylistEvent),
     PlaybackRetry(queue::PendingPlayback),
     PlaybackCommand {
         pending: queue::PendingPlayback,
@@ -170,6 +175,7 @@ struct MediaJob {
     decoding: bool,
 }
 struct Controller {
+    playlists: playlists::PlaylistWork,
     selection: folders::SelectionWork,
     folder_events: mpsc::UnboundedReceiver<folders::FolderEvent>,
     folder_sender: mpsc::UnboundedSender<folders::FolderEvent>,
@@ -218,6 +224,7 @@ impl Controller {
         let (assignment_sender, assignments) = mpsc::unbounded_channel();
         let (worker_sender, worker_updates) = mpsc::unbounded_channel();
         Self {
+            playlists: playlists::PlaylistWork::default(),
             selection: folders::SelectionWork::default(),
             folder_sender,
             folder_events,
@@ -314,6 +321,7 @@ impl Controller {
     }
     fn command(&mut self, command: AppCommand) {
         match command {
+            AppCommand::Playlist(action) => self.playlist_action(action),
             AppCommand::OpenFolderSelection => self.open_selection(),
             AppCommand::CloseFolderSelection => self.close_selection(),
             AppCommand::BrowseFolderSelection => self.browse_selection(),
@@ -335,16 +343,7 @@ impl Controller {
             AppCommand::Stop => self.queue_playback(crate::models::PlaybackCommand::Stop),
             AppCommand::Next => self.queue_playback(crate::models::PlaybackCommand::Next),
             AppCommand::Previous => self.queue_playback(crate::models::PlaybackCommand::Previous),
-            AppCommand::Seek(position) => {
-                self.player_command(crate::playback::Command::Seek {
-                    expected_id: self.selected,
-                    playback_token: self
-                        .assignment
-                        .as_ref()
-                        .map_or(0, |state| state.playback_token),
-                    position,
-                });
-            }
+            AppCommand::Seek(position) => self.seek_selected(position),
             AppCommand::SetVolume(volume) => {
                 self.player_command(crate::playback::Command::SetVolume(volume));
             }
@@ -400,6 +399,31 @@ impl Controller {
             }
             AppCommand::Shutdown => {}
         }
+    }
+    fn seek_selected(&mut self, position: Duration) {
+        if self.playlists.view.active_id.is_some()
+            && self.assignment.as_ref().is_none_or(|state| {
+                state.current_playlist_item_id != self.playlists.view.selected_item_id
+            })
+        {
+            return;
+        }
+        let expected_id = if self.playlists.view.active_id.is_some() {
+            self.playlists
+                .view
+                .selected_item()
+                .and_then(|item| item.audio_source_id)
+        } else {
+            self.selected
+        };
+        self.player_command(crate::playback::Command::Seek {
+            expected_id,
+            playback_token: self
+                .assignment
+                .as_ref()
+                .map_or(0, |state| state.playback_token),
+            position,
+        });
     }
     fn ensure_playback(&mut self) -> bool {
         if self.playback.is_none() {
@@ -583,6 +607,7 @@ impl Controller {
     }
     fn complete(&mut self, result: Completed) {
         match result {
+            Completed::Playlist(event) => self.playlist_event(event),
             Completed::PlaybackRetry(pending) => self.playback_commands.push_front(pending),
             Completed::PlaybackCommand { pending, result } => {
                 self.playback_command_completed(pending, result);
@@ -617,6 +642,7 @@ impl Controller {
                         });
                         self.load_library(delay);
                         self.refresh_folders();
+                        self.refresh_playlists();
                         self.start_playback_stream();
                     }
                     Err(error) => {
@@ -634,7 +660,12 @@ impl Controller {
                 self.library_task = None;
                 self.library = OperationStatus::default();
                 match result {
-                    Ok(tracks) => self.replace_tracks(tracks),
+                    Ok(tracks) => {
+                        self.replace_tracks(tracks);
+                        if self.playlists.view.active_id.is_some() {
+                            self.playlist_action(PlaylistAction::Refresh);
+                        }
+                    }
                     Err(error) => self.library = failure(error, SettingsRetry::Load),
                 }
                 (self.emit)(AppUpdate::LibraryStatus(self.library.clone()));
@@ -703,7 +734,13 @@ impl Controller {
             }
             .into();
         }
-        (self.emit)(AppUpdate::TracksReplaced(self.tracks.clone()));
+        (self.emit)(AppUpdate::TracksReplaced(
+            if self.playlists.view.active_id.is_some() {
+                self.playlists.tracks.clone()
+            } else {
+                self.tracks.clone()
+            },
+        ));
         self.emit_selection();
     }
     fn replace_folders(&mut self, folders: Vec<OsuFolder>) {
@@ -717,6 +754,23 @@ impl Controller {
         (self.emit)(AppUpdate::FolderSelected(self.selected_folder));
     }
     fn emit_selection(&self) {
+        if self.playlists.view.active_id.is_some() {
+            (self.emit)(AppUpdate::TrackSelected(
+                self.playlists
+                    .view
+                    .active
+                    .as_ref()
+                    .and_then(|playlist| {
+                        playlist
+                            .items
+                            .iter()
+                            .position(|item| Some(item.id) == self.playlists.view.selected_item_id)
+                    })
+                    .and_then(|index| self.playlists.tracks.get(index))
+                    .cloned(),
+            ));
+            return;
+        }
         (self.emit)(AppUpdate::TrackSelected(
             self.selected.and_then(|id| self.track(id)).cloned(),
         ));
@@ -726,6 +780,26 @@ impl Controller {
         (self.emit)(AppUpdate::FolderStatus(self.folder_status.clone()));
     }
     fn track(&self, id: i32) -> Option<&Track> {
+        if self.playlists.view.active_id.is_some() {
+            let item_index = self.playlists.view.active.as_ref().and_then(|playlist| {
+                playlist
+                    .items
+                    .iter()
+                    .position(|item| Some(item.id) == self.playlists.view.selected_item_id)
+            });
+            if let Some(track) = item_index
+                .and_then(|index| self.playlists.tracks.get(index))
+                .filter(|track| track.audio_source_id == id)
+                .or_else(|| {
+                    self.playlists
+                        .tracks
+                        .iter()
+                        .find(|track| track.audio_source_id == id)
+                })
+            {
+                return Some(track);
+            }
+        }
         self.current_track
             .as_ref()
             .filter(|track| track.audio_source_id == id)
@@ -736,6 +810,9 @@ impl Controller {
             })
     }
     fn request_media(&mut self, id: i32, missing: bool) {
+        if id < 0 {
+            return;
+        }
         if self.track(id).is_none() {
             return;
         }
@@ -819,13 +896,29 @@ impl Controller {
         }
         if duration_requested {
             self.duration_done.insert(ticket.audio_id);
+            for track in &mut self.playlists.tracks {
+                if track.audio_source_id == ticket.audio_id {
+                    track.duration = duration.map(Duration::from_millis);
+                }
+            }
+            if self.playlists.view.active_id.is_some()
+                && let Some(track) = self
+                    .playlists
+                    .tracks
+                    .iter()
+                    .find(|track| track.audio_source_id == ticket.audio_id)
+            {
+                (self.emit)(AppUpdate::TrackChanged(track.clone()));
+            }
             if let Some(index) = self.track_indices.get(&ticket.audio_id)
                 && let Some(track) = self.tracks.get_mut(*index)
             {
                 track.duration = duration.map(Duration::from_millis);
-                (self.emit)(AppUpdate::TrackChanged(track.clone()));
-                if self.selected == Some(ticket.audio_id) {
-                    (self.emit)(AppUpdate::TrackSelected(Some(track.clone())));
+                if self.playlists.view.active_id.is_none() {
+                    (self.emit)(AppUpdate::TrackChanged(track.clone()));
+                    if self.selected == Some(ticket.audio_id) {
+                        (self.emit)(AppUpdate::TrackSelected(Some(track.clone())));
+                    }
                 }
             }
         }
@@ -844,6 +937,15 @@ impl Controller {
                 }
                 self.jobs.remove(&ticket.serial);
             }
+        }
+        if duration_requested
+            && self
+                .playlists
+                .view
+                .selected_item()
+                .is_some_and(|item| item.audio_source_id == Some(ticket.audio_id))
+        {
+            self.emit_selection();
         }
     }
 }
