@@ -36,7 +36,31 @@ frontends.
   from another OS or Vizia version.
 - Cargo and .NET dependency restoration may need network access on a fresh
   machine. `--locked` protects Cargo.lock; it does not make builds offline or
-  prevent generated artifacts under `target/` and the helper build directories.
+prevent generated artifacts under `target/` and the helper build directories.
+
+### Linux CI
+
+[`Linux CI`](../../.github/workflows/linux-ci.yml) runs on pushes to `main`,
+pull requests and manual dispatch, with separate formatting, tests and Clippy
+jobs on Ubuntu 24.04. CI pins Rust 1.99.0 (including rustfmt/Clippy), installs
+the .NET 8 SDK for the real scanner helper build, and installs
+`build-essential`, `pkg-config` and `libasound2-dev`. The audio dependency needs
+ALSA headers to compile; the tests consume a controlled mixer without opening
+an output device. SQLite uses the bundled library from `libsqlite3-sys`;
+the selected HTTP dependencies use rustls, so no OpenSSL development package
+is needed.
+
+The locked checks cover core/scanner, SQLite repositories/services, CLI, server
+with API docs on/off, player, and client library tests/Clippy with `mock` off/on.
+Tests run with `--test-threads=1` to avoid the documented process-fixture races.
+Ignored benchmarks and opt-in integration probes remain skipped.
+
+Qt/QML and inactive Vizia builds are outside this minimal workflow. Qt requires
+6.8+ and additional QML modules/plugins; add those checks only after validating
+that setup reproducibly on a hosted runner. PostgreSQL integration, desktop/GPU
+interaction, physical audio and Windows validation remain separate. Workspace
+formatting still checks both frontends. `--locked` applies to Cargo builds/tests/
+Clippy, not `cargo fmt` or the helper's NuGet restore.
 
 ## Environment and executable discovery
 
