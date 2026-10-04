@@ -16,6 +16,7 @@ use super::{import_from_stable_db, media, reader};
 struct Entry {
     folder: String,
     difficulty: String,
+    hash: String,
     artist: String,
     title: String,
     audio: String,
@@ -31,6 +32,7 @@ impl Default for Entry {
         Self {
             folder: "123 Artist - Song".into(),
             difficulty: "Hard".into(),
+            hash: "0123456789abcdef0123456789abcdef".into(),
             artist: "Artist".into(),
             title: "Song".into(),
             audio: "audio.mp3".into(),
@@ -75,7 +77,7 @@ fn entry_bytes(version: i32, entry: &Entry) -> Vec<u8> {
         "Mapper",
         &entry.difficulty,
         &entry.audio,
-        "0123456789abcdef0123456789abcdef",
+        &entry.hash,
         &entry.osu_file,
     ] {
         string(&mut bytes, value);
@@ -763,4 +765,122 @@ async fn missing_database_errors_identify_the_marker() {
             .to_string()
             .contains(&path.display().to_string())
     );
+}
+
+fn collection_database(collections: &[(&str, &[&str])]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    integer(&mut bytes, 2025_01_08);
+    integer(&mut bytes, i32::try_from(collections.len()).unwrap());
+    for &(name, hashes) in collections {
+        string(&mut bytes, name);
+        integer(&mut bytes, i32::try_from(hashes.len()).unwrap());
+        for hash in hashes {
+            string(&mut bytes, hash);
+        }
+    }
+    bytes
+}
+
+#[tokio::test]
+async fn imports_collections_including_empty_duplicates_unicode_and_unknown_maps() {
+    let temp = install(&[
+        Entry {
+            hash: "0123456789ABCDEF0123456789ABCDEF".into(),
+            ..Entry::default()
+        },
+        Entry {
+            difficulty: "Easy".into(),
+            hash: "123456789ABCDEF0123456789ABCDEF0".into(),
+            ..Entry::default()
+        },
+    ]);
+    let path = temp.path().join("osu!.db");
+    assert!(
+        super::import_snapshot_from_stable_db(&path)
+            .await
+            .unwrap()
+            .collections
+            .is_empty()
+    );
+    let bytes = collection_database(&[
+        (
+            "好きな曲 🎵",
+            &[
+                "ABCDEF0123456789ABCDEF0123456789",
+                "ffffffffffffffffffffffffffffffff",
+                "ABCDEF0123456789ABCDEF0123456789",
+            ],
+        ),
+        ("好きな曲 🎵", &[]),
+        ("", &[]),
+    ]);
+    fs::write(temp.path().join("collection.db"), &bytes).unwrap();
+    let snapshot = crate::import_snapshot(OsuMarker {
+        kind: OsuKind::Stable,
+        marker_path: path.clone(),
+        root_path: temp.path().to_owned(),
+    })
+    .await
+    .unwrap();
+    assert_eq!(snapshot.beatmap_sets[0].beatmaps.len(), 2);
+    assert_eq!(
+        snapshot.beatmap_sets[0].beatmaps[0].md5_hash.as_deref(),
+        Some("0123456789abcdef0123456789abcdef")
+    );
+    assert_eq!(
+        snapshot.beatmap_sets[0].beatmaps[0].hash.as_deref(),
+        Some("0123456789ABCDEF0123456789ABCDEF")
+    );
+    assert_eq!(snapshot.collections.len(), 3);
+    assert_eq!(snapshot.collections[0].source_id, "[\"好きな曲 🎵\",0]");
+    assert_eq!(snapshot.collections[1].source_id, "[\"好きな曲 🎵\",1]");
+    assert_eq!(snapshot.collections[2].source_id, "[\"\",0]");
+    assert!(snapshot.collections[1].beatmap_md5_hashes.is_empty());
+    assert_eq!(
+        snapshot.collections[0].beatmap_md5_hashes,
+        vec![
+            "abcdef0123456789abcdef0123456789",
+            "ffffffffffffffffffffffffffffffff",
+            "abcdef0123456789abcdef0123456789"
+        ]
+    );
+    assert_eq!(fs::read(temp.path().join("collection.db")).unwrap(), bytes);
+    assert_eq!(import_from_stable_db(&path).await.unwrap().len(), 1);
+    fs::write(temp.path().join("collection.db"), &bytes[..bytes.len() - 1]).unwrap();
+    assert!(
+        import_from_stable_db(&path).await.is_err(),
+        "legacy wrapper must fully parse collections"
+    );
+}
+
+#[test]
+fn rejects_corrupt_collection_databases_without_partial_results() {
+    let path = Path::new("fixture/collection.db");
+    let valid = collection_database(&[
+        ("test", &["0123456789abcdef0123456789abcdef"]),
+        ("empty", &[]),
+    ]);
+    for length in 0..valid.len() {
+        let error = reader::decode_collections(&valid[..length], path).unwrap_err();
+        assert!(format!("{error:#}").contains("collection.db"));
+    }
+    let mut trailing = valid.clone();
+    trailing.push(0);
+    assert!(reader::decode_collections(&trailing, path).is_err());
+    for hash in [
+        "",
+        "0123",
+        "x123456789abcdef0123456789abcdef",
+        "é123456789abcdef0123456789abcde",
+    ] {
+        assert!(
+            reader::decode_collections(&collection_database(&[("test", &[hash])]), path).is_err()
+        );
+    }
+    let mut negative = valid.clone();
+    negative[4..8].copy_from_slice(&(-1_i32).to_le_bytes());
+    assert!(reader::decode_collections(&negative, path).is_err());
+    let mut malformed_name = valid;
+    malformed_name[8] = 0xff;
+    assert!(reader::decode_collections(&malformed_name, path).is_err());
 }

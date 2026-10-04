@@ -13,6 +13,7 @@ use tokio::task::AbortHandle;
 pub enum FolderAction {
     Add,
     Remove,
+    Refresh,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FolderSelectionRow {
@@ -253,6 +254,12 @@ impl Controller {
         }
     }
     pub(super) fn toggle_selection(&mut self, path: &str) {
+        self.stage_selection(path, false);
+    }
+    pub(super) fn refresh_selection(&mut self, path: &str) {
+        self.stage_selection(path, true);
+    }
+    fn stage_selection(&mut self, path: &str, refresh: bool) {
         if !self.selection.state.open || self.selection.state.applying {
             return;
         }
@@ -263,12 +270,21 @@ impl Controller {
             .iter_mut()
             .find(|row| row.marker_path == path)
         {
-            row.pending = if row.pending.is_some() {
-                None
-            } else if row.registered_id.is_some() {
-                Some(FolderAction::Remove)
+            let action = if row.registered_id.is_some() {
+                if refresh {
+                    FolderAction::Refresh
+                } else {
+                    FolderAction::Remove
+                }
+            } else if refresh {
+                return;
             } else {
-                Some(FolderAction::Add)
+                FolderAction::Add
+            };
+            row.pending = if row.pending == Some(action) {
+                None
+            } else {
+                Some(action)
             };
             row.error = None;
             self.emit_selection_state();
@@ -346,6 +362,15 @@ impl Controller {
             for (action, path, id) in actions {
                 let result = match action {
                     FolderAction::Add => api.import_osu_folder(&path).await.map(Some),
+                    FolderAction::Refresh => {
+                        if let Some(id) = id {
+                            api.reimport_osu_folder(id).await.map(Some)
+                        } else {
+                            Err(crate::ApiError::Protocol(
+                                "Missing registered folder ID.".into(),
+                            ))
+                        }
+                    }
                     FolderAction::Remove => {
                         if let Some(id) = id {
                             api.remove_osu_folder(id).await.map(|()| None)
@@ -481,6 +506,7 @@ impl Controller {
                 if self.selection.changed {
                     self.refresh_folders();
                     self.refresh_library();
+                    self.refresh_playlist_views();
                 }
                 if self
                     .selection

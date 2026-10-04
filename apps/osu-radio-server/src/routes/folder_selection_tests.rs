@@ -67,7 +67,7 @@ async fn preview_and_import_http_roundtrip_is_read_only_then_atomic_and_idempote
     bytes.push(0);
     bytes.extend(0_i32.to_le_bytes());
     bytes.extend(1_i32.to_le_bytes());
-    std::fs::write(&marker, bytes).unwrap();
+    std::fs::write(&marker, &bytes).unwrap();
     let state = empty_state().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let api =
@@ -89,7 +89,27 @@ async fn preview_and_import_http_roundtrip_is_read_only_then_atomic_and_idempote
     std::fs::write(&marker, b"broken source").unwrap();
     assert_eq!(api.import_osu_folder(path).await.unwrap(), stored);
     assert!(api.osu_folder_metadata(path).await.is_err());
-    assert_eq!(api.osu_folders().await.unwrap(), [stored]);
+    assert_eq!(
+        api.osu_folders().await.unwrap().as_slice(),
+        std::slice::from_ref(&stored)
+    );
+    assert!(api.reimport_osu_folder(stored.id).await.is_err());
+    assert_eq!(
+        api.osu_folders().await.unwrap().as_slice(),
+        std::slice::from_ref(&stored)
+    );
+    std::fs::write(&marker, bytes).unwrap();
+    let refreshed = api.reimport_osu_folder(stored.id).await.unwrap();
+    assert_eq!(refreshed.id, stored.id);
+    assert_eq!(refreshed.marker_path, stored.marker_path);
+    assert!(refreshed.last_scanned_at.is_some());
+    assert!(matches!(
+        api.reimport_osu_folder(-1).await,
+        Err(osu_radio_client::ApiError::Status {
+            status: StatusCode::NOT_FOUND,
+            ..
+        })
+    ));
     let mut events = Vec::new();
     api.discover_osu_folders(
         &osu_radio_client::DiscoverFolders {
@@ -132,7 +152,7 @@ async fn folder_selection_routes_are_in_the_served_openapi_document() {
         .unwrap()
         .0;
     let document: serde_json::Value = serde_json::from_str(spec).unwrap();
-    for operation in ["discover", "metadata", "import"] {
+    for operation in ["discover", "metadata", "import", "{id}/import"] {
         assert!(
             document["paths"][format!("/api/user-data/osu-folders/{operation}")]["post"]
                 .is_object()

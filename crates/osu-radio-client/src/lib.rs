@@ -17,7 +17,7 @@ pub use models::{
 };
 pub use server::{EmbeddedServer, ServerError, ServerOptions};
 pub use session::{Session, StartError};
-pub use view_models::Track;
+pub use view_models::{Track, TrackNamePreferences};
 
 /// The state of one thing a UI is showing. Frontends differ in how they render it, not in the
 /// states themselves, so the enum lives here rather than in any one of them.

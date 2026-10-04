@@ -67,6 +67,16 @@ impl ApiClient {
     pub async fn import_osu_folder(&self, marker_path: &str) -> Result<OsuFolder, ApiError> {
         self.folder_post("import", marker_path).await
     }
+    pub async fn reimport_osu_folder(&self, id: i32) -> Result<OsuFolder, ApiError> {
+        let path = format!("/api/user-data/osu-folders/{id}/import");
+        self.json_response(
+            &path,
+            self.http
+                .post(self.url(&path))
+                .timeout(std::time::Duration::from_secs(3600)),
+        )
+        .await
+    }
     async fn folder_post<T: serde::de::DeserializeOwned>(
         &self,
         operation: &str,

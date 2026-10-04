@@ -129,3 +129,134 @@ mod helper_process {
         path
     }
 }
+
+#[test]
+fn validates_collection_records_and_normalizes_md5_without_changing_native_hashes() {
+    use super::types::{LazerRecord, parse_lazer_line};
+    let LazerRecord::Collection(collection) = parse_lazer_line(r#"{"type":"collection","id":"A1234567-89AB-CDEF-0123-456789ABCDEF","name":"","beatmap_md5_hashes":["ABCDEF0123456789ABCDEF0123456789"]}"#).unwrap() else { panic!("expected collection") };
+    assert_eq!(collection.source_id, "a1234567-89ab-cdef-0123-456789abcdef");
+    assert_eq!(collection.name, "");
+    assert_eq!(
+        collection.beatmap_md5_hashes,
+        vec!["abcdef0123456789abcdef0123456789"]
+    );
+    let set = parse_lazer_beatmap_set_line(r#"{"source":"Lazer","hash":"Native-HASH","beatmaps":[{"hash":"Native-HASH","md5_hash":"ABCDEF0123456789ABCDEF0123456789"}]}"#).unwrap();
+    assert_eq!(set.hash.as_deref(), Some("Native-HASH"));
+    assert_eq!(set.beatmaps[0].hash.as_deref(), Some("Native-HASH"));
+    assert_eq!(
+        set.beatmaps[0].md5_hash.as_deref(),
+        Some("abcdef0123456789abcdef0123456789")
+    );
+    for line in [
+        r#"{"type":"collection","id":"bad","name":"test","beatmap_md5_hashes":[]}"#,
+        r#"{"type":"collection","id":"a1234567-89ab-cdef-0123-456789abcdef","beatmap_md5_hashes":[]}"#,
+        r#"{"type":"collection","id":"a1234567-89ab-cdef-0123-456789abcdef","name":"test"}"#,
+        r#"{"type":"collection","id":"a1234567-89ab-cdef-0123-456789abcdef","name":"test","beatmap_md5_hashes":["bad"]}"#,
+        r#"{"type":"schema"}"#,
+        r#"{"source":"Lazer","beatmaps":[{"md5_hash":"bad"}]}"#,
+    ] {
+        assert!(parse_lazer_line(line).is_err(), "{line}");
+    }
+}
+
+#[tokio::test]
+async fn imports_real_realm_fixtures_with_the_production_helper() {
+    use super::scanner::import_snapshot_from_lazer_realm_with_helper;
+    use std::{path::PathBuf, process::Command};
+    let temp = tempfile::TempDir::new().unwrap();
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source = root.join("tools/osu-lazer-realm-parser/fixture-generator");
+    let project_dir = temp.path().join("project");
+    std::fs::create_dir_all(&project_dir).unwrap();
+    for filename in ["fixture-generator.csproj", "Program.cs"] {
+        std::fs::copy(source.join(filename), project_dir.join(filename)).unwrap();
+    }
+    let project = project_dir.join("fixture-generator.csproj");
+    let output = temp.path().join("generator");
+    let dotnet_home = std::env::var_os("DOTNET_CLI_HOME")
+        .map_or_else(|| root.join("target/dotnet-home"), PathBuf::from);
+    let build = Command::new("dotnet")
+        .args([
+            "build",
+            "--configuration",
+            "Release",
+            "--nologo",
+            "--output",
+        ])
+        .arg(&output)
+        .arg(&project)
+        .arg("--property:NuGetAudit=false")
+        .env("DOTNET_CLI_HOME", dotnet_home)
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "fixture generator failed: {} {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let fixtures = temp.path().join("fixtures");
+    let generate = Command::new("dotnet")
+        .arg(output.join("fixture-generator.dll"))
+        .arg(&fixtures)
+        .output()
+        .unwrap();
+    assert!(
+        generate.status.success(),
+        "fixture generation failed: {}",
+        String::from_utf8_lossy(&generate.stderr)
+    );
+    let helper = Path::new(env!("OSU_LAZER_REALM_PARSER_BUILT_PATH"));
+    let direct = Command::new(helper)
+        .arg(fixtures.join("full.realm"))
+        .output()
+        .unwrap();
+    assert!(
+        direct.status.success(),
+        "production helper failed: {}",
+        String::from_utf8_lossy(&direct.stderr)
+    );
+    let protocol = String::from_utf8(direct.stdout).unwrap();
+    assert!(protocol.contains("\"type\":\"collection\""));
+    let snapshot =
+        import_snapshot_from_lazer_realm_with_helper(&fixtures.join("full.realm"), helper)
+            .await
+            .unwrap();
+    assert_eq!(snapshot.beatmap_sets.len(), 1);
+    assert_eq!(snapshot.beatmap_sets[0].beatmaps.len(), 2);
+    assert_eq!(
+        snapshot.beatmap_sets[0].beatmaps[0].hash.as_deref(),
+        Some("Native-Hash-Is-NOT-MD5")
+    );
+    assert_eq!(
+        snapshot.beatmap_sets[0].beatmaps[0].md5_hash.as_deref(),
+        Some("abcdef0123456789abcdef0123456789")
+    );
+    assert_eq!(snapshot.collections.len(), 2);
+    assert_eq!(snapshot.collections[0].name, "好きな曲 🎵");
+    assert_eq!(
+        snapshot.collections[0].source_id,
+        "a1234567-89ab-cdef-0123-456789abcdef"
+    );
+    assert_eq!(snapshot.collections[0].beatmap_md5_hashes.len(), 3);
+    assert_eq!(
+        snapshot.collections[0].beatmap_md5_hashes[0],
+        snapshot.collections[0].beatmap_md5_hashes[2]
+    );
+    assert!(snapshot.collections[1].beatmap_md5_hashes.is_empty());
+    let without = import_snapshot_from_lazer_realm_with_helper(
+        &fixtures.join("no-collections.realm"),
+        helper,
+    )
+    .await
+    .unwrap();
+    assert!(without.collections.is_empty());
+    for filename in ["invalid-md5.realm", "missing-name.realm"] {
+        assert!(
+            import_snapshot_from_lazer_realm_with_helper(&fixtures.join(filename), helper)
+                .await
+                .is_err(),
+            "{filename}"
+        );
+    }
+}

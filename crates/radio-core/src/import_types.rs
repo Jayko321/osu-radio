@@ -2,6 +2,19 @@ use std::path::{Path, PathBuf};
 
 use crate::OsuKind;
 
+#[derive(Debug, Clone, Default)]
+pub struct ImportedSnapshot {
+    pub beatmap_sets: Vec<ImportedBeatmapSet>,
+    pub collections: Vec<ImportedCollection>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ImportedCollection {
+    pub source_id: String,
+    pub name: String,
+    pub beatmap_md5_hashes: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ImportedBeatmapSet {
     pub source: OsuKind,
@@ -33,6 +46,7 @@ impl ImportedBeatmapSet {
 
 #[derive(Debug, Clone)]
 pub struct ImportedBeatmap {
+    pub md5_hash: Option<String>,
     pub difficulty_name: Option<String>,
     pub bpm: Option<f64>,
     pub hash: Option<String>,

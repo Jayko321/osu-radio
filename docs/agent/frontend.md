@@ -29,8 +29,20 @@ Songs loads `/api/tracks?q=…` through `ApiClient::search_tracks` and the share
 `AppController`. The server groups globally by audio ID, preserving legacy
 set/audio order; `Track::from(LibraryTrack)` formats the ready rows.
 `library_tracks` remains available for legacy endpoint equivalence checks.
-The lowest beatmap ID supplies representative metadata; ordinary title/artist text falls
-back to Unicode then explicit unknown labels. The first associated beatmap with a stored
+The lowest beatmap ID supplies representative metadata. `Track` retains the raw ordinary
+and Unicode title/artist variants and a separate subtitle suffix. Independent
+`TrackNamePreferences` choose ordinary text by default or Unicode when enabled;
+blank/missing preferred text falls back to the other variant, then the existing
+unknown labels. `SetTrackNamePreferences` immediately reformats library, search,
+playlist (including unavailable), current-player and pending-queue rows. It uses
+`TracksReordered` and preserves selection, artwork, duration, media generation and
+playback; incoming responses use the current pair. During playlist detail loading,
+`TrackSelected` updates the retained caption while selection stays unavailable.
+Display sorting follows the new captions; queue order and saved playlist order stay
+unchanged. Server search continues matching both ordinary and Unicode metadata.
+Checks live in [preferences tests](../../crates/osu-radio-client/src/controller/preferences/tests.rs),
+[playlist tests](../../crates/osu-radio-client/src/controller/playlists/tests.rs) and
+[queue tests](../../crates/osu-radio-client/src/controller/queue/tests.rs). The first associated beatmap with a stored
 cover reference supplies the cover ID. For sets with multiple distinct audio rows, unique
 difficulty names are joined in the subtitle (`Artist | Easy, Hard`); shared-audio sets do
 not add difficulty notation. `Track` retains every related difficulty (IDs, nullable name, original set
@@ -180,6 +192,15 @@ errors, debounce, stale responses, first-play volume and shutdown flush. Manual
 slider interaction and physical output on Linux/Windows remain separate checks.
 
 ## User playlists
+
+Adding a new osu! source imports Stable/Lazer collections into this same tab,
+including empty collections and unavailable difficulties. “Обновить импорт” in
+the folder modal rereads a registered source and updates each linked playlist's
+name and membership, replacing manual membership edits while preserving custom
+covers, surviving item IDs and order. Disappeared collections and playlists from
+removed sources remain visible; missing beatmaps retain their last known captions.
+The backend owns collection identity and hash matching; see the
+[database contract](database.md#user-playlists).
 
 The shared [`playlist controller`](../../crates/osu-radio-client/src/controller/playlists.rs)
 owns navigation, independent playlist query, HTTP requests, inline editor drafts,
@@ -511,7 +532,20 @@ independent search strings, list/status presentation and the persistent player.
 It retains the 1024×640 minimum, 50px title bar, 480px sidebar, 90px cards and
 adaptive player geometry. Artwork uses centered cropping. Library refresh remains
 outside the scrolling list. Settings use folder IDs, wrapped options and a full
-label tooltip. The **General** section holds the folder menu and `+`; **Audio**
+label tooltip. The **General** section holds the folder menu, `+`, and independent
+**Use Unicode track titles** / **Use Unicode artist names** switches. Both default
+to off and remain available without a server. The Qt adapter reads native
+`QSettings` once before connecting (`UserScope`, `NativeFormat`,
+`osu-radio/osu-radio-qt`, with fallback settings disabled), using
+`display/use_unicode_titles` and `display/use_unicode_artists`. Each toggle
+updates the local pair synchronously, sends shared client preferences, and writes
+only the changed key with `sync()` and a status check. Read failures use both
+defaults; write failures retain session choices. General shows English errors.
+Reconnect retains current choices; the offline gallery does not read or save them.
+Linux persistence, keyboard activation, rapid toggles, and read/write errors are
+covered by the isolated `XDG_CONFIG_HOME`
+[offscreen probe](../../apps/osu-radio-qt/tests/launch_smoke.rs); Windows native
+storage still requires separate validation. **Audio**
 holds the individual-volume switch, conditional global slider, status and Retry.
 The Settings panel uses the bundled Nunito font, 20px side margins, a search icon
 on the right, 24px section icons and 44px dark fields with 8px corners.
@@ -542,7 +576,9 @@ and blur are disabled while closed. The gallery add-difficulties dialog uses the
 uses a 740x620 panel constrained to the window, a scrolling list and fixed Apply
 footer. Rows show bundled Figma Stable/Lazer logos, paths, source badges and
 individual beatmap/difficulty counts. Registered rows are green; plus/minus buttons
-stage or undo additions/removals, with outlines for pending actions. Counts animate
+stage or undo additions/removals; registered rows also have an accessible rotate
+button, “Обновить импорт”, to stage a source refresh. Removal and refresh replace each
+other; pressing the same action again cancels it. Pending actions have outlines. Counts animate
 Computing every 400 ms, include zero, and expose a separate count-error retry.
 Need help opens https://www.google.com through Qt.openUrlExternally.
 
@@ -555,12 +591,20 @@ Choosing a directory never saves it. Closing aborts discovery and client preview
 requests, discards pending actions, and invalidates late network/picker results.
 Counts do not gate Apply.
 
-Apply snapshots actions, imports additions before deleting removals, and continues
+Apply snapshots actions, imports additions and refreshes registered sources before deleting removals, and continues
 sequentially after individual errors. Success clears each action immediately; failed
-rows retain their actions/errors for retry. Successful changes refresh folders and
-the current library query. Complete success closes the modal; partial failure keeps
-it open. Editing and dismissal are disabled during Apply. No metadata cache or
-schema migration was added.
+rows retain their actions/errors for retry. Successful changes refresh folders,
+the current library query, the playlist list and any open playlist independently.
+Playlist epochs immediately discard older list/detail results. A concurrent playlist
+edit defers playlist reload until it completes, including failure; failed library
+loading does not suppress that reload. Complete success closes the modal; partial
+failure keeps it open. Editing and dismissal are disabled during Apply.
+[Folder checks](../../crates/osu-radio-client/src/controller/folders_tests.rs) and
+[playlist checks](../../crates/osu-radio-client/src/controller/playlists/tests.rs)
+cover staging, Apply with library failure, stale responses and deferred refresh
+after failed playlist edits. The Qt offscreen folder probe activates refresh with
+Space through the live adapter and fixture API; desktop mouse input and Windows
+validation remain separate.
 
 [`WindowBar.qml`](../../apps/osu-radio-qt/qml/WindowBar.qml) uses Qt window APIs
 for drag/resize/minimize/maximize/restore/close and observes actual window

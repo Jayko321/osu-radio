@@ -14,6 +14,7 @@ AppModal {
     property int computingFrame: 0
     readonly property bool hasPending: rows.some(row => row.action.length > 0)
     signal toggleRequested(string markerPath)
+    signal refreshRequested(string markerPath)
     signal retryCountRequested(string markerPath)
     signal browseRequested()
     signal applyRequested()
@@ -30,7 +31,7 @@ AppModal {
         spacing: 12
         Text {
             Layout.fillWidth: true
-            text: root.discovering ? "Discovering osu! installations…" : "Select the installations to add or remove."
+            text: root.discovering ? "Discovering osu! installations…" : "Select the installations to add, refresh or remove."
             color: Theme.text
             font.family: Theme.fontFamily
             font.pixelSize: 16
@@ -58,7 +59,7 @@ AppModal {
                         radius: 8
                         color: modelData.registered ? "#303faf7c" : "#80333333"
                         border.width: modelData.action.length > 0 ? 2 : 1
-                        border.color: modelData.action === "remove" ? Theme.red : modelData.action === "add" ? Theme.accent : Theme.border
+                        border.color: modelData.action === "remove" ? Theme.red : modelData.action === "add" || modelData.action === "refresh" ? Theme.accent : Theme.border
                         RowLayout {
                             id: rowContent
                             anchors.fill: parent
@@ -134,14 +135,25 @@ AppModal {
                                 }
                             }
                             IconButton {
+                                objectName: "folderRefresh" + row.index
+                                visible: row.modelData.registered
+                                iconName: "rotate-cw"
+                                accessibleName: "Обновить импорт"
+                                checkable: true
+                                checked: row.modelData.action === "refresh"
+                                enabled: !root.applying
+                                onClicked: root.refreshRequested(row.modelData.markerPath)
+                                background: Rectangle { radius: 8; color: row.modelData.action === "refresh" ? "#409c7ef8" : "transparent" }
+                            }
+                            IconButton {
                                 objectName: "folderToggle" + row.index
                                 iconName: row.modelData.registered ? "minus" : "plus"
                                 accessibleName: row.modelData.registered ? "Remove folder" : "Add folder"
                                 checkable: true
-                                checked: row.modelData.action.length > 0
+                                checked: row.modelData.action === "add" || row.modelData.action === "remove"
                                 enabled: !root.applying
                                 onClicked: root.toggleRequested(row.modelData.markerPath)
-                                background: Rectangle { radius: 8; color: row.modelData.action.length > 0 ? "#409c7ef8" : "transparent" }
+                                background: Rectangle { radius: 8; color: row.modelData.action === "add" || row.modelData.action === "remove" ? "#409c7ef8" : "transparent" }
                             }
                         }
                     }

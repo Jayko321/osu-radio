@@ -1,7 +1,7 @@
 //! Shared application workflows. Adapters own presentation and decoded artwork, and acknowledge
 //! every artwork delivery only after decoding and cache installation (or stale-result discard).
 use crate::{
-    OsuFolder, RegisterOsuFolder, ServerOptions, Session, Track, describe,
+    OsuFolder, RegisterOsuFolder, ServerOptions, Session, Track, TrackNamePreferences, describe,
     view_models::selection_after_refresh,
 };
 use std::{
@@ -18,6 +18,7 @@ use tokio::{
 };
 mod folders;
 mod playlists;
+mod preferences;
 mod queue;
 mod sorting;
 mod volume;
@@ -59,6 +60,7 @@ pub enum AppCommand {
     RefreshLibrary,
     SearchLibrary(String),
     SetTrackSort(TrackSort),
+    SetTrackNamePreferences(TrackNamePreferences),
     RefreshFolders,
     SelectTrack(Option<i32>),
     PlayTrack(i32),
@@ -89,6 +91,7 @@ pub enum AppCommand {
         path: Option<PathBuf>,
     },
     ToggleFolderSelection(String),
+    RefreshFolderSelection(String),
     RetryFolderCount(String),
     ApplyFolderSelection,
     RequestMedia {
@@ -233,6 +236,7 @@ struct Controller {
     cancel: watch::Sender<bool>,
     tracks: Vec<Track>,
     track_sort: TrackSort,
+    name_preferences: TrackNamePreferences,
     last_played: HashMap<i32, i64>,
     track_indices: HashMap<i32, usize>,
     selected: Option<i32>,
@@ -292,6 +296,7 @@ impl Controller {
             cancel,
             tracks: Vec::new(),
             track_sort: TrackSort::default(),
+            name_preferences: TrackNamePreferences::default(),
             last_played: HashMap::new(),
             track_indices: HashMap::new(),
             selected: None,
@@ -410,6 +415,7 @@ impl Controller {
                 self.selection_picked(epoch, path);
             }
             AppCommand::ToggleFolderSelection(path) => self.toggle_selection(&path),
+            AppCommand::RefreshFolderSelection(path) => self.refresh_selection(&path),
             AppCommand::RetryFolderCount(path) => self.retry_count(&path),
             AppCommand::ApplyFolderSelection => self.apply_selection(),
             AppCommand::PlayTrack(id) => {
@@ -436,6 +442,9 @@ impl Controller {
             AppCommand::Connect => self.connect(),
             AppCommand::RefreshLibrary => self.refresh_library(),
             AppCommand::SetTrackSort(sort) => self.set_track_sort(sort),
+            AppCommand::SetTrackNamePreferences(preferences) => {
+                self.set_name_preferences(preferences);
+            }
             AppCommand::SearchLibrary(query) => {
                 if self.library_query != query {
                     self.library_query = query;
@@ -828,6 +837,7 @@ impl Controller {
     }
     fn replace_tracks(&mut self, mut tracks: Vec<Track>, invalidate_artwork: bool) {
         self.advance_media(invalidate_artwork);
+        self.apply_name_preferences(&mut tracks);
         self.restore_durations(&mut tracks);
         self.merge_last_played(&mut tracks);
         self.merge_volume_overrides(&mut tracks);
@@ -1345,6 +1355,11 @@ mod tests {
             last_played_at_ms: None,
             volume_percent: None,
             cover_beatmap_id: Some(id.saturating_add(100)),
+            title_original: Some(id.to_string()),
+            title_unicode: None,
+            artist_original: Some("Artist".into()),
+            artist_unicode: None,
+            subtitle_suffix: String::new(),
             title: id.to_string(),
             artist: "Artist".into(),
             subtitle: "Artist".into(),

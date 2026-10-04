@@ -152,7 +152,7 @@ continues to use its own [API DTOs](../../crates/osu-radio-client/src/api.rs).
 | `POST /api/playback/commands` | Tagged `{command:...}`: `play` with optional `audio_source_id`, `pause`, `stop`, `next`, `previous`, `started`, `finished` or `failed`. Start/completion/error commands require `playback_token`; internal device pauses include it too. Stale callbacks return the current assignment without transitioning. |
 | `GET /api/playlists` | ID-ordered summaries `{id, name, item_count, cover_beatmap_id, custom_cover_revision}`. Counts include unavailable entries; automatic artwork comes only from the first inserted item. |
 | `POST /api/playlists` | `{name}` creates a trimmed nonempty name; 201 with a complete summary, 400 for blank names. Equal names are allowed. |
-| `GET /api/playlists/{id}` | `{id, name, items}`; each item includes stable source key, saved labels, item ID, nullable current library/audio/cover IDs and `last_played_at_ms`. 404 for an absent playlist. |
+| `GET /api/playlists/{id}` | `{id, name, items}`; each item includes stable source key, saved ordinary/Unicode title and artist labels, item ID, nullable current library/audio/cover IDs and `last_played_at_ms`. 404 for an absent playlist. |
 | `PATCH /api/playlists/{id}` | `{name}` renames; 200 with a complete summary, 400 for blank names, 404 if absent. |
 | `DELETE /api/playlists/{id}` | 204 and membership cascade; 404 if absent. Does not change the queue. |
 | `POST /api/playlists/{id}/items` | `{beatmap_ids:[...]}` atomically adds current difficulties and returns the full playlist. Repeated source keys are idempotent. Missing beatmap/hash is 400 with no partial additions. |
@@ -169,7 +169,8 @@ continues to use its own [API DTOs](../../crates/osu-radio-client/src/api.rs).
 | `POST /api/user-data/osu-folders` | Body `{path, label?}`. Discovery validates an absolute path. New folder: 201; duplicate marker: 409 with the existing folder body, leaving its label unchanged. Invalid/ambiguous folder: 400. |
 | `POST /api/user-data/osu-folders/discover` | Optional `{roots, depth}`; depth is `known`, `shallow`, or default `full`. Absolute explicit roots only; omitted/empty roots use scanner defaults. Streams NDJSON candidates and an explicit completion event. Dropping the body drops the scanner stream. |
 | `POST /api/user-data/osu-folders/metadata` | `{marker_path}` validates an absolute Stable/Lazer marker, reads through the existing scanner reader and returns `{beatmap_count}` for individual difficulties, including zero. Preview never persists data. |
-| `POST /api/user-data/osu-folders/import` | `{marker_path}` validates and fully reads a new source, then saves registration and snapshot in one transaction. Returns 200 with the stored folder, including already registered sources without changing their snapshot/settings. |
+| `POST /api/user-data/osu-folders/import` | `{marker_path}` validates and fully reads a new source, then saves registration, library snapshot and collections in one transaction. Returns 200 with the stored folder, including already registered sources without changing their snapshot/settings. |
+| `POST /api/user-data/osu-folders/{id}/import` | Fully rereads a registered source and atomically replaces its library and imported collections. Returns 200 with the current folder, preserving settings; unknown/deleted ID returns 404. |
 | `PATCH /api/user-data/osu-folders/{id}` | Optional `label` and `enabled`; 200 with folder, or 404. Omitted fields remain unchanged; explicit null clears label. Supplied non-null labels are trimmed by the service. |
 | `DELETE /api/user-data/osu-folders/{id}` | 204 when removed, 404 when absent. Transactional cascade and shared cleanup; no file deletion. |
 
@@ -246,8 +247,10 @@ The [playlist routes](../../apps/osu-radio-server/src/routes/playlists.rs) use
 `Services::playlists()` and publish committed playback revisions through the same
 response path. Ordinary audio queue entries have a null playlist-item assignment;
 playlist entries distinguish difficulties sharing one audio ID. While the item
-exists, its assignment track contains that single difficulty. Queue content is
-fixed at launch and survives subsequent playlist edits. All eleven playlist
+exists, its assignment and pending queue tracks contain that single difficulty and
+saved `title`, `title_unicode`, `artist` and `artist_unicode` variants. Nullable
+Unicode fields are additive; clients accept older responses that omit them. Queue
+content is fixed at launch and survives subsequent playlist edits. All eleven playlist
 operations are registered in both router configurations and OpenAPI.
 Cover upload decodes the complete PNG through `radio-services`, bounded to
 512×512 and 2 MiB. The persisted image is independent of the selected source
@@ -255,8 +258,8 @@ file. List and rename responses include metadata only; binary bytes are read
 by the image endpoint. Reset retains the revision counter for future uploads.
 [HTTP checks](../../apps/osu-radio-server/src/routes/playlists/tests.rs) verify
 CRUD/statuses, PNG replacement/reset, corrupt/oversized uploads, summary fields,
-atomic validation, queue replacement/item IDs, documentation and
-the real `ApiClient` roundtrip on an isolated loopback server.
+atomic validation, Unicode playlist/playback/pending queue field roundtrips, queue
+replacement/item IDs, documentation and the real `ApiClient` roundtrip on an isolated loopback server.
 
 ### Folder discovery and selection
 
@@ -271,7 +274,7 @@ Metadata and import share server-side marker validation. Relative paths, unsuppo
 filenames and missing/nonregular markers return 400; source-reading or storage
 failures use the existing safe 500 boundary. Stable and Lazer readers supply preview
 counts without importing into the database. The client gives discovery, metadata
-and import a one-hour request timeout instead of its ordinary 30 seconds.
+and both import operations a one-hour request timeout instead of its ordinary 30 seconds.
 
 Apply orchestration belongs to the client, with one independent import/deletion
 transaction per action. A failed row cannot roll back successful sibling actions.

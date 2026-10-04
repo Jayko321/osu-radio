@@ -15,6 +15,7 @@ fn run(args: &[&str], platform: &str, directory: &Path, server: &Path, case: &st
     let mut child = Command::new(env!("CARGO_BIN_EXE_osu-radio-qt"))
         .args(args)
         .current_dir(directory)
+        .env("XDG_CONFIG_HOME", directory.join("config"))
         .env("QT_QPA_PLATFORM", platform)
         .env("QT_FORCE_STDERR_LOGGING", "1")
         .env("QT_LOGGING_RULES", "qml.info=true;qml.warning=true")
@@ -300,6 +301,7 @@ fn folder_modal_stages_counts_applies_partial_success_and_retries_only_failures(
             "POST /api/user-data/osu-folders/import /fixtures/102/client.realm",
             "DELETE /api/user-data/osu-folders/31",
             "POST /api/user-data/osu-folders/import /fixtures/102/client.realm",
+            "POST /api/user-data/osu-folders/52/import ",
         ]
     );
     assert_eq!(
@@ -599,4 +601,61 @@ fn warmed_navigation_fast_scrolling_and_cache_pressure_keep_displayed_artwork_re
         );
     }
     assert_child_reaped(directory.path());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn local_track_name_preferences_persist_and_report_read_write_failures_offline() {
+    let directory = tempfile::tempdir().expect("isolated name preferences");
+    let server = Path::new("/no/server/allowed");
+    assert_probe(&run(
+        &[],
+        "offscreen",
+        directory.path(),
+        server,
+        "names-write",
+    ));
+    let path = directory.path().join("config/osu-radio/osu-radio-qt.conf");
+    let saved = std::fs::read_to_string(&path).expect("native settings file");
+    assert!(
+        saved.contains("use_unicode_titles=true") && saved.contains("use_unicode_artists=true"),
+        "{saved}"
+    );
+    // An unrelated key is preserved because each toggle writes only its own key.
+    std::fs::write(&path, format!("{saved}\n[unrelated]\nkeep=value\n"))
+        .expect("unrelated preference");
+    assert_probe(&run(
+        &[],
+        "offscreen",
+        directory.path(),
+        server,
+        "names-read",
+    ));
+    assert!(
+        std::fs::read_to_string(&path)
+            .expect("unchanged native settings")
+            .contains("keep=value")
+    );
+    std::fs::write(&path, "[display\nuse_unicode_titles=true\n").expect("corrupt preferences");
+    assert_probe(&run(
+        &[],
+        "offscreen",
+        directory.path(),
+        server,
+        "names-read-error",
+    ));
+    let blocked = tempfile::tempdir().expect("isolated inaccessible preferences");
+    std::fs::write(blocked.path().join("config"), "not a directory")
+        .expect("block settings directory");
+    assert_probe(&run(
+        &[],
+        "offscreen",
+        blocked.path(),
+        server,
+        "names-write-error",
+    ));
+    assert!(
+        !directory.path().join("starts").exists(),
+        "offline preferences do not need a server"
+    );
 }

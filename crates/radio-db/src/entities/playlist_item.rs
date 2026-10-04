@@ -8,8 +8,11 @@ pub struct Model {
     pub playlist_id: i32,
     pub source_kind: String,
     pub beatmap_hash: String,
+    pub hash_kind: String,
     pub title: Option<String>,
+    pub title_unicode: Option<String>,
     pub artist: Option<String>,
+    pub artist_unicode: Option<String>,
     pub difficulty_name: Option<String>,
 }
 

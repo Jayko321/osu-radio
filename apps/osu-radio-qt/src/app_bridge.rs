@@ -6,7 +6,7 @@ use cxx_qt_lib::{
     QModelIndex, QString, QVariant,
 };
 use osu_radio_client::{
-    ServerOptions, Track,
+    ServerOptions, Track, TrackNamePreferences,
     controller::{
         AppCommand, AppController, AppUpdate, ConnectionStatus, FolderAction, FolderSelection,
         MediaTicket, PlaylistAction, PlaylistsState, QueueView, TrackSort,
@@ -62,6 +62,21 @@ pub mod ffi {
         #[qobject]
         #[qml_element]
         #[base = QAbstractListModel]
+        #[qproperty(bool, use_unicode_titles, cxx_name = "useUnicodeTitles", READ, NOTIFY)]
+        #[qproperty(
+            bool,
+            use_unicode_artists,
+            cxx_name = "useUnicodeArtists",
+            READ,
+            NOTIFY
+        )]
+        #[qproperty(
+            QString,
+            track_name_preferences_message,
+            cxx_name = "trackNamePreferencesMessage",
+            READ,
+            NOTIFY
+        )]
         #[qproperty(i32, track_count, cxx_name = "trackCount", READ, NOTIFY)]
         #[qproperty(i32, track_sort_index, cxx_name = "trackSortIndex", READ, NOTIFY)]
         #[qproperty(i32, selected_audio_id, cxx_name = "selectedAudioId", READ, NOTIFY)]
@@ -393,6 +408,12 @@ pub mod ffi {
         #[cxx_name = "roleNames"]
         fn role_names(self: &AppBridge) -> QHash_i32_QByteArray;
         #[qinvokable]
+        #[cxx_name = "setUseUnicodeTitles"]
+        fn change_unicode_titles(self: Pin<&mut AppBridge>, enabled: bool);
+        #[qinvokable]
+        #[cxx_name = "setUseUnicodeArtists"]
+        fn change_unicode_artists(self: Pin<&mut AppBridge>, enabled: bool);
+        #[qinvokable]
         #[cxx_name = "connectSession"]
         fn connect_session(self: Pin<&mut AppBridge>);
         #[qinvokable]
@@ -459,6 +480,10 @@ pub mod ffi {
         #[qinvokable]
         #[cxx_name = "toggleFolderSelection"]
         fn toggle_folder_selection(self: Pin<&mut AppBridge>, path: &QString);
+        #[qinvokable]
+        #[cxx_name = "refreshFolderSelection"]
+        fn refresh_folder_selection(self: Pin<&mut AppBridge>, path: &QString);
+
         #[qinvokable]
         #[cxx_name = "retryFolderCount"]
         fn retry_folder_count(self: Pin<&mut AppBridge>, path: &QString);
@@ -586,6 +611,10 @@ pub struct AppBridgeRust {
     rows: Vec<Row>,
     cover_rows: HashMap<i32, Vec<usize>>,
     audio_rows: HashMap<i32, usize>,
+    use_unicode_titles: bool,
+    use_unicode_artists: bool,
+    track_name_preferences_message: QString,
+    track_name_preferences_loaded: bool,
     controller: Option<AppController>,
     generation: u64,
     cache_epoch: u64,
@@ -675,6 +704,10 @@ impl Default for AppBridgeRust {
             rows: Vec::new(),
             cover_rows: HashMap::new(),
             audio_rows: HashMap::new(),
+            use_unicode_titles: false,
+            use_unicode_artists: false,
+            track_name_preferences_message: QString::default(),
+            track_name_preferences_loaded: false,
             controller: None,
             generation: 0,
             cache_epoch: 0,
@@ -709,6 +742,77 @@ macro_rules! property_setter {
     };
 }
 impl ffi::AppBridge {
+    property_setter!(
+        set_use_unicode_titles,
+        use_unicode_titles,
+        use_unicode_titles_changed,
+        bool
+    );
+    property_setter!(
+        set_use_unicode_artists,
+        use_unicode_artists,
+        use_unicode_artists_changed,
+        bool
+    );
+    property_setter!(
+        set_track_name_preferences_message,
+        track_name_preferences_message,
+        track_name_preferences_message_changed,
+        QString
+    );
+
+    fn track_name_preferences(&self) -> TrackNamePreferences {
+        TrackNamePreferences {
+            use_unicode_titles: self.use_unicode_titles,
+            use_unicode_artists: self.use_unicode_artists,
+        }
+    }
+    fn load_track_name_preferences(mut self: Pin<&mut Self>) {
+        if self.track_name_preferences_loaded {
+            return;
+        }
+        self.as_mut().rust_mut().track_name_preferences_loaded = true;
+        // The offline gallery has no live runtime and never touches local settings.
+        if RuntimeContext::current().is_none() {
+            return;
+        }
+        let mut titles = false;
+        let mut artists = false;
+        let error = native::load_track_name_preferences(&mut titles, &mut artists);
+        self.as_mut().set_use_unicode_titles(titles);
+        self.as_mut().set_use_unicode_artists(artists);
+        self.set_track_name_preferences_message(error);
+    }
+    fn change_track_name_preference(mut self: Pin<&mut Self>, title: bool, enabled: bool) {
+        self.as_mut().load_track_name_preferences();
+        let current = if title {
+            self.use_unicode_titles
+        } else {
+            self.use_unicode_artists
+        };
+        if current == enabled {
+            return;
+        }
+        // Update the local pair synchronously; queued controller responses cannot overwrite it.
+        if title {
+            self.as_mut().set_use_unicode_titles(enabled);
+        } else {
+            self.as_mut().set_use_unicode_artists(enabled);
+        }
+        self.command(AppCommand::SetTrackNamePreferences(
+            self.track_name_preferences(),
+        ));
+        if RuntimeContext::current().is_some() {
+            let error = native::save_track_name_preference(title, enabled);
+            self.set_track_name_preferences_message(error);
+        }
+    }
+    pub fn change_unicode_titles(self: Pin<&mut Self>, enabled: bool) {
+        self.change_track_name_preference(true, enabled);
+    }
+    pub fn change_unicode_artists(self: Pin<&mut Self>, enabled: bool) {
+        self.change_track_name_preference(false, enabled);
+    }
     property_setter!(
         set_playlist_cover_preparing,
         playlist_cover_preparing,
@@ -1115,6 +1219,7 @@ impl ffi::AppBridge {
         }
     }
     pub fn connect_session(mut self: Pin<&mut Self>) {
+        self.as_mut().load_track_name_preferences();
         if self.controller.is_none() {
             let Some(context) = RuntimeContext::current() else {
                 return;
@@ -1156,6 +1261,9 @@ impl ffi::AppBridge {
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(controller.clone());
             context.retain(controller.clone());
             self.as_mut().rust_mut().controller = Some(controller);
+            self.command(AppCommand::SetTrackNamePreferences(
+                self.track_name_preferences(),
+            ));
         }
         self.command(AppCommand::Connect);
     }
@@ -1643,6 +1751,9 @@ impl ffi::AppBridge {
     pub fn toggle_folder_selection(self: Pin<&mut Self>, path: &QString) {
         self.command(AppCommand::ToggleFolderSelection(path.to_string()));
     }
+    pub fn refresh_folder_selection(self: Pin<&mut Self>, path: &QString) {
+        self.command(AppCommand::RefreshFolderSelection(path.to_string()));
+    }
     pub fn retry_folder_count(self: Pin<&mut Self>, path: &QString) {
         self.command(AppCommand::RetryFolderCount(path.to_string()));
     }
@@ -1664,6 +1775,7 @@ impl ffi::AppBridge {
                         match row.pending {
                             Some(FolderAction::Add) => "add",
                             Some(FolderAction::Remove) => "remove",
+                            Some(FolderAction::Refresh) => "refresh",
                             None => "",
                         }
                         .into(),
@@ -1823,8 +1935,11 @@ impl ffi::AppBridge {
         self.as_mut()
             .set_selected_audio_id(track.as_ref().map_or(-1, |t| t.audio_source_id));
         self.as_mut().set_has_selection(track.is_some());
-        self.as_mut()
-            .set_selected_available(track.as_ref().is_some_and(|t| t.audio_source_id >= 0));
+        let detail_pending =
+            self.playlist_state.showing_detail() && self.playlist_state.active.is_none();
+        self.as_mut().set_selected_available(
+            !detail_pending && track.as_ref().is_some_and(|t| t.audio_source_id >= 0),
+        );
         self.as_mut()
             .set_can_add_playlist(track.as_ref().is_some_and(|t| !t.difficulties.is_empty()));
         self.as_mut().set_selected_title(QString::from(
@@ -2484,6 +2599,18 @@ mod tests {
         assert!(model.rows[1].track.subtitle.contains("Easy"));
         assert_eq!(model.rows[0].track.duration, Some(Duration::from_secs(90)));
         assert_eq!(model.rows[1].track.duration, Some(Duration::from_secs(90)));
+        let mut pending = view.clone();
+        pending.loading = true;
+        pending.active = None;
+        model.as_mut().apply(AppUpdate::Playlists(pending));
+        let mut renamed = tracks[0].clone();
+        renamed.title = "Unicode title".to_owned();
+        model
+            .as_mut()
+            .apply(AppUpdate::TrackSelected(Some(renamed)));
+        assert_eq!(model.selected_title, QString::from("Unicode title"));
+        assert!(model.has_selection && !model.selected_available);
+        assert!(model.transport_command().is_none());
         view.selected_item_id = Some(3);
         model.as_mut().apply(AppUpdate::Playlists(view));
         model.as_mut().selection(tracks.get(2).cloned());

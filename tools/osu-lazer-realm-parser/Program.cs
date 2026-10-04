@@ -48,7 +48,10 @@ static int ProgramMain(string[] args)
         if (printSchema)
             PrintSchema(realm);
         else
+        {
             ExportBeatmapSets(realm, Path.GetDirectoryName(configuration.DatabasePath)!);
+            ExportCollections(realm);
+        }
 
         return 0;
     }
@@ -119,6 +122,35 @@ static void ExportBeatmapSets(Realm realm, string lazerRoot)
     }
 }
 
+static void ExportCollections(Realm realm)
+{
+    if (!realm.Schema.Any(schema => schema.Name == "BeatmapCollection"))
+        return;
+
+    foreach (var collection in realm.DynamicApi.All("BeatmapCollection"))
+    {
+        var id = collection.DynamicApi.Get<Guid>("ID");
+        var name = collection.DynamicApi.Get<string>("Name")
+            ?? throw new InvalidDataException("Collection Name is null");
+        // Required members deliberately bypass the optional-field helpers.
+        var hashes = collection.DynamicApi.GetList<string>("BeatmapMD5Hashes");
+        WriteJson(new
+        {
+            type = "collection",
+            id = id.ToString("D"),
+            name,
+            beatmap_md5_hashes = hashes.Select(NormalizeMD5).ToArray(),
+        });
+    }
+}
+
+static string NormalizeMD5(string value)
+{
+    if (value is null || value.Length != 32 || !value.All(char.IsAsciiHexDigit))
+        throw new InvalidDataException("Invalid MD5: expected 32 ASCII hexadecimal characters");
+    return value.ToLowerInvariant();
+}
+
 static object ToBeatmap(IRealmObjectBase beatmap)
 {
     var metadata = GetObject(beatmap, "Metadata");
@@ -128,6 +160,7 @@ static object ToBeatmap(IRealmObjectBase beatmap)
         difficulty_name = GetString(beatmap, "DifficultyName"),
         bpm = GetDouble(beatmap, "BPM"),
         hash = GetString(beatmap, "Hash"),
+        md5_hash = GetString(beatmap, "MD5Hash") is { } md5 ? NormalizeMD5(md5) : null,
         metadata = metadata is null ? null : new
         {
             title = GetString(metadata, "Title"),

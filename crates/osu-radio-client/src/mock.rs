@@ -92,6 +92,7 @@ pub enum Action {
     Playlist(crate::controller::PlaylistAction),
     FolderReset,
     FolderToggle(String),
+    FolderRefresh(String),
     FolderCount(String),
     FolderBrowse,
     FolderApply,
@@ -180,6 +181,27 @@ impl Default for GalleryState {
 }
 
 impl GalleryState {
+    fn stage_folder(&mut self, path: &str, refresh: bool) -> bool {
+        self.folder_rows
+            .iter_mut()
+            .find(|row| row.marker_path == path && (!refresh || row.registered))
+            .is_some_and(|row| {
+                let action = if refresh {
+                    "refresh"
+                } else if row.registered {
+                    "remove"
+                } else {
+                    "add"
+                };
+                row.action = if row.action == action {
+                    String::new()
+                } else {
+                    action.into()
+                };
+                row.error.clear();
+                true
+            })
+    }
     fn apply_folders(&mut self) {
         for row in &mut self.folder_rows {
             if row.action.is_empty() {
@@ -188,7 +210,7 @@ impl GalleryState {
             if row.path == "/demo/osu/2" && row.error.is_empty() {
                 row.error = "Demo import failed. Apply again to retry.".into();
             } else {
-                row.registered = row.action == "add";
+                row.registered = row.action != "remove";
                 row.action.clear();
                 row.error.clear();
             }
@@ -256,20 +278,8 @@ impl MockState {
                 self.gallery.folder_message.clear();
                 true
             }
-            Action::FolderToggle(path) => self
-                .gallery
-                .folder_rows
-                .iter_mut()
-                .find(|row| row.marker_path == path)
-                .is_some_and(|row| {
-                    row.action = if row.action.is_empty() {
-                        if row.registered { "remove" } else { "add" }.into()
-                    } else {
-                        String::new()
-                    };
-                    row.error.clear();
-                    true
-                }),
+            Action::FolderToggle(path) => self.gallery.stage_folder(&path, false),
+            Action::FolderRefresh(path) => self.gallery.stage_folder(&path, true),
             Action::FolderCount(path) => self
                 .gallery
                 .folder_rows

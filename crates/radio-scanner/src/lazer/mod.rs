@@ -3,4 +3,7 @@ pub(crate) mod scanner;
 mod tests;
 mod types;
 
-pub use scanner::{import_from_lazer_realm, import_from_lazer_realm_with_helper};
+pub use scanner::{
+    import_from_lazer_realm, import_from_lazer_realm_with_helper, import_snapshot_from_lazer_realm,
+    import_snapshot_from_lazer_realm_with_helper,
+};

@@ -3,7 +3,7 @@
 use std::{collections::HashMap, path::Path};
 
 use anyhow::{Context, Result, ensure};
-use radio_core::import_types::{BeatmapMetadata, ImportedBeatmap, RealmUser};
+use radio_core::import_types::{BeatmapMetadata, ImportedBeatmap, ImportedCollection, RealmUser};
 
 pub(super) struct Record {
     pub index: usize,
@@ -28,6 +28,45 @@ pub(super) fn decode(bytes: &[u8], path: &Path) -> Result<Vec<Record>> {
     } else {
         decode_layout(bytes, path, version < 2019_11_06)
     }
+}
+
+pub(super) fn decode_collections(bytes: &[u8], path: &Path) -> Result<Vec<ImportedCollection>> {
+    let mut reader = Reader::new(bytes, path);
+    let version = reader.i32()?;
+    reader.check(version > 0, "invalid collection database version")?;
+    let count = reader.count("collection count", 5)?;
+    let mut occurrences = HashMap::<String, usize>::new();
+    let mut collections = Vec::new();
+    for index in 0..count {
+        reader.record = Some(index);
+        let name = reader.string()?.unwrap_or_default();
+        let occurrence = occurrences.entry(name.clone()).or_default();
+        let source_id = serde_json::to_string(&(&name, *occurrence))?;
+        *occurrence = occurrence
+            .checked_add(1)
+            .context("collection occurrence overflow")?;
+        let hash_count = reader.count("collection beatmap count", 34)?;
+        let mut beatmap_md5_hashes = Vec::new();
+        for _ in 0..hash_count {
+            let hash = reader
+                .string()?
+                .with_context(|| reader.context("missing collection beatmap MD5"))?;
+            beatmap_md5_hashes.push(
+                crate::normalize_md5(&hash)
+                    .with_context(|| reader.context("invalid collection beatmap MD5"))?,
+            );
+        }
+        collections.push(ImportedCollection {
+            source_id,
+            name,
+            beatmap_md5_hashes,
+        });
+    }
+    reader.check(
+        reader.position == bytes.len(),
+        "trailing bytes after collections",
+    )?;
+    Ok(collections)
 }
 
 fn decode_layout(bytes: &[u8], path: &Path, entry_sizes: bool) -> Result<Vec<Record>> {
@@ -271,6 +310,11 @@ impl<'a> Reader<'a> {
             online_id,
             beatmap: ImportedBeatmap {
                 difficulty_name,
+                md5_hash: hash
+                    .as_deref()
+                    .map(crate::normalize_md5)
+                    .transpose()
+                    .with_context(|| self.context("invalid beatmap MD5"))?,
                 hash,
                 bpm: representative_bpm(timings, total_time),
                 metadata: Some(BeatmapMetadata {

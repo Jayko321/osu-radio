@@ -4,7 +4,10 @@ use crate::{
     model::{OsuInstallation, OsuInstallationChanges, SourceType},
 };
 use anyhow::{Context, Result, ensure};
-use radio_core::{OsuMarker, import_types::ImportedBeatmapSet};
+use radio_core::{
+    OsuMarker,
+    import_types::{ImportedBeatmapSet, ImportedCollection, ImportedSnapshot},
+};
 use radio_db::Database;
 use radio_scanner::discovery::{DiscoveryDepth, DiscoveryOptions, discover};
 use std::{
@@ -124,10 +127,44 @@ impl OsuInstallationService<'_> {
         Ok(summary)
     }
 
+    pub async fn replace_imported_snapshot(
+        &self,
+        id: i32,
+        imported: &ImportedSnapshot,
+    ) -> Result<ImportSummary> {
+        let transaction = self.database.begin().await?;
+        let summary = Self::replace_imported_snapshot_in(&transaction, id, imported).await?;
+        transaction.commit().await?;
+        Ok(summary)
+    }
+
+    pub(super) async fn replace_imported_snapshot_in(
+        transaction: &radio_db::Transaction,
+        id: i32,
+        imported: &ImportedSnapshot,
+    ) -> Result<ImportSummary> {
+        Self::replace_snapshot_parts_in(
+            transaction,
+            id,
+            &imported.beatmap_sets,
+            &imported.collections,
+        )
+        .await
+    }
+
     pub(super) async fn replace_snapshot_in(
         transaction: &radio_db::Transaction,
         id: i32,
         imported: &[ImportedBeatmapSet],
+    ) -> Result<ImportSummary> {
+        Self::replace_snapshot_parts_in(transaction, id, imported, &[]).await
+    }
+
+    async fn replace_snapshot_parts_in(
+        transaction: &radio_db::Transaction,
+        id: i32,
+        imported: &[ImportedBeatmapSet],
+        collections: &[ImportedCollection],
     ) -> Result<ImportSummary> {
         UserDataService::lock(transaction.user_data()).await?;
         let installations = transaction.osu_installations();
@@ -188,6 +225,19 @@ impl OsuInstallationService<'_> {
             }
             summary.beatmaps = summary.beatmaps.saturating_add(imported_set.beatmaps.len());
         }
+        transaction
+            .playlists()
+            .sync_collections(
+                &OsuMarker {
+                    kind: installation.kind,
+                    root_path: installation.root_path,
+                    marker_path: std::fs::canonicalize(&installation.marker_path)
+                        .unwrap_or(installation.marker_path),
+                },
+                collections,
+            )
+            .await?;
+        transaction.playlists().refresh_unicode_names().await?;
         tags.cleanup().await?;
         metadata.cleanup().await?;
         audio.cleanup().await?;

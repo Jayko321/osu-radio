@@ -14,7 +14,7 @@ The confirmed product direction is desktop music playback from local osu! instal
 | Discovery policy, streaming, filtering, limits | [`discovery/mod.rs`](../../crates/radio-scanner/src/discovery/mod.rs) | `find_osu_markers_with` is the synchronous callback core; `discover` adapts it for async callers. |
 | Known installation locations and relocation | [`discovery/known.rs`](../../crates/radio-scanner/src/discovery/known.rs) | OS-specific candidate generation and `storage.ini` reading. |
 | Walking and pruning | [`discovery/sweep.rs`](../../crates/radio-scanner/src/discovery/sweep.rs) | Marker names, OS scan roots, directory exclusion policy. |
-| Source dispatch | [`radio-scanner/src/lib.rs`](../../crates/radio-scanner/src/lib.rs) | `get_beatmap_sets` selects the stable or lazer reader; `UnsupportedSourceError` remains available for API compatibility. |
+| Source dispatch | [`radio-scanner/src/lib.rs`](../../crates/radio-scanner/src/lib.rs) | `import_snapshot` selects the stable or lazer reader; the old `get_beatmap_sets` returns its sets; `UnsupportedSourceError` remains available for API compatibility. |
 | Stable database decoding and mapping | [`stable/reader.rs`](../../crates/radio-scanner/src/stable/reader.rs), [`stable/mod.rs`](../../crates/radio-scanner/src/stable/mod.rs) | Checked binary layout, timing conversion, folder grouping and source-neutral output. |
 | Stable Songs and artwork references | [`stable/media.rs`](../../crates/radio-scanner/src/stable/media.rs) | Installation-local configuration, Wine drive mapping, safe relative paths and background events. |
 | Helper invocation and cleanup | [`lazer/scanner.rs`](../../crates/radio-scanner/src/lazer/scanner.rs) | Process lifetime, pipes, parsing loop, diagnostic propagation. |
@@ -29,7 +29,7 @@ Discovery is also used for backend folder inspection in [installation service](.
 
 `OsuKind` currently has `Stable` and `Lazer`; `as_str` and `FromStr` use lowercase `stable`/`lazer` and reject other strings. `OsuMarker` carries the kind, marker file path, and its parent root path.
 
-`ImportedBeatmapSet` contains `source`, optional online ID/hash, named file usages, and all of its `ImportedBeatmap` values. A beatmap holds optional difficulty name, BPM, hash, and metadata. `BeatmapMetadata` contains title/artist variants, optional author, source/tags, user tags, preview time, and audio/background filenames. `RealmNamedFileUsage`, `RealmFile`, and `RealmUser` are the current names in the shared domain; despite these names, the crate performs no Realm I/O. Do not put GUI styling or a hosted-provider decision into these types incidentally.
+`ImportedSnapshot` contains all beatmap sets and collections. Each `ImportedCollection` carries a source-local `source_id`, original `name`, and ordered `beatmap_md5_hashes` (including unknown/repeated hashes). `ImportedBeatmapSet` contains `source`, optional online ID/hash, named file usages, and all of its `ImportedBeatmap` values. A beatmap holds optional difficulty name, BPM, native `hash`, independent `md5_hash`, and metadata. MD5 values must be exactly 32 ASCII hexadecimal characters and are normalized to lowercase; native hashes remain unchanged. `BeatmapMetadata` contains title/artist variants, optional author, source/tags, user tags, preview time, and audio/background filenames. `RealmNamedFileUsage`, `RealmFile`, and `RealmUser` are the current names in the shared domain; despite these names, the crate performs no Realm I/O. Do not put GUI styling or a hosted-provider decision into these types incidentally.
 
 The C# helper constructs each file reference as `<realm-parent>/files/<first hash character>/<first two hash characters>/<hash>`. A missing or shorter-than-two-character hash gives no resolved path. This is path construction, not an existence or readability check.
 
@@ -65,9 +65,9 @@ Dropping `Discovery` sets the shared worker stop flag and closes the receiver, r
 
 ## Supported imports and CLI behavior
 
-`get_beatmap_sets` imports both stable and lazer. `import_from_stable_db(&Path)` is exported alongside the lazer entry points. Both readers return complete snapshots; failed decoding never returns partial imports. CLI `import` and `store` use this shared dispatch. Stable storage uses the existing snapshot contract without a schema change.
+`import_snapshot(OsuMarker)` imports both stable and lazer into the complete `ImportedSnapshot`; `import_snapshot_with_helper` supplies an explicit lazer helper executable. Stable exposes `import_snapshot_from_stable_db(&Path)` and lazer exposes `import_snapshot_from_lazer_realm` / `import_snapshot_from_lazer_realm_with_helper`. `get_beatmap_sets`, `import_from_stable_db`, and the existing lazer wrappers fully read and validate the snapshot before returning only its sets. Failed decoding never returns partial imports. CLI `import` previews sets while `store` persists the complete snapshot.
 
-`import_from_lazer_realm` selects the configured helper; `import_from_lazer_realm_with_helper` accepts an executable explicitly and is the process-test seam. Both return a fully materialized `Vec<ImportedBeatmapSet>`. Line-by-line decoding does not make the public import result streaming, and a CLI output limit does not reduce helper extraction or memory use.
+`import_from_lazer_realm` selects the configured helper; `import_from_lazer_realm_with_helper` accepts an executable explicitly and is the process-test seam. These compatibility wrappers return a fully materialized `Vec<ImportedBeatmapSet>` after validating collections too. Line-by-line decoding does not make the public import result streaming, and a CLI output limit does not reduce helper extraction or memory use.
 
 The CLI's `scan --root` constrains discovery, resolving a relative root against the working directory. `--source` becomes the walk's kind filter; `--first` and `--limit` stop marker discovery and conflict with each other. A scan limit of zero is rejected. Text output renders arrivals as they are received; JSON output collects first.
 
@@ -102,6 +102,14 @@ uninherited timings with finite offsets. Sections extend through cached total
 duration, the first starts at zero, repeated BPM durations accumulate, and higher
 BPM wins ties. No valid timing yields `None`.
 
+The sibling `collection.db` is decoded with the same checked binary reader: version,
+collection count, tagged UTF-8 name, beatmap count, and MD5 strings, with exact EOF.
+An absent file means no collections; any other read/decode failure aborts the import.
+Empty names and empty collections are valid. Stable collection identity is a JSON
+pair of original name and its zero-based occurrence among collections of that name;
+renaming changes that identity. The scanner preserves original names and duplicates;
+playlist presentation and deduplication belong to the persistence layer.
+
 Installation-local `osu!.*.cfg` files supply `BeatmapDirectory`; absent or empty
 values default to `Songs`. Relative values resolve against the installation,
 equivalent values are accepted, and conflicting directories fail explicitly.
@@ -126,9 +134,9 @@ snapshot. No source file is modified or copied.
 
 Normal invocation is an executable plus one `client.realm` argument. `Program.cs` opens its absolute path with `IsDynamic = true` and `IsReadOnly = true`, suppresses Realm logging, and requires a `BeatmapSet` object type. Missing optional members generally become `null` or empty collections. Numeric helpers tolerate missing/incompatible values and reject integers outside `i32` range; this does not mean every possible Realm/schema failure is swallowed.
 
-Normal stdout contains one JSON object per beatmap set, one object per line, with `source: "Lazer"` and snake_case keys. `beatmaps` is required by the Rust parser; missing `files` and `user_tags` default to empty collections. The nested metadata, author, and file records map explicitly through private Rust wire types into the domain. Keep the producer in `Program.cs`, parser/mapping in `lazer/types.rs`, domain fields in `import_types.rs`, and representative parser input in [`lazer/tests.rs`](../../crates/radio-scanner/src/lazer/tests.rs) synchronized when the protocol changes.
+Normal stdout contains one JSON object per beatmap set and per collection, one object per line. Existing set records retain `source: "Lazer"` and snake_case keys; beatmaps additionally carry `md5_hash` from Realm `MD5Hash`. Collection records use `type: "collection"`, canonical Guid `id`, original `name`, and `beatmap_md5_hashes`. The helper reads collection `ID`, `Name`, and `BeatmapMD5Hashes` directly: missing/incompatible fields or null names fail extraction. Absence of the `BeatmapCollection` schema type is valid and yields no collections. `beatmaps` is required by the Rust parser; missing `files` and `user_tags` default to empty collections. The nested metadata, author, and file records map explicitly through private Rust wire types into the domain. Keep the producer in `Program.cs`, parser/mapping in `lazer/types.rs`, domain fields in `import_types.rs`, and representative parser input in [`lazer/tests.rs`](../../crates/radio-scanner/src/lazer/tests.rs) synchronized when the protocol changes.
 
-`--schema <path>` is a separate diagnostic mode that emits schema records; its stdout is **not** import input. Do not mix schema records, progress messages, or blank lines into normal stdout: every line is parsed as a beatmap-set record. Diagnostics belong on stderr. Helper exit codes are `0` for success, `2` for usage, `3` for a missing Realm file, and `4` for an exception during reading/export.
+`--schema <path>` is a separate diagnostic mode that emits schema records; its stdout is **not** import input. Do not mix schema records, progress messages, or blank lines into normal stdout: every line must be either a set record or a collection record. Unknown record types and malformed mandatory collection fields fail. Diagnostics belong on stderr. Helper exit codes are `0` for success, `2` for usage, `3` for a missing Realm file, and `4` for an exception during reading/export.
 
 The Rust wrapper pipes both outputs and drains stderr concurrently while decoding stdout. Stderr is currently buffered without a size cap. Spawn failures include the helper and Realm paths. A stdout read or parse failure kills and waits for the child, aborts the stderr task, and returns the read/parse error; it does not return partial imports. After EOF it waits for process success, joining the stderr task. A nonzero exit reports status and trimmed stderr; successful stderr is forwarded to the parent stderr. Forwarding failures also return an error. The child has `kill_on_drop(true)` as a cancellation safeguard.
 
@@ -148,7 +156,15 @@ These are source-linked checks to select for a change, not a claim that they wer
 | Pruning and marker names | Platform-gated tests in [`discovery/sweep.rs`](../../crates/radio-scanner/src/discovery/sweep.rs), including `recognizes_marker_file_names`, `keeps_unix_plausible_osu_locations`, and `keeps_windows_plausible_osu_locations`. |
 | Stable layouts, mapping and dispatch | [`stable/tests.rs`](../../crates/radio-scanner/src/stable/tests.rs): transition fixtures, tagged star widths, Unicode/long/empty strings, grouping/IDs, shared audio, BPM duration/ties, configured directories and native Stable dispatch. |
 | Stable malformed inputs and media | [`stable/tests.rs`](../../crates/radio-scanner/src/stable/tests.rs): every truncation of legacy/current two-record snapshots, invalid counts/tags/lengths/UTF-8/booleans, entry sizes/footer, unsafe references, quoted artwork and missing/unreadable `.osu`. Linux-only Wine fixtures cover relative/absolute drive links and nearest-prefix selection. |
-| NDJSON mapping and wrong record shape | [`lazer/tests.rs`](../../crates/radio-scanner/src/lazer/tests.rs): `parses_lazer_beatmap_set_json_into_core_type`, `rejects_beatmap_first_json`. |
+| NDJSON mapping, strict collections/MD5 and wrong record shape | [`lazer/tests.rs`](../../crates/radio-scanner/src/lazer/tests.rs): `parses_lazer_beatmap_set_json_into_core_type`, `rejects_beatmap_first_json`, `validates_collection_records_and_normalizes_md5_without_changing_native_hashes`. |
+| Stable collections | [`stable/tests.rs`](../../crates/radio-scanner/src/stable/tests.rs): `imports_collections_including_empty_duplicates_unicode_and_unknown_maps`, `rejects_corrupt_collection_databases_without_partial_results`; temporary binary fixtures cover same-name identities, Unicode/empty names, unknown/repeated MD5s, truncations and corruption. |
+| Real Realm protocol | [`lazer/tests.rs`](../../crates/radio-scanner/src/lazer/tests.rs): `imports_real_realm_fixtures_with_the_production_helper` builds the [fixture generator](../../tools/osu-lazer-realm-parser/fixture-generator/Program.cs) in a temporary directory using the existing Realm dependency, then invokes the production helper and Rust importer. Synthetic Realm databases cover differing native/MD5 hashes, absent collection type, Unicode/empty collections, unknown/repeated hashes, invalid MD5 and null required name. |
 | Child process success and failure diagnostics | Unix-only fake-helper tests in [`lazer/tests.rs`](../../crates/radio-scanner/src/lazer/tests.rs): `accepts_a_fake_ndjson_helper`, `includes_helper_stderr_in_failure`. |
 
-Existing tests do not establish a discovery shutdown-latency bound, malformed-output child cleanup, Windows helper execution, real stable-library compatibility, or live Realm compatibility. There is no separate C# test project. Passing Rust binary fixtures and fake-helper tests does not prove a real osu! library imports correctly. Use the [verification matrix](development.md) and add a focused regression check for behavior changed; do not run broad filesystem discovery or a real import as an automatic documentation check.
+Existing tests do not establish a discovery shutdown-latency bound, malformed-output child cleanup, Windows helper execution, real stable-library compatibility, or compatibility with an actual installed osu! Realm library. The automated synthetic Realm test exercises the production helper on genuine Realm files; it does not establish compatibility with every game schema/version. There is no separate C# test framework. Passing binary and synthetic Realm fixtures does not prove a real osu! library imports correctly. Use the [verification matrix](development.md) and add a focused regression check for behavior changed; do not run broad filesystem discovery or a real import as an automatic documentation check.
+
+
+Executed for the collection-import change (Linux, 2026-10-04):
+`cargo test -p radio-scanner --locked` passed all 48 tests, including the genuine
+Realm fixture round trip. Game installations were not read or modified;
+Windows helper execution and real-library compatibility remain unverified.

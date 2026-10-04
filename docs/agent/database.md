@@ -25,7 +25,7 @@ migration for subsequent changes.
 | `user_data` | Singleton settings anchor, primary key constrained to `1`; individual volume mode and global volume percentage. |
 | `osu_installations` | Generated `i32` ID; required settings owner; unique marker path; kind, root/marker paths, label, enabled flag and last-scanned timestamp. |
 | `beatmap_sets` | Generated `i32` ID; required installation; optional online ID and source hash. |
-| `beatmaps` | Generated `i32` ID; required set; difficulty, BPM, source hash; optional independent metadata and audio references. Source kind is derived from the installation. |
+| `beatmaps` | Generated `i32` ID; required set; difficulty, BPM, native source hash and nullable indexed MD5; optional independent metadata and audio references. Source kind is derived from the installation. |
 | `beatmap_metadata` | SHA-256 text primary key; immutable shared imported content. |
 | `tags` | Generated `i32` ID; globally unique normalized name, SQLite `BINARY` / PostgreSQL `C` collation. |
 | `beatmap_set_tags` | Composite primary key `(beatmap_set_id, tag_id)`; set cascade, restrictive tag reference, index on `tag_id`. |
@@ -33,8 +33,8 @@ migration for subsequent changes.
 | `audio_volume` | Composite primary key `(audio_kind, source_location)` and absolute integer `volume_percent` in 0–100. No library foreign key. |
 | `listening_history` | Composite primary key `(audio_kind, source_location)` using the audio source's existing identity; UTC millisecond timestamp and last acknowledged playback token. No library foreign key. |
 | `playback_queue` | Singleton `id = 1`; JSON audio-ID history and parallel nullable playlist-item IDs, nullable current index, playback mode and monotonic revision/token counters. |
-| `playlists` | Generated `i32` ID and nonempty trimmed name; equal names are allowed. Nullable custom PNG and a retained monotonic cover revision. |
-| `playlist_items` | Generated `i32` ID; required playlist with deletion cascade; unique `(playlist_id, source_kind, beatmap_hash)` and saved title, artist and difficulty. No library foreign key. |
+| `playlists` | Generated `i32` ID and nonempty trimmed name; equal names are allowed. Nullable custom PNG and a retained monotonic cover revision; optional unique source/collection provenance independent of installation deletion. |
+| `playlist_items` | Generated `i32` ID; required playlist with deletion cascade; unique `(playlist_id, source_kind, beatmap_hash)`, explicit native/MD5 hash kind and saved ordinary/Unicode title and artist plus difficulty. No library foreign key. |
 
 Installation deletion cascades through sets, beatmaps and set-tag links. Shared references use
 restrictive foreign keys. Repository cleanup deletes only unreferenced metadata
@@ -117,7 +117,7 @@ there are no new standalone beatmap or set creation workflows.
 | Accessor | Operations |
 | --- | --- |
 | `user_data()` | `get`, `overview`; overview composes installation reads through `OsuInstallationService`. |
-| `osu_installations()` | `all`, `get`, `register` (resolved scanner marker), `register_folder` (discovery-validated absolute path), `update`, `delete`, `replace_snapshot`. |
+| `osu_installations()` | `all`, `get`, `register` (resolved scanner marker), `register_folder` (discovery-validated absolute path), `update`, `delete`, `replace_snapshot`, `replace_imported_snapshot`, `register_imported_snapshot`, `reimport_folder`. |
 | `beatmap_sets()` | `get`, `for_installation`, `all_with_audio_sources`, `search_with_audio_sources`, `search_tracks`; legacy aggregates retain set/audio/map order; tracks group globally by audio ID. |
 | `beatmaps()` | `get`, `for_set`. |
 | `beatmap_metadata()` | `get`, `get_or_insert`; the pure `metadata_hash` helper is re-exported. |
@@ -221,8 +221,10 @@ decoding responsibility; extensionless imported locations remain valid.
 `upcoming()` reads the queue and pending audio summaries in one read transaction.
 It excludes current and history, keeps duplicate positions and skips deleted/Online
 sources. Metadata loads only pending audio references and is reused for repeated
-IDs; it uses the ordinary library audio summary, independently of Songs search or
-later playlist ordering. It neither probes files nor changes the queue.
+audio/item pairs; playlist entries use their saved ordinary/Unicode labels and
+single difficulty while the item exists. Other entries use the library audio summary,
+independently of Songs search or later playlist ordering. It neither probes files
+nor changes the queue.
 
 [Repository queue contracts](../../crates/radio-db/src/tests/queue.rs) cover a
 populated pre-queue upgrade, concurrent migration, reopen, rollback, position
@@ -306,6 +308,16 @@ so a later upload gets a different version. The service accepts fully decodable
 image bytes, independently of the original file. `cover` is the only read that
 selects those bytes; detail, rename and list responses omit binary data.
 
+The additive [Unicode-name migration](../../crates/radio-db/src/migrations/m20261003_000010_playlist_unicode_names.rs)
+adds nullable `title_unicode` and `artist_unicode` snapshots to `playlist_items`.
+Backfill uses the lowest beatmap ID with Local/Copied audio for the exact source
+kind and beatmap hash, matching availability resolution. Each complete import
+refreshes those two fields for manually created playlists inside its existing transaction; unresolved keys
+retain their last known Unicode names. Ordinary names and difficulty in manually created playlists stay as
+originally saved; imported collections refresh all saved labels when metadata is available. New items save the raw ordinary and Unicode variants separately.
+Older unavailable items without retained metadata cannot recover Unicode text
+until matching source data returns. Snapshot changes roll back with failed imports.
+
 `PlaylistSummary` contains `id`, `name`, `item_count`, `cover_beatmap_id` and
 `custom_cover_revision`. The list uses one aggregated repository statement in a
 consistent read transaction, without loading each playlist's contents. Counts
@@ -316,13 +328,13 @@ revision is null. Name changes return the same complete summary.
 
 [`PlaylistService`](../../crates/radio-services/src/playlist.rs) trims names and
 rejects whitespace-only names. Additions accept current beatmap IDs, validate all
-of them and their nonempty source hashes before inserting, and commit once under
+of them and their nonempty chosen hashes before inserting, and commit once under
 the existing singleton writer lock. Repeated keys are idempotent; first insertion
 order is retained by item ID. Names need not be unique. Current beatmap row IDs
 are returned when reading but never own membership.
 
 The [repository](../../crates/radio-db/src/repositories/playlist.rs) resolves
-`(installation kind, imported beatmap hash)` against the current library in bound
+`(installation kind, hash kind, beatmap hash)` against the current library in bound
 queries of at most 500 parameters. For an equal key it chooses the lowest beatmap
 ID with Local/Copied audio. Without such a copy, current beatmap/audio/cover IDs are
 null; saved labels remain visible. Playlist reads use one consistent transaction.
@@ -345,37 +357,69 @@ Next/Previous and completion callbacks reuse the existing position/token rules.
 
 [Migration/repository checks](../../crates/radio-db/src/tests/playlists.rs) cover
 a populated five-migration upgrade, an eight-migration upgrade with existing
-playlists, old queue preservation, summary counts/first-item artwork, cover
-revision retention, cascades and reset.
+playlists, a nine-migration Unicode upgrade/downgrade, minimum usable-ID backfill,
+source-kind separation, old queue preservation, summary counts/first-item artwork,
+cover revision retention, cascades and reset.
 [Service checks](../../crates/radio-services/src/tests/playlists.rs) cover CRUD,
 reopen, concurrent idempotent addition, atomic validation, reimported IDs, source
 removal/return, copy priority, distinct source kinds, 503 ordered items, PNG
 validation, replacement/reset, persistence after deleting the original file, queue
 replacement, shared audio, selected start, pause/resume and stale callbacks.
+Unicode contracts cover playback/pending queue projections, import refresh without
+changing saved ordinary labels, unavailable snapshots, source return and
+failed-import rollback.
 
-Collection import is deferred. A future source adapter should resolve collection
-MD5 values to imported beatmaps, then call this service's ordinary additions.
-The [stable collection format](https://github.com/ppy/osu/wiki/Legacy-database-file-structure#collectiondb)
-and [lazer collections](https://github.com/ppy/osu/blob/master/osu.Game/Collections/BeatmapCollection.cs)
-use MD5 membership; lazer's [BeatmapInfo](https://github.com/ppy/osu/blob/master/osu.Game/Beatmaps/BeatmapInfo.cs)
-stores separate `Hash` and `MD5Hash` fields. Do not equate collection MD5 with the
-existing lazer source hash. Reordering, descriptions, playlist artwork and
-collection synchronization remain outside this version.
+### Imported osu! collections
+
+The additive [collection migration](../../crates/radio-db/src/migrations/m20261004_000011_imported_collections.rs)
+adds nullable indexed `beatmaps.md5_hash`, `playlist_items.hash_kind` (`source` by default,
+or `md5`) and nullable playlist provenance with a unique `(origin_source, origin_collection)`
+pair. Existing native hashes and item uniqueness `(playlist_id, source_kind, beatmap_hash)`
+are preserved. Existing lazer MD5 stays null until the source is reread; migration never
+fabricates MD5 from native `Hash`. Downgrade refuses collections or MD5 membership.
+
+Complete scanner snapshots synchronize collections into ordinary playlist views under
+the existing writer lock and snapshot transaction. Source identity is the canonical marker
+path encoded by the existing lossless path codec. Lazer collection identity is its Guid;
+stable identity is JSON `[original_name, zero_based_occurrence_among_equal_names]`.
+An empty or whitespace-only name displays as `Unnamed collection`; original names stay
+in stable identity. Stable rename creates a new playlist and retains the old one; lazer
+rename updates the existing playlist. Equal names and empty collections are supported.
+
+Synchronization updates name and game membership, preserves custom PNG/revision, and
+keeps IDs/order of remaining items. New members append, repeated MD5 references collapse,
+and separate difficulties sharing audio stay separate. Manual membership edits are
+replaced on explicit import. Missing collections and playlists of deleted installations
+remain saved. Missing beatmaps keep saved labels and become unavailable until a matching
+source returns. New unknown MD5 members have no saved metadata yet. Imported playlist
+manual additions prefer MD5 when available, so adding the same difficulty is idempotent.
+Manual playlists retain native hashes. Availability, artwork and Unicode refresh all
+resolve the recorded hash kind with the same Local/Copied priority.
+
+[Migration contracts](../../crates/radio-db/src/tests/collections.rs) cover the populated
+migration-10 upgrade, native default/null MD5, uniqueness, valid hash kinds and guarded
+downgrade. [Collection service contracts](../../crates/radio-services/src/tests/collections.rs)
+cover rename, duplicate/empty names, membership and cover retention, native/MD5 collision,
+unknown/removing/returning maps, source deletion/re-add and failure after collection changes.
+The shared harness runs these contracts with temporary SQLite or disposable PostgreSQL.
+Historical migration fixtures insert original columns directly, independent of current entities.
+
 
 ## Snapshot replacement
 
-Read the entire scanner result before calling `OsuInstallationService::replace_snapshot`. It requires an
+Read the entire scanner result before calling `OsuInstallationService::replace_imported_snapshot`
+(`replace_snapshot` remains a sets-only compatibility API). It requires an
 existing installation and matching source kinds. In one transaction it locks the
 singleton with a write statement, deletes the old installation sets, inserts all
 sets through `BeatmapSetService::add`, beatmaps through `BeatmapService::add`, and
 shared records through metadata/audio services and set links through `TagService`.
-It then cleans up unreferenced shared rows and updates `last_scanned_at`. Every participating service uses repositories bound to that same transaction, with
+It synchronizes supplied collection playlists and refreshes saved Unicode names, then cleans up unreferenced shared rows and updates `last_scanned_at`. Every participating service uses repositories bound to that same transaction, with
 no pool fallback. Only the outer workflow commits. Errors or cancellation before
-commit roll back the old snapshot, shared rows and timestamp together. Empty snapshots clear
+commit roll back the old snapshot, collection playlists, shared rows and timestamp together. Empty snapshots clear
 that installation's library. Other installations remain intact; shared rows still
 referenced elsewhere retain their identities. Snapshot set/beatmap IDs may change.
 
-[`register_snapshot` / `import_folder`](../../crates/radio-services/src/folder_selection.rs)
+[`register_imported_snapshot` / `import_folder`](../../crates/radio-services/src/folder_selection.rs)
 add atomic registration plus replacement for Qt Apply. Source reading finishes
 before the transaction opens. The transaction locks the singleton, matches resolved
 marker identity, registers a new installation and calls the existing replacement
@@ -383,7 +427,11 @@ workflow through the same transaction. Only the outer workflow commits; any erro
 rolls back registration as well as snapshot/shared rows. Already registered sources
 return their stored row without reading/replacing their metadata or changing settings.
 Identity matching repeats under the writer lock so concurrent imports are idempotent.
-Preview metadata reads never write. No schema migration is needed.
+Preview metadata reads never write. `reimport_folder(id)` explicitly reads the full source,
+then reloads the same ID under the writer lock and checks source identity before replacing.
+Deletion during reading returns absence and never recreates the folder. Concurrent label/enabled
+changes are preserved; only the scan timestamp changes. [Temporary folder checks](../../crates/radio-services/src/tests/folder_selection.rs)
+cover bad collection reads and a delayed helper across concurrent settings/deletion at this boundary.
 
 Deletion takes the same lock and performs cascade deletion plus cleanup in one
 transaction. The lock coordinates processes and independent pools; it does not

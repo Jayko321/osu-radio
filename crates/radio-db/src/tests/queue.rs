@@ -28,17 +28,16 @@ pub(super) async fn migration_contracts(database: &Database, url: &str) {
         .get_or_insert(&SourceType::Local("/queue/existing".into()))
         .await
         .unwrap();
-    let map = database
-        .beatmaps()
-        .insert(
-            set.id,
-            &imported[0].beatmaps[0],
-            Some(meta.hash),
-            Some(audio.id),
-            Some("/queue/cover".into()),
-        )
-        .await
-        .unwrap();
+    let map = insert_legacy_beatmap(
+        database,
+        set.id,
+        &imported[0].beatmaps[0],
+        Some(meta.hash),
+        Some(audio.id),
+        Some("/queue/cover".into()),
+    )
+    .await
+    .unwrap();
     let other = Database::connect(url).await.unwrap();
     let (first, second) = tokio::join!(database.migrate(), other.migrate());
     first.unwrap();

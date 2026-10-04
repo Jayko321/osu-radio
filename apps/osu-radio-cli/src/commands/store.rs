@@ -16,8 +16,8 @@ use crate::{
 pub(crate) async fn store(args: StoreArgs) -> Result<()> {
     let marker = select_marker(&args.filters, args.index, args.marker.as_deref()).await?;
 
-    let beatmap_sets = match radio_scanner::get_beatmap_sets(marker.clone()).await {
-        Ok(beatmap_sets) => beatmap_sets,
+    let snapshot = match radio_scanner::import_snapshot(marker.clone()).await {
+        Ok(snapshot) => snapshot,
         Err(error) => return Err(import_error(&marker, error)),
     };
 
@@ -30,11 +30,17 @@ pub(crate) async fn store(args: StoreArgs) -> Result<()> {
 
     let summary = database
         .osu_installations()
-        .replace_snapshot(installation.id, &beatmap_sets)
+        .replace_imported_snapshot(installation.id, &snapshot)
         .await?;
 
     if args.json {
-        print_store_json(&marker, &installation, &beatmap_sets, &summary, &args)?;
+        print_store_json(
+            &marker,
+            &installation,
+            &snapshot.beatmap_sets,
+            &summary,
+            &args,
+        )?;
     } else {
         print_store_summary(&marker, &installation, newly_registered, &summary, &args);
     }

@@ -521,6 +521,34 @@ Basic.ApplicationWindow {
                                         onClicked: bridge.retryFolders()
                                     }
                                 }
+                                AppSwitch {
+                                    objectName: "unicodeTitlesSwitch"
+                                    width: parent.width
+                                    text: "Use Unicode track titles"
+                                    font.family: settingsPane.fontFamily
+                                    font.pixelSize: 16
+                                    checked: bridge.useUnicodeTitles
+                                    onToggled: bridge.setUseUnicodeTitles(checked)
+                                }
+                                AppSwitch {
+                                    objectName: "unicodeArtistsSwitch"
+                                    width: parent.width
+                                    text: "Use Unicode artist names"
+                                    font.family: settingsPane.fontFamily
+                                    font.pixelSize: 16
+                                    checked: bridge.useUnicodeArtists
+                                    onToggled: bridge.setUseUnicodeArtists(checked)
+                                }
+                                Text {
+                                    objectName: "trackNamePreferencesStatus"
+                                    width: parent.width
+                                    text: bridge.trackNamePreferencesMessage
+                                    visible: text.length > 0
+                                    color: Theme.text
+                                    font.family: settingsPane.fontFamily
+                                    font.pixelSize: 14
+                                    wrapMode: Text.Wrap
+                                }
                             }
                             Column {
                                 objectName: "audioSettingsSection"
@@ -908,6 +936,7 @@ Basic.ApplicationWindow {
         picking: bridge.folderSelectionPicking
         message: bridge.folderSelectionMessage
         onToggleRequested: path => bridge.toggleFolderSelection(path)
+        onRefreshRequested: path => bridge.refreshFolderSelection(path)
         onRetryCountRequested: path => bridge.retryFolderCount(path)
         onBrowseRequested: bridge.browseFolderSelection()
         onApplyRequested: bridge.applyFolderSelection()

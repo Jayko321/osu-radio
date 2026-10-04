@@ -6,9 +6,7 @@
     <Nullable>enable</Nullable>
     <FodyGenerateXsd>false</FodyGenerateXsd>
   </PropertyGroup>
-
   <ItemGroup>
     <PackageReference Include="Realm" Version="20.1.0" />
-    <Compile Remove="fixture-generator/**/*.cs" />
   </ItemGroup>
 </Project>

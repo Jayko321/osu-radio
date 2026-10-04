@@ -125,7 +125,7 @@ impl Controller {
         self.emit_selection();
     }
 
-    fn reorder_tracks(&mut self) {
+    pub(super) fn reorder_tracks(&mut self) {
         self.track_sort.sort_tracks(&mut self.tracks);
         self.track_indices = self
             .tracks

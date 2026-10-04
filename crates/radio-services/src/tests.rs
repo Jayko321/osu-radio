@@ -73,7 +73,9 @@ async fn contracts(url: &str) {
     source_files_remain_untouched(&database).await;
     queue::contracts(&database, &other_pool, url).await;
     playlists::contracts(&database, &other_pool, url).await;
+    playlists::unicode_contracts(&database).await;
     playlists::cover_contracts(&database, &other_pool, url).await;
+    collections::contracts(&database).await;
     listening_history::contracts(&database, &other_pool, url).await;
     audio_settings::contracts(&database, &other_pool, url).await;
 }
@@ -181,6 +183,7 @@ fn snapshot(title: &str, path: &str) -> Vec<ImportedBeatmapSet> {
         beatmaps: ["Easy", "Hard"]
             .into_iter()
             .map(|difficulty| ImportedBeatmap {
+                md5_hash: None,
                 difficulty_name: Some(difficulty.to_owned()),
                 bpm: Some(180.5),
                 hash: Some(format!("beatmap-{difficulty}")),
@@ -898,3 +901,5 @@ mod playlists;
 mod queue;
 
 mod audio_settings;
+
+mod collections;

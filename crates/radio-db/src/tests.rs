@@ -53,6 +53,8 @@ async fn repository_contracts(url: &str) {
     listening_history::migration_contracts(&database, url).await;
     audio_settings::migration_contracts(&database, url).await;
     playlists::cover_migration_contracts(&database, url).await;
+    playlists::unicode_migration_contracts(&database).await;
+    collections::migration_contracts(&database).await;
     // A fresh database is expected: no configured application database is consulted.
     sql(
         &database,
@@ -97,6 +99,44 @@ async fn sql(database: &Database, statement: &str) {
         .execute_unprepared(statement)
         .await
         .unwrap();
+}
+
+/// Historical fixtures insert only the original columns, independently of current entities.
+async fn insert_legacy_beatmap(
+    database: &Database,
+    set_id: i32,
+    imported: &ImportedBeatmap,
+    metadata_hash: Option<String>,
+    audio_source_id: Option<i32>,
+    background_path: Option<String>,
+) -> anyhow::Result<crate::model::Beatmap> {
+    use sea_orm::{Statement, Value};
+    let values: Vec<Value> = vec![
+        set_id.into(),
+        imported.difficulty_name.clone().into(),
+        imported.bpm.into(),
+        imported.hash.clone().into(),
+        metadata_hash.clone().into(),
+        audio_source_id.into(),
+        background_path.clone().into(),
+    ];
+    #[cfg(feature = "postgres")]
+    let placeholders = "$1,$2,$3,$4,$5,$6,$7";
+    #[cfg(feature = "sqlite")]
+    let placeholders = "?,?,?,?,?,?,?";
+    let row = database.connection.query_one_raw(Statement::from_sql_and_values(database.connection.get_database_backend(),
+        format!("INSERT INTO beatmaps (beatmap_set_id,difficulty_name,bpm,hash,metadata_hash,audio_source_id,background_path) VALUES ({placeholders}) RETURNING id"), values)).await?.unwrap();
+    Ok(crate::model::Beatmap {
+        id: row.try_get("", "id")?,
+        beatmap_set_id: set_id,
+        difficulty_name: imported.difficulty_name.clone(),
+        bpm: imported.bpm,
+        hash: imported.hash.clone(),
+        md5_hash: None,
+        metadata_hash,
+        audio_source_id,
+        background_path,
+    })
 }
 
 async fn assert_unrelated_table(database: &Database) {
@@ -155,6 +195,7 @@ fn snapshot(title: &str, path: &str) -> Vec<ImportedBeatmapSet> {
         beatmaps: ["Easy", "Hard"]
             .into_iter()
             .map(|difficulty| ImportedBeatmap {
+                md5_hash: None,
                 difficulty_name: Some(difficulty.to_owned()),
                 bpm: Some(180.5),
                 hash: Some(format!("beatmap-{difficulty}")),
@@ -385,7 +426,7 @@ async fn concurrent_schema_changes(database: &Database, url: &str) {
                 .await
                 .unwrap()
                 .len(),
-            9
+            11
         );
         let (reset, migrate) = tokio::join!(database.reset(), other.migrate());
         reset.unwrap();
@@ -657,3 +698,5 @@ mod playlists;
 mod queue;
 
 mod audio_settings;
+
+mod collections;

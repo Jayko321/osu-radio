@@ -474,6 +474,7 @@ Basic.ApplicationWindow {
         rows: root.demo.folder_rows
         message: root.demo.folder_message
         onToggleRequested: path => store.send("folderToggle", path)
+        onRefreshRequested: path => store.send("folderRefresh", path)
         onRetryCountRequested: path => store.send("folderCount", path)
         onBrowseRequested: store.send("folderBrowse")
         onApplyRequested: {

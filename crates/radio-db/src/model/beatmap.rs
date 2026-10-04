@@ -4,6 +4,7 @@ pub struct Beatmap {
     pub difficulty_name: Option<String>,
     pub bpm: Option<f64>,
     pub hash: Option<String>,
+    pub md5_hash: Option<String>,
     pub beatmap_set_id: i32,
     pub metadata_hash: Option<String>,
     pub background_path: Option<String>,

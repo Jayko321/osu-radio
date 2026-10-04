@@ -118,9 +118,9 @@ impl PlaylistItem {
             last_played_at_ms: self.last_played_at_ms,
             volume_percent: self.volume_percent,
             title: self.title.clone(),
-            title_unicode: None,
+            title_unicode: self.title_unicode.clone(),
             artist: self.artist.clone(),
-            artist_unicode: None,
+            artist_unicode: self.artist_unicode.clone(),
             cover_beatmap_id: self.cover_beatmap_id,
             difficulties: self
                 .beatmap_id
@@ -137,16 +137,17 @@ impl PlaylistItem {
         let difficulty = self
             .difficulty_name
             .as_deref()
+            .filter(|name| !name.trim().is_empty())
             .unwrap_or("Unknown difficulty");
-        track.subtitle = format!(
-            "{} | {difficulty}{}",
-            track.artist,
+        track.subtitle_suffix = format!(
+            " | {difficulty}{}",
             if self.audio_source_id.is_none() {
                 " · Unavailable"
             } else {
                 ""
             }
         );
+        track.apply_name_preferences(crate::TrackNamePreferences::default());
         track
     }
 }
@@ -157,6 +158,7 @@ pub(super) struct PlaylistWork {
     pub tracks: Vec<Track>,
     list_epoch: u64,
     detail_epoch: u64,
+    refresh_pending: bool,
     candidates_epoch: u64,
     images: HashSet<PlaylistImage>,
     pending_images: VecDeque<PlaylistImage>,
@@ -606,6 +608,21 @@ impl Controller {
             .collect();
     }
 
+    pub(super) fn refresh_playlist_views(&mut self) {
+        // Import changes membership even if the library request or a pending edit fails.
+        self.playlists.list_epoch = self.playlists.list_epoch.wrapping_add(1);
+        self.playlists.detail_epoch = self.playlists.detail_epoch.wrapping_add(1);
+        self.playlists.refresh_pending = self.playlists.view.busy;
+        if self.playlists.refresh_pending {
+            return;
+        }
+        self.refresh_playlists();
+        if let Some(id) = self.playlists.view.active_id {
+            self.load_playlist(id);
+        }
+        self.emit_playlists();
+    }
+
     pub(super) fn refresh_playlists(&mut self) {
         if self.playlists.view.busy {
             return;
@@ -896,12 +913,20 @@ impl Controller {
                 }
             }
         }
+        if self.playlists.refresh_pending && !self.playlists.view.busy {
+            let message = std::mem::take(&mut self.playlists.view.message);
+            self.refresh_playlist_views();
+            if !message.is_empty() {
+                self.playlists.view.message = message;
+            }
+        }
         self.emit_playlists();
         self.emit_selection();
     }
 
     fn install_playlist(&mut self, mut playlist: Playlist) {
         let mut tracks: Vec<_> = playlist.items.iter().map(PlaylistItem::track).collect();
+        self.apply_name_preferences(&mut tracks);
         self.restore_durations(&mut tracks);
         self.merge_last_played(&mut tracks);
         self.merge_volume_overrides(&mut tracks);

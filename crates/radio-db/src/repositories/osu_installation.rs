@@ -165,7 +165,7 @@ fn model(row: osu_installation::Model) -> Result<OsuInstallation> {
 
 // UTF-8 stays portable; Serde's native OsStr representation preserves Unix bytes
 // and Windows UTF-16 code units, including invalid Unicode, without unsafe code.
-fn encode_path(path: &Path) -> Result<String> {
+pub(crate) fn encode_path(path: &Path) -> Result<String> {
     Ok(match path.to_str() {
         Some(text) => serde_json::to_string(text)?,
         None => serde_json::to_string(path.as_os_str())?,

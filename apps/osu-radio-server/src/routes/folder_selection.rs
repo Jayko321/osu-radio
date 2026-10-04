@@ -3,7 +3,7 @@ use crate::{error::ApiError, state::AppState};
 use axum::{
     Json,
     body::Body,
-    extract::State,
+    extract::{Path as RoutePath, State},
     http::header,
     response::{IntoResponse, Response},
 };
@@ -138,6 +138,26 @@ pub(crate) async fn import(
         .await
         .map_err(registration_error)?
         .into_installation();
+    Ok(Json(folder.into()))
+}
+
+#[cfg_attr(feature = "docs", utoipa::path(post, path = "/api/user-data/osu-folders/{id}/import", tag = "user-data",
+    params(("id" = i32, Path, description = "The registered folder's id.")),
+    responses((status = OK, body = OsuFolderResponse), (status = NOT_FOUND, body = crate::error::ApiErrorBody),
+    (status = BAD_REQUEST, body = crate::error::ApiErrorBody), (status = INTERNAL_SERVER_ERROR, body = crate::error::ApiErrorBody))))]
+pub(crate) async fn reimport(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<i32>,
+) -> Result<Json<OsuFolderResponse>, ApiError> {
+    let folder = state
+        .services()
+        .osu_installations()
+        .reimport_folder(id)
+        .await
+        .map_err(registration_error)?
+        .ok_or_else(|| {
+            ApiError::not_found(format!("No osu! folder is registered with id {id}."))
+        })?;
     Ok(Json(folder.into()))
 }
 

@@ -100,14 +100,19 @@ impl QueueService<'_> {
         let playable = transaction.audio_sources().playable_ids(ids).await?;
         let mut metadata = HashMap::new();
         let mut tracks = Vec::new();
-        for id in ids {
+        for (offset, id) in ids.iter().enumerate() {
             if !playable.contains(id) {
                 continue;
             }
-            let track = match metadata.entry(*id) {
+            let item_id = state
+                .playlist_item_ids
+                .get(start.saturating_add(offset))
+                .copied()
+                .flatten();
+            let track = match metadata.entry((*id, item_id)) {
                 std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(track_in(&transaction, *id, None).await?)
+                    entry.insert(track_in(&transaction, *id, item_id).await?)
                 }
             };
             tracks.push(track.clone());
@@ -459,9 +464,9 @@ async fn track_in(
             last_played_at_ms: None,
             volume_percent: None,
             title: item.title,
-            title_unicode: None,
+            title_unicode: item.title_unicode,
             artist: item.artist,
-            artist_unicode: None,
+            artist_unicode: item.artist_unicode,
             cover_beatmap_id: item.cover_beatmap_id,
             difficulties: item
                 .beatmap_id

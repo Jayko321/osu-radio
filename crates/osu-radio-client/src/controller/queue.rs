@@ -97,6 +97,7 @@ impl Controller {
                     .into_iter()
                     .map(|wire| {
                         let mut track = Track::from(wire);
+                        track.apply_name_preferences(self.name_preferences);
                         track.duration = self
                             .durations
                             .get(&track.audio_source_id)
@@ -296,6 +297,7 @@ impl Controller {
         });
         self.current_track = assignment.track.clone().map(|track| {
             let mut track = Track::from(track);
+            track.apply_name_preferences(self.name_preferences);
             track.volume_percent = assignment.volume_percent.or(track.volume_percent);
             self.restore_durations(std::slice::from_mut(&mut track));
             track.duration = assignment

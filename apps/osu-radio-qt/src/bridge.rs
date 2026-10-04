@@ -118,6 +118,7 @@ fn action_from_qml(action: &str, value: String) -> Option<Action> {
         "playlistRefresh" => Action::Playlist(PlaylistAction::Refresh),
         "folderReset" => Action::FolderReset,
         "folderToggle" => Action::FolderToggle(value),
+        "folderRefresh" => Action::FolderRefresh(value),
         "folderCount" => Action::FolderCount(value),
         "folderBrowse" => Action::FolderBrowse,
         "folderApply" => Action::FolderApply,

@@ -37,7 +37,13 @@ async fn request(
 #[tokio::test]
 async fn client_playlist_http_roundtrip_matches_the_server_contract() {
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tone.mp3");
-    let state = state_with(&[beatmap_set(1, fixture.to_str().unwrap())]).await;
+    let mut imported = beatmap_set(1, fixture.to_str().unwrap());
+    for map in &mut imported.beatmaps {
+        let metadata = map.metadata.as_mut().unwrap();
+        metadata.title_unicode = Some("曲名".into());
+        metadata.artist_unicode = Some("歌手".into());
+    }
+    let state = state_with(&[imported]).await;
     let maps = state
         .services()
         .beatmap_sets()
@@ -80,13 +86,24 @@ async fn client_playlist_http_roundtrip_matches_the_server_contract() {
     let ids: Vec<_> = maps.iter().map(|map| map.beatmap_id).collect();
     let added = api.add_playlist_items(created.id, &ids).await.unwrap();
     assert_eq!(added.items.len(), 2);
+    assert_eq!(added.items[0].title_unicode.as_deref(), Some("曲名"));
+    assert_eq!(added.items[0].artist_unicode.as_deref(), Some("歌手"));
     assert_eq!(
         api.add_playlist_items(created.id, &ids).await.unwrap(),
         added
     );
+    api.play_playlist(created.id, Some(added.items[0].id))
+        .await
+        .unwrap();
+    let pending = api.queue().await.unwrap().upcoming_tracks;
+    assert_eq!(pending[0].title_unicode.as_deref(), Some("曲名"));
+    assert_eq!(pending[0].artist_unicode.as_deref(), Some("歌手"));
     let item = added.items[1].id;
     let assignment = api.play_playlist(created.id, Some(item)).await.unwrap();
     assert_eq!(assignment.current_playlist_item_id, Some(item));
+    let track = assignment.track.as_ref().unwrap();
+    assert_eq!(track.title_unicode.as_deref(), Some("曲名"));
+    assert_eq!(track.artist_unicode.as_deref(), Some("歌手"));
     assert_eq!(
         api.queue().await.unwrap().playlist_item_ids,
         added
@@ -141,6 +158,12 @@ async fn every_playlist_route_and_item_assignment_is_documented() {
         );
     }
     assert!(document["components"]["schemas"]["PlaybackResponse"]["properties"]["current_playlist_item_id"].is_object());
+    for field in ["title_unicode", "artist_unicode"] {
+        assert!(
+            document["components"]["schemas"]["PlaylistItemResponse"]["properties"][field]
+                .is_object()
+        );
+    }
     for field in ["item_count", "cover_beatmap_id", "custom_cover_revision"] {
         assert!(
             document["components"]["schemas"]["PlaylistSummaryResponse"]["properties"][field]

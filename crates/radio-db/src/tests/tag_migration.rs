@@ -46,23 +46,20 @@ pub(super) async fn contracts(database: &Database, url: &str) {
         set_ids.push(set.id);
         for hash in hashes {
             old_maps.push(
-                database
-                    .beatmaps()
-                    .insert(
-                        set.id,
-                        &imported[0].beatmaps[0],
-                        Some(hash.clone()),
-                        None,
-                        Some("/unchanged.jpg".into()),
-                    )
-                    .await
-                    .unwrap(),
+                insert_legacy_beatmap(
+                    database,
+                    set.id,
+                    &imported[0].beatmaps[0],
+                    Some(hash.clone()),
+                    None,
+                    Some("/unchanged.jpg".into()),
+                )
+                .await
+                .unwrap(),
             );
         }
         old_maps.push(
-            database
-                .beatmaps()
-                .insert(set.id, &imported[0].beatmaps[0], None, None, None)
+            insert_legacy_beatmap(database, set.id, &imported[0].beatmaps[0], None, None, None)
                 .await
                 .unwrap(),
         );
@@ -264,17 +261,16 @@ async fn collision_rolls_back(database: &Database) {
         .insert(installation.id, &imported[0])
         .await
         .unwrap();
-    let old_map = database
-        .beatmaps()
-        .insert(
-            set.id,
-            &imported[0].beatmaps[0],
-            Some(old_hash.clone()),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
+    let old_map = insert_legacy_beatmap(
+        database,
+        set.id,
+        &imported[0].beatmaps[0],
+        Some(old_hash.clone()),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     let corrupt = insert_old(database, &metadata("Corrupted")).await;
     let new_hash = crate::metadata_hash(&original).unwrap();
     database
@@ -289,9 +285,21 @@ async fn collision_rolls_back(database: &Database) {
         .unwrap();
     let error = database.migrate().await.unwrap_err();
     assert!(format!("{error:#}").contains("collision"), "{error:#}");
+    let preserved = database.connection.query_one_raw(Statement::from_string(database.connection.get_database_backend(),
+        format!("SELECT id,difficulty_name,bpm,hash,beatmap_set_id,metadata_hash,audio_source_id,background_path FROM beatmaps WHERE id = {}", old_map.id))).await.unwrap().unwrap();
     assert_eq!(
-        database.beatmaps().get(old_map.id).await.unwrap(),
-        Some(old_map)
+        crate::model::Beatmap {
+            id: preserved.try_get("", "id").unwrap(),
+            difficulty_name: preserved.try_get("", "difficulty_name").unwrap(),
+            bpm: preserved.try_get("", "bpm").unwrap(),
+            hash: preserved.try_get("", "hash").unwrap(),
+            md5_hash: None,
+            beatmap_set_id: preserved.try_get("", "beatmap_set_id").unwrap(),
+            metadata_hash: preserved.try_get("", "metadata_hash").unwrap(),
+            audio_source_id: preserved.try_get("", "audio_source_id").unwrap(),
+            background_path: preserved.try_get("", "background_path").unwrap(),
+        },
+        old_map
     );
     let manager = SchemaManager::new(&database.connection);
     assert!(!manager.has_table("tags").await.unwrap());

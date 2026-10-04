@@ -2,6 +2,13 @@ use std::{collections::HashMap, time::Duration};
 
 use crate::{BeatmapSet, models::BeatmapDetails};
 
+/// Independent local display choices; source metadata stays unchanged.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TrackNamePreferences {
+    pub use_unicode_titles: bool,
+    pub use_unicode_artists: bool,
+}
+
 /// A library row is one stored audio source, even when several sets reference it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Track {
@@ -12,6 +19,11 @@ pub struct Track {
     pub title: String,
     pub artist: String,
     pub subtitle: String,
+    pub title_original: Option<String>,
+    pub title_unicode: Option<String>,
+    pub artist_original: Option<String>,
+    pub artist_unicode: Option<String>,
+    pub subtitle_suffix: String,
     pub duration: Option<Duration>,
     pub difficulties: Vec<crate::models::TrackDifficulty>,
 }
@@ -19,17 +31,39 @@ pub struct Track {
 impl Track {
     pub fn new(title: impl Into<String>, artist: impl Into<String>, duration: Duration) -> Self {
         let artist = artist.into();
+        let title = title.into();
         Self {
             audio_source_id: 0,
             last_played_at_ms: None,
             volume_percent: None,
             cover_beatmap_id: None,
-            title: title.into(),
+            title_original: Some(title.clone()),
+            title_unicode: None,
+            artist_original: Some(artist.clone()),
+            artist_unicode: None,
+            subtitle_suffix: String::new(),
+            title,
             subtitle: artist.clone(),
             artist,
             duration: Some(duration),
             difficulties: Vec::new(),
         }
+    }
+
+    pub fn apply_name_preferences(&mut self, preferences: TrackNamePreferences) {
+        self.title = preferred_text(
+            self.title_original.as_deref(),
+            self.title_unicode.as_deref(),
+            preferences.use_unicode_titles,
+            "Unknown title",
+        );
+        self.artist = preferred_text(
+            self.artist_original.as_deref(),
+            self.artist_unicode.as_deref(),
+            preferences.use_unicode_artists,
+            "Unknown artist",
+        );
+        self.subtitle = format!("{}{}", self.artist, self.subtitle_suffix);
     }
 
     #[must_use]
@@ -103,9 +137,23 @@ pub fn library_tracks(sets: &[BeatmapSet]) -> Vec<Track> {
 }
 
 fn text(ordinary: Option<&str>, unicode: Option<&str>, unknown: &str) -> String {
-    ordinary
+    preferred_text(ordinary, unicode, false, unknown)
+}
+
+fn preferred_text(
+    ordinary: Option<&str>,
+    unicode: Option<&str>,
+    prefer_unicode: bool,
+    unknown: &str,
+) -> String {
+    let (first, second) = if prefer_unicode {
+        (unicode, ordinary)
+    } else {
+        (ordinary, unicode)
+    };
+    first
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| unicode.filter(|s| !s.trim().is_empty()))
+        .or_else(|| second.filter(|s| !s.trim().is_empty()))
         .unwrap_or(unknown)
         .to_owned()
 }
@@ -138,11 +186,12 @@ impl From<crate::models::LibraryTrack> for Track {
                 }
             }
         }
-        let subtitle = if names.is_empty() {
-            artist.clone()
+        let subtitle_suffix = if names.is_empty() {
+            String::new()
         } else {
-            format!("{artist} | {}", names.join(", "))
+            format!(" | {}", names.join(", "))
         };
+        let subtitle = format!("{artist}{subtitle_suffix}");
         Self {
             audio_source_id: track.audio_source_id,
             last_played_at_ms: track.last_played_at_ms,
@@ -151,6 +200,11 @@ impl From<crate::models::LibraryTrack> for Track {
             title,
             artist,
             subtitle,
+            title_original: track.title,
+            title_unicode: track.title_unicode,
+            artist_original: track.artist,
+            artist_unicode: track.artist_unicode,
+            subtitle_suffix,
             duration: None,
             difficulties: track.difficulties,
         }

@@ -89,7 +89,7 @@ pub(super) async fn cover_contracts(database: &TestDatabase, other: &TestDatabas
     assert!(database.playlists().clear_cover(playlist.id).await.is_err());
 }
 
-fn cover_png(width: u32, height: u32) -> Vec<u8> {
+pub(super) fn cover_png(width: u32, height: u32) -> Vec<u8> {
     let mut bytes = std::io::Cursor::new(Vec::new());
     image::DynamicImage::new_rgb8(width, height)
         .write_to(&mut bytes, image::ImageFormat::Png)
@@ -624,6 +624,7 @@ async fn copy_resolution_and_batches(database: &TestDatabase) {
     let mut batch = snapshot("Batches", "/playlist-batches/audio");
     batch[0].beatmaps = (0..503)
         .map(|index| ImportedBeatmap {
+            md5_hash: None,
             difficulty_name: Some(format!("Diff-{index}")),
             hash: Some(format!("playlist-batch-{index}'_%")),
             ..batch[0].beatmaps[0].clone()
@@ -693,4 +694,145 @@ fn snapshot_with_location(imported: &[ImportedBeatmapSet], path: &str) -> Vec<Im
     let mut snapshot = imported.to_vec();
     snapshot[0].files[0].file.as_mut().unwrap().resolved_path = Some(path.into());
     snapshot
+}
+
+#[allow(clippy::too_many_lines)] // Unicode snapshots must survive disappearance and a failed replacement.
+pub(super) async fn unicode_contracts(database: &TestDatabase) {
+    let installation = register(database, "unicode-playlist").await;
+    let mut imported = snapshot("Saved ordinary", "/unicode-playlist/audio");
+    for map in &mut imported[0].beatmaps {
+        map.hash = map.hash.as_ref().map(|hash| format!("unicode-{hash}"));
+        let metadata = map.metadata.as_mut().unwrap();
+        metadata.title_unicode = Some("曲名".into());
+        metadata.artist_unicode = Some("歌手".into());
+    }
+    database
+        .osu_installations()
+        .replace_snapshot(installation, &imported)
+        .await
+        .unwrap();
+    let set = database
+        .beatmap_sets()
+        .for_installation(installation)
+        .await
+        .unwrap()
+        .remove(0);
+    let ids: Vec<_> = database
+        .beatmaps()
+        .for_set(set.id)
+        .await
+        .unwrap()
+        .iter()
+        .map(|map| map.id)
+        .collect();
+    let playlist = database.playlists().create("Unicode").await.unwrap();
+    let original = database
+        .playlists()
+        .add_items(playlist.id, &ids)
+        .await
+        .unwrap();
+    assert_eq!(original.items[0].title_unicode.as_deref(), Some("曲名"));
+    assert_eq!(original.items[0].artist_unicode.as_deref(), Some("歌手"));
+    let playback = database.playlists().play(playlist.id, None).await.unwrap();
+    assert_eq!(
+        playback.track.as_ref().unwrap().title_unicode.as_deref(),
+        Some("曲名")
+    );
+    assert_eq!(
+        playback.track.as_ref().unwrap().artist_unicode.as_deref(),
+        Some("歌手")
+    );
+    let (_, pending) = database.queue().upcoming().await.unwrap();
+    assert_eq!(pending[0].title_unicode.as_deref(), Some("曲名"));
+    assert_eq!(
+        pending[0].difficulties[0].difficulty_name.as_deref(),
+        Some("Hard")
+    );
+    let mut replacement = imported.clone();
+    for map in &mut replacement[0].beatmaps {
+        let metadata = map.metadata.as_mut().unwrap();
+        metadata.title = Some("New ordinary".into());
+        metadata.artist = Some("New artist".into());
+        metadata.title_unicode = Some("新曲".into());
+        metadata.artist_unicode = Some("新歌手".into());
+    }
+    install_failure_trigger(database).await;
+    replacement[0].beatmaps[1].difficulty_name = Some("FAIL_IMPORT".into());
+    assert!(
+        database
+            .osu_installations()
+            .replace_snapshot(installation, &replacement)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        database.playlists().get(playlist.id).await.unwrap(),
+        Some(original.clone())
+    );
+    remove_failure_trigger(database).await;
+    replacement[0].beatmaps[1].difficulty_name = imported[0].beatmaps[1].difficulty_name.clone();
+    database
+        .osu_installations()
+        .replace_snapshot(installation, &replacement)
+        .await
+        .unwrap();
+    let refreshed = database
+        .playlists()
+        .get(playlist.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(refreshed.items[0].title_unicode.as_deref(), Some("新曲"));
+    assert_eq!(refreshed.items[0].artist_unicode.as_deref(), Some("新歌手"));
+    assert_eq!(refreshed.items[0].title, original.items[0].title);
+    assert_eq!(refreshed.items[0].artist, original.items[0].artist);
+    assert_eq!(
+        refreshed.items[0].difficulty_name,
+        original.items[0].difficulty_name
+    );
+    assert_eq!(refreshed.items[0].id, original.items[0].id);
+    database
+        .osu_installations()
+        .replace_snapshot(installation, &[])
+        .await
+        .unwrap();
+    let missing = database
+        .playlists()
+        .get(playlist.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(missing.items[0].audio_source_id, None);
+    assert_eq!(
+        missing.items[0].title_unicode,
+        refreshed.items[0].title_unicode
+    );
+    assert_eq!(
+        missing.items[0].artist_unicode,
+        refreshed.items[0].artist_unicode
+    );
+    database
+        .osu_installations()
+        .replace_snapshot(installation, &imported)
+        .await
+        .unwrap();
+    let returned = database
+        .playlists()
+        .get(playlist.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(returned.items[0].audio_source_id.is_some());
+    assert_eq!(
+        returned.items[0].title_unicode,
+        original.items[0].title_unicode
+    );
+    assert_eq!(returned.items[0].id, original.items[0].id);
+    database.playlists().delete(playlist.id).await.unwrap();
+    database
+        .osu_installations()
+        .delete(installation)
+        .await
+        .unwrap();
+    database.queue().clear().await.unwrap();
 }

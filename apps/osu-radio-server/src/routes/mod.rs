@@ -77,6 +77,10 @@ pub(crate) fn router(state: AppState) -> Router {
             post(folder_selection::import),
         )
         .route(
+            "/api/user-data/osu-folders/{id}/import",
+            post(folder_selection::reimport),
+        )
+        .route(
             "/api/user-data/osu-folders",
             get(user_data::list_osu_folders).post(user_data::register_osu_folder),
         )
@@ -129,6 +133,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .routes(routes!(folder_selection::discover))
         .routes(routes!(folder_selection::metadata))
         .routes(routes!(folder_selection::import))
+        .routes(routes!(folder_selection::reimport))
         .routes(routes!(
             user_data::list_osu_folders,
             user_data::register_osu_folder

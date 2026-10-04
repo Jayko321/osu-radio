@@ -20,6 +20,8 @@ fn playlist(id: i32) -> Playlist {
                     source_kind: "stable".into(),
                     beatmap_hash: name.into(),
                     title: Some("Song".into()),
+                    title_unicode: Some("曲".into()),
+                    artist_unicode: Some("作家".into()),
                     artist: Some("Artist".into()),
                     difficulty_name: Some(name.into()),
                     beatmap_id: (index < 2).then_some(item_id),
@@ -850,4 +852,138 @@ fn selected_playlist_media_and_pending_detail_keep_independent_demand_and_durati
             .iter()
             .any(|event| matches!(event, AppUpdate::TrackSelected(None)))
     );
+}
+
+#[test]
+fn unicode_preferences_reorder_visible_items_keep_selection_and_unavailable_suffix() {
+    use crate::TrackNamePreferences;
+    let (mut state, updates) = super::super::tests::controller();
+    let mut detail = playlist(10);
+    for item in &mut detail.items {
+        item.title = Some(format!("Song {}", 4_i32.saturating_sub(item.id)));
+        item.title_unicode = Some(format!("曲 {}", item.id));
+    }
+    let saved_order: Vec<_> = detail.items.iter().map(|item| item.id).collect();
+    state.playlists.view.visible = true;
+    state.playlists.view.active_id = Some(10);
+    state.install_playlist(detail.clone());
+    state.playlists.view.selected_item_id = Some(3);
+    state.emit_selection();
+    let generation = state.generation;
+    updates.lock().unwrap().clear();
+    state.command(AppCommand::SetTrackNamePreferences(TrackNamePreferences {
+        use_unicode_titles: true,
+        use_unicode_artists: true,
+    }));
+    assert_eq!(state.playlists.view.selected_item_id, Some(3));
+    assert_eq!(state.generation, generation);
+    assert_eq!(
+        detail.items.iter().map(|item| item.id).collect::<Vec<_>>(),
+        saved_order
+    );
+    assert_eq!(
+        state
+            .playlists
+            .view
+            .active
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .map(|item| item.id)
+            .collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
+    assert_eq!(
+        state.selected_media.as_ref().unwrap().subtitle,
+        "作家 | Missing · Unavailable"
+    );
+    assert!(
+        updates
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|update| !matches!(update, AppUpdate::TracksReplaced { .. }))
+    );
+    // A response prepared before the local edit still uses the current display choices.
+    state.install_playlist(detail);
+    assert_eq!(state.playlists.tracks.first().unwrap().title, "曲 1");
+    assert_eq!(
+        state.playlists.tracks.first().unwrap().subtitle,
+        "作家 | Easy"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn import_refresh_rejects_old_playlist_results_and_survives_library_and_edit_failures() {
+    let (_directory, session) = super::super::tests::test_session().await;
+    let (mut state, _) = super::super::tests::controller();
+    state.session = Some(session);
+    install(&mut state, 7);
+    state.playlists.view.playlists = vec![summary(7, None)];
+    for editor in [false, true] {
+        state.playlists.view.busy = true;
+        state.playlists.view.editor_open = editor;
+        let old_list = state.playlists.list_epoch;
+        let old_detail = state.playlists.detail_epoch;
+        state.refresh_playlist_views();
+        assert!(state.playlists.refresh_pending);
+        state.complete(Completed::Library {
+            request: state.library_request,
+            invalidate_artwork: true,
+            result: Err("library failed".into()),
+        });
+        state.playlist_event(PlaylistEvent::List {
+            epoch: old_list,
+            result: Ok(vec![]),
+        });
+        state.playlist_event(PlaylistEvent::Detail {
+            epoch: old_detail,
+            id: 7,
+            result: Ok(playlist(99)),
+        });
+        assert_eq!(state.playlists.view.active.as_ref().unwrap().id, 7);
+        assert_eq!(state.playlists.view.playlists.len(), 1);
+        let task_count = state.tasks.len();
+        state.playlist_event(if editor {
+            PlaylistEvent::EditorSaved {
+                epoch: state.playlists.view.editor_epoch,
+                saved: None,
+                result: Err("edit failed".into()),
+            }
+        } else {
+            PlaylistEvent::Mutation(Err("edit failed".into()))
+        });
+        assert!(!state.playlists.refresh_pending);
+        assert_eq!(state.playlists.view.message, "edit failed");
+        assert!(!state.playlists.view.busy);
+        assert!(state.playlists.view.loading);
+        assert!(
+            state.tasks.len() >= task_count + 2,
+            "list and detail reload even after edit failure"
+        );
+        let list_epoch = state.playlists.list_epoch;
+        let detail_epoch = state.playlists.detail_epoch;
+        state.playlist_event(PlaylistEvent::List {
+            epoch: list_epoch,
+            result: Ok(vec![summary(7, None), summary(8, None)]),
+        });
+        let mut imported = playlist(7);
+        imported.name = "Imported collection".into();
+        state.playlist_event(PlaylistEvent::Detail {
+            epoch: detail_epoch,
+            id: 7,
+            result: Ok(imported),
+        });
+        assert_eq!(
+            state.playlists.view.active.as_ref().unwrap().name,
+            "Imported collection"
+        );
+        assert_eq!(state.playlists.view.playlists.len(), 2);
+        state.playlists.view.playlists.truncate(1);
+    }
+    state.tasks.abort_all();
+    while state.tasks.join_next().await.is_some() {}
+    state.session.take().unwrap().shutdown().await.unwrap();
 }

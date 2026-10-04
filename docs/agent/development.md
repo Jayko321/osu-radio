@@ -732,3 +732,88 @@ Figma metadata was available, but its Starter tool limit blocked the source
 screenshot and asset export. Exact visual comparison and exported-icon equality
 were therefore not verified; icon origins are recorded in
 [asset sources](../../apps/osu-radio-qt/assets/SOURCES.md).
+
+## Unicode name preferences verification
+
+Use the existing SQLite/PostgreSQL, server `docs` on/off, client `mock` on/off,
+Qt offscreen/lint and scoped Clippy matrix above. The
+[client preference tests](../../crates/osu-radio-client/src/controller/preferences/tests.rs)
+cover all four title/artist combinations, whitespace fallback, retained suffixes,
+late responses, display sorting, pending playlist captions and unchanged media.
+[Playlist contracts](../../crates/radio-db/src/tests/playlists.rs) and
+[service contracts](../../crates/radio-services/src/tests/playlists.rs) cover the
+Unicode migration/backfill, source removal/return, snapshot refresh and rollback.
+The [Qt probe](../../apps/osu-radio-qt/tests/launch_smoke.rs) isolates Linux native
+settings with temporary `XDG_CONFIG_HOME`: two launches, changed-key writes,
+rapid toggles, Space activation, reconnect and read/write errors. The gallery
+remains memory-only.
+
+Executed on Linux on 2026-10-03: SQLite repository/service suites passed (5/12;
+two service benchmarks ignored), and PostgreSQL suites passed (4/1) on separate
+fresh disposable databases. Server suites passed with `docs` on/off (37/32;
+one benchmark ignored each); client suites passed with `mock` off/on (93/102;
+two benchmarks ignored each). Qt passed five unit tests, fifteen ordinary
+offscreen integration tests and both disposable real-backend probes. Scoped
+all-target Clippy with Rust warnings denied passed for SQLite, both PostgreSQL
+server configurations, the mock client and Qt. The fresh SQLite server build,
+Vizia release compatibility, generated-import QML lint, formatting, whitespace
+and affected local guide paths passed. Independent implementation and focused
+Settings-layout reviews found no actionable production defect. Loopback/process
+checks ran outside the restricted sandbox; native Qt headers retain their
+existing C++ compiler warning.
+
+Offscreen Space activation does not establish desktop keyboard/wheel scrolling,
+native rendering, physical playback or Windows storage behavior. Those remain
+manual checks. Older unavailable playlist entries without retained metadata
+cannot recover Unicode names until a matching source is imported again.
+
+## osu! collection import verification
+
+Use the scoped scanner, SQLite/PostgreSQL, server `docs` on/off, CLI,
+client `mock` on/off and serial Qt matrices above. All collection fixtures
+and persistence checks use temporary sources and databases. The
+[stable binary fixtures](../../crates/radio-scanner/src/stable/tests.rs)
+exercise empty/duplicate/Unicode names, missing maps, repeated MD5 and corrupt
+collection data. The [lazer checks](../../crates/radio-scanner/src/lazer/tests.rs)
+generate genuine Realm files with the
+[fixture generator](../../tools/osu-lazer-realm-parser/fixture-generator/Program.cs)
+and run both the production helper and Rust importer, including distinct native
+`Hash`/`MD5Hash`, an absent collection type and malformed required fields.
+
+[Repository contracts](../../crates/radio-db/src/tests/collections.rs) cover
+migration 11, historical native hashes and guarded downgrade. Shared
+[service contracts](../../crates/radio-services/src/tests/collections.rs) cover
+repeat import, preserved item IDs/order/custom covers, overwritten manual edits,
+missing/restored maps, source removal/return and rollback after collection writes.
+[Folder checks](../../crates/radio-services/src/tests/folder_selection.rs) cover
+bad source reads and concurrent settings/deletion across the read boundary.
+[Client checks](../../crates/osu-radio-client/src/controller/folders_tests.rs)
+exercise staged refresh and independent playlist reload after a library error;
+playlist tests cover stale responses during a concurrent mutation. The
+[Qt probe](../../apps/osu-radio-qt/tests/AdapterProbe.qml) activates the refresh
+control and checks its staged action through HTTP using an isolated backend fixture.
+
+These checks do not exercise a user's game installation, physical audio,
+desktop pointer/rendering behavior or Windows. Real-library and native-platform
+acceptance remain separate from temporary Realm and offscreen fixture evidence.
+
+Executed on Linux on 2026-10-04: core/scanner suites passed (2/48), including
+the genuine temporary Realm production-helper/importer checks. SQLite repository
+and service suites passed (5/14; two service benchmarks ignored); PostgreSQL
+passed (4/1) on separate fresh disposable databases, and its test cluster was
+stopped and removed. Both server router configurations passed (37/32; one
+benchmark ignored each), CLI passed two tests, and client `mock` off/on passed
+(96/105; two benchmarks ignored each). Qt passed five unit and fifteen ordinary
+serial offscreen integration tests plus both disposable real-backend probes.
+The folder fixture was corrected to preserve the stable marker across discovery,
+import and list responses and to finish metadata work before reporting completion;
+the serial rerun retained the exact two-worker concurrency assertion.
+
+Scoped all-target Clippy with Rust warnings denied passed for scanner/core,
+SQLite repositories/services/CLI/server, client/Qt and both PostgreSQL server
+configurations. Server/Qt debug builds, Vizia release compatibility, generated
+QML lint, workspace formatting, whitespace and 426 local guide paths passed.
+Independent source reviews found no actionable correctness issue. The refresh
+control was exercised through native Space activation; desktop pointer behavior,
+GPU rendering, Windows and real game installations were not exercised. Existing
+Qt native-header compiler warnings remain.

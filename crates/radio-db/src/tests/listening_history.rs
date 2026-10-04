@@ -25,32 +25,26 @@ pub(super) async fn migration_contracts(database: &Database, url: &str) {
         .get_or_insert(&source)
         .await
         .unwrap();
-    let map = database
-        .beatmaps()
-        .insert(set.id, &imported[0].beatmaps[0], None, Some(audio.id), None)
-        .await
-        .unwrap();
-    let playlist = database.playlists().create("Keep playlist").await.unwrap();
-    let projection = database
-        .playlists()
-        .beatmaps(&[map.id])
-        .await
-        .unwrap()
-        .remove(0);
-    database
-        .playlists()
-        .add(playlist.id, &projection)
-        .await
-        .unwrap();
-    let playlist = database
-        .playlists()
-        .get(playlist.id)
-        .await
-        .unwrap()
-        .unwrap();
+    let map = insert_legacy_beatmap(
+        database,
+        set.id,
+        &imported[0].beatmaps[0],
+        None,
+        Some(audio.id),
+        None,
+    )
+    .await
+    .unwrap();
+    // The fixture predates Unicode columns; never use current entity models here.
+    sql(
+        database,
+        "INSERT INTO playlists (id, name) VALUES (601, 'Keep playlist')",
+    )
+    .await;
+    sql(database, "INSERT INTO playlist_items (id, playlist_id, source_kind, beatmap_hash, difficulty_name) VALUES (601, 601, 'lazer', 'beatmap-Easy', 'Easy')").await;
     let queue = QueueState {
         audio_source_ids: vec![audio.id],
-        playlist_item_ids: vec![Some(playlist.items[0].id)],
+        playlist_item_ids: vec![Some(601)],
         current_index: Some(0),
         mode: PlaybackMode::Playing,
         revision: 3,
@@ -62,10 +56,14 @@ pub(super) async fn migration_contracts(database: &Database, url: &str) {
     one.unwrap();
     two.unwrap();
     assert_eq!(database.beatmaps().get(map.id).await.unwrap(), Some(map));
-    assert_eq!(
-        database.playlists().get(playlist.id).await.unwrap(),
-        Some(playlist)
-    );
+    let playlist = database.playlists().get(601).await.unwrap().unwrap();
+    assert_eq!(playlist.name, "Keep playlist");
+    assert_eq!(playlist.items.len(), 1);
+    assert_eq!(playlist.items[0].id, 601);
+    assert_eq!(playlist.items[0].audio_source_id, Some(audio.id));
+    assert_eq!(playlist.items[0].difficulty_name.as_deref(), Some("Easy"));
+    assert_eq!(playlist.items[0].title_unicode, None);
+    assert_eq!(playlist.items[0].artist_unicode, None);
     assert_eq!(database.queue().get().await.unwrap(), queue);
     assert!(
         database

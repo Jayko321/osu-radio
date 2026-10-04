@@ -4,7 +4,9 @@ use crate::controller::{AppCommand, MediaJob, MediaTicket, PlaylistAction};
 fn track(id: i32, title: &str, artist: &str, date: Option<i64>) -> Track {
     let mut track = super::super::tests::track(id);
     track.title = title.into();
+    track.title_original = Some(title.into());
     track.artist = artist.into();
+    track.artist_original = Some(artist.into());
     track.last_played_at_ms = date;
     track
 }

@@ -388,13 +388,33 @@ QtObject {
             stage = 8;
             break;
         case 8:
-            if (!bridge.folderSelectionOpen) return;
-            bridge.closeFolderSelection();
+            if (!bridge.folderSelectionOpen || bridge.folderSelectionRows.length === 0 || !dialog.opened
+                || bridge.folderSelectionDiscovering || bridge.folderSelectionRows.some(row => row.countPending)) return;
+            const refresh = findChild(dialog.contentItem, "folderRefresh0");
+            check(refresh.accessibleName === "Обновить импорт", "registered row has accessible refresh control");
+            refresh.forceActiveFocus();
+            input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
             stage = 9;
             break;
         case 9:
-            if (bridge.folderSelectionOpen) return;
-            check(bridge.folderSelectionRows.length === 0, "closing cancels and discards preview state");
+            if (bridge.folderSelectionRows[0].action !== "refresh") return;
+            bridge.toggleFolderSelection("/fixtures/52/client.realm");
+            stage = 10;
+            break;
+        case 10:
+            if (bridge.folderSelectionRows[0].action !== "remove") return;
+            bridge.refreshFolderSelection("/fixtures/52/client.realm");
+            stage = 11;
+            break;
+        case 11:
+            if (bridge.folderSelectionRows[0].action !== "refresh") return;
+            bridge.applyFolderSelection();
+            stage = 12;
+            break;
+        case 12:
+            if (bridge.folderSelectionOpen || bridge.folderSelectionApplying) return;
+            check(bridge.folders.length === 3, "refresh preserves registered folders");
+            check(bridge.folderSelectionRows.length === 0, "successful refresh closes and discards preview state");
             finish();
             break;
         }
@@ -511,7 +531,17 @@ QtObject {
             check(!bridge.audioSettingsLoaded && !play.enabled && !toggle.enabled, "loading failure blocks playback and editing");
             input.mouseClick(findChild(window.contentItem, "settingsButton"));
             check(findChild(window.contentItem, "audioSettingsMessage").visible, "loading failure appears in Audio");
-            input.mouseClick(findChild(window.contentItem, "retryAudioSettings")); stage = 1; break;
+            const settingsScroll = findChild(window.contentItem, "settingsScroll");
+            check(input.waitForRendering(settingsScroll, 1000), "Settings renders before scrolling to Audio");
+            const settingsContent = settingsScroll.contentItem;
+            settingsContent.contentY = Math.max(0, settingsContent.contentHeight - settingsContent.height);
+            check(input.waitForRendering(settingsScroll, 1000), "Audio scroll position renders before activation");
+            const retry = findChild(window.contentItem, "retryAudioSettings");
+            const retryCenter = retry.mapToItem(settingsScroll, retry.width / 2, retry.height / 2);
+            check(retryCenter.x >= 0 && retryCenter.x < settingsScroll.width
+                && retryCenter.y >= 0 && retryCenter.y < settingsScroll.height,
+                "Audio Retry is reachable inside the Settings viewport");
+            input.mouseClick(retry); stage = 1; break;
         case 1:
             if (!bridge.audioSettingsLoaded || bridge.currentAudioId !== 7) return;
             check(bridge.globalVolumePercent === 20 && Math.round(bridge.volume * 100) === 20 && !global.visible, "loaded general volume");
@@ -1111,9 +1141,57 @@ QtObject {
             break;
         }
     }
+    function trackNamePreferencesProbe(): void {
+        const titles = findChild(window.contentItem, "unicodeTitlesSwitch");
+        const artists = findChild(window.contentItem, "unicodeArtistsSwitch");
+        const message = findChild(window.contentItem, "trackNamePreferencesStatus");
+        if (stage === 0) {
+            findChild(window.contentItem, "settingsButton").clicked();
+            check(titles.text === "Use Unicode track titles" && artists.text === "Use Unicode artist names", "English preference labels");
+            check(titles.enabled && artists.enabled, "local preferences work offline");
+            check(contained(findChild(window.contentItem, "generalSettingsSection"), titles)
+                && contained(findChild(window.contentItem, "generalSettingsSection"), artists), "preferences belong to General");
+            if (testCase === "names-read") {
+                check(titles.checked && artists.checked, "both preferences persist between processes");
+                bridge.setUseUnicodeTitles(false);
+                check(!bridge.useUnicodeTitles && bridge.useUnicodeArtists, "changing one key retains the other");
+                bridge.setUseUnicodeTitles(true);
+                bridge.connectSession();
+                check(bridge.useUnicodeTitles && bridge.useUnicodeArtists, "reconnect retains local choices");
+                finish(); return;
+            }
+            check(!titles.checked && !artists.checked, "default preferences are independent and off");
+            if (testCase === "names-read-error") {
+                check(message.text === "Could not read track name preferences. Using default names.", "read failure uses defaults and English message");
+                finish(); return;
+            }
+            titles.forceActiveFocus();
+            stage = 1;
+            return;
+        }
+        if (stage === 1) {
+            input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
+            check(bridge.useUnicodeTitles && !bridge.useUnicodeArtists, "keyboard title toggle preserves artist preference");
+            bridge.setUseUnicodeArtists(true);
+            bridge.setUseUnicodeTitles(false);
+            bridge.setUseUnicodeArtists(false);
+            bridge.setUseUnicodeTitles(true);
+            bridge.setUseUnicodeArtists(true);
+            check(bridge.useUnicodeTitles && bridge.useUnicodeArtists, "rapid toggles merge synchronously");
+            if (testCase === "names-write-error") {
+                check(message.text === "Could not save track name preferences. Your choice applies for this session.", "write failure retains choices and English message");
+            } else {
+                check(message.text.length === 0, "successful persistence has no error");
+            }
+            bridge.connectSession();
+            check(bridge.useUnicodeTitles && bridge.useUnicodeArtists, "reconnect does not replace session choices");
+            finish();
+        }
+    }
     function step(): void {
         if (passed) return;
         if (gallery) { galleryModalProbe(); return; }
+        if (testCase.startsWith("names-")) { trackNamePreferencesProbe(); return; }
         if (testCase === "folders") { folderProbe(); return; }
         if (testCase === "search") { searchProbe(); return; }
         if (testCase === "playback") { playbackProbe(); return; }

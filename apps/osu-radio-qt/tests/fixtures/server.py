@@ -78,8 +78,10 @@ def folder(identifier):
     path = "/fixtures/" + str(identifier)
     if case.startswith("visual"):
         path += "/Очень длинный путь / 日本語 / " + "directory/" * 10
-    return {"id": identifier, "kind": "lazer", "root_path": path,
-            "marker_path": "/fixtures/" + str(identifier) + "/client.realm",
+    kind = "stable" if identifier == 101 else "lazer"
+    marker = "osu!.db" if kind == "stable" else "client.realm"
+    return {"id": identifier, "kind": kind, "root_path": path,
+            "marker_path": "/fixtures/" + str(identifier) + "/" + marker,
             "label": "Stored label", "enabled": True, "last_scanned_at": None}
 
 
@@ -177,7 +179,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         global metadata_active
-        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))) or b"{}")
         marker = body.get("marker_path", "")
         with (root / "requests").open("a") as log:
             log.write("POST " + self.path + " " + marker + "\n")
@@ -218,12 +220,16 @@ class Handler(BaseHTTPRequestHandler):
                 metadata_calls[marker] = metadata_calls.get(marker, 0) + 1
                 n = metadata_calls[marker]
             time.sleep(0.12)
+            # Count unfinished previews; a delivered response lets the client start its next one.
+            with metadata_lock:
+                metadata_active -= 1
             if "/102/" in marker and n == 1:
                 self.reply(500, {"error": "fixture preview unavailable"})
             else:
                 self.reply(200, {"beatmap_count": 0 if "/102/" in marker else 17})
-            with metadata_lock:
-                metadata_active -= 1
+        elif self.path.endswith("/import") and self.path != "/api/user-data/osu-folders/import":
+            i = int(self.path.split("/")[-2])
+            self.reply(200, folder(i))
         elif self.path.endswith("/import"):
             i = int(marker.split("/")[2])
             imports[i] = imports.get(i, 0) + 1

@@ -22,3 +22,15 @@ line. Each record uses snake_case field names matching `ImportedBeatmapSet` and
 its nested types. Lazer content-addressed file paths are emitted under
 `files[].file.resolved_path`; each child beatmap's `metadata.audio_file` remains
 the beatmap metadata filename.
+
+
+Collection import extends normal NDJSON with `type: "collection"` records carrying
+`id` (canonical Guid), `name`, and `beatmap_md5_hashes`. Beatmap records keep their
+native `hash` and include independent `md5_hash` from Realm `MD5Hash`.
+MD5 values are validated and normalized; malformed mandatory collection fields
+abort export. A Realm schema without `BeatmapCollection` remains supported.
+
+The `fixture-generator` project uses the existing Realm package to create genuine
+synthetic databases. The scanner's `imports_real_realm_fixtures_with_the_production_helper`
+test builds this project and creates all fixture databases in temporary directories,
+then checks both the production executable and Rust importer.

@@ -6,28 +6,45 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use radio_core::import_types::ImportedBeatmapSet;
+use radio_core::import_types::{ImportedBeatmapSet, ImportedSnapshot};
 use tokio::{
     io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     process::Command,
 };
 
-use crate::{BeatmapSetScanner, lazer::types::parse_lazer_beatmap_set_line};
+use crate::lazer::types::{LazerRecord, parse_lazer_line};
 
 const HELPER_PATH_ENV: &str = "OSU_LAZER_REALM_PARSER_PATH";
 const BUILT_HELPER_PATH: &str = env!("OSU_LAZER_REALM_PARSER_BUILT_PATH");
 
 pub async fn import_from_lazer_realm(realm_path: &Path) -> Result<Vec<ImportedBeatmapSet>> {
+    Ok(import_snapshot_from_lazer_realm(realm_path)
+        .await?
+        .beatmap_sets)
+}
+
+pub async fn import_snapshot_from_lazer_realm(realm_path: &Path) -> Result<ImportedSnapshot> {
     let helper_path = env::var_os(HELPER_PATH_ENV)
         .map_or_else(|| PathBuf::from(BUILT_HELPER_PATH), PathBuf::from);
 
-    import_from_lazer_realm_with_helper(realm_path, helper_path).await
+    import_snapshot_from_lazer_realm_with_helper(realm_path, helper_path).await
 }
 
 pub async fn import_from_lazer_realm_with_helper(
     realm_path: &Path,
     helper_path: impl AsRef<OsStr>,
 ) -> Result<Vec<ImportedBeatmapSet>> {
+    Ok(
+        import_snapshot_from_lazer_realm_with_helper(realm_path, helper_path)
+            .await?
+            .beatmap_sets,
+    )
+}
+
+pub async fn import_snapshot_from_lazer_realm_with_helper(
+    realm_path: &Path,
+    helper_path: impl AsRef<OsStr>,
+) -> Result<ImportedSnapshot> {
     let helper_path = helper_path.as_ref();
     let mut child = Command::new(helper_path)
         .arg(realm_path)
@@ -62,7 +79,7 @@ pub async fn import_from_lazer_realm_with_helper(
     });
 
     let mut lines = BufReader::new(stdout).lines();
-    let mut beatmap_sets = Vec::new();
+    let mut snapshot = ImportedSnapshot::default();
 
     loop {
         let line = match lines.next_line().await {
@@ -74,15 +91,18 @@ pub async fn import_from_lazer_realm_with_helper(
             }
         };
 
-        let beatmap_set = match parse_lazer_beatmap_set_line(&line) {
-            Ok(beatmap_set) => beatmap_set,
+        let record = match parse_lazer_line(&line) {
+            Ok(record) => record,
             Err(error) => {
                 terminate_child(&mut child, &mut stderr_reader).await;
                 return Err(error);
             }
         };
 
-        beatmap_sets.push(beatmap_set);
+        match record {
+            LazerRecord::BeatmapSet(set) => snapshot.beatmap_sets.push(set),
+            LazerRecord::Collection(collection) => snapshot.collections.push(collection),
+        }
     }
 
     let status = match child.wait().await {
@@ -118,7 +138,7 @@ pub async fn import_from_lazer_realm_with_helper(
             .context("failed to flush forwarded Realm helper stderr")?;
     }
 
-    Ok(beatmap_sets)
+    Ok(snapshot)
 }
 
 async fn terminate_child(
@@ -129,25 +149,4 @@ async fn terminate_child(
     let _ = child.wait().await;
     stderr_reader.abort();
     let _ = stderr_reader.await;
-}
-
-pub struct LazerBeatmapScanner {
-    db_path: PathBuf, //client.realm
-}
-
-impl LazerBeatmapScanner {
-    pub fn new(path: &Path) -> Self {
-        Self {
-            db_path: path.to_path_buf(),
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl BeatmapSetScanner for LazerBeatmapScanner {
-    async fn get_beatmap_sets(&self) -> Result<Vec<ImportedBeatmapSet>> {
-        import_from_lazer_realm(&self.db_path)
-            .await
-            .with_context(|| format!("failed to import lazer marker `{}`", self.db_path.display()))
-    }
 }

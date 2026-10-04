@@ -134,6 +134,7 @@ impl PlaylistService<'_> {
         if transaction.playlists().get(id).await?.is_none() {
             return Err(PlaylistError::NotFound(id).into());
         }
+        let imported = transaction.playlists().is_imported(id).await?;
         let maps: HashMap<_, _> = transaction
             .playlists()
             .beatmaps(beatmap_ids)
@@ -143,9 +144,13 @@ impl PlaylistService<'_> {
             .collect();
         for id in beatmap_ids {
             let map = maps.get(id).ok_or(PlaylistError::InvalidBeatmap(*id))?;
-            if map
-                .beatmap_hash
-                .as_deref()
+            let hash = if imported {
+                map.md5_hash.as_ref().or(map.beatmap_hash.as_ref())
+            } else {
+                map.beatmap_hash.as_ref()
+            };
+            if hash
+                .map(String::as_str)
                 .is_none_or(|hash| hash.trim().is_empty())
             {
                 return Err(PlaylistError::MissingHash(*id).into());
@@ -153,7 +158,14 @@ impl PlaylistService<'_> {
         }
         for beatmap_id in beatmap_ids {
             if let Some(map) = maps.get(beatmap_id) {
-                transaction.playlists().add(id, map).await?;
+                if imported && let Some(hash) = &map.md5_hash {
+                    transaction
+                        .playlists()
+                        .add_with_hash(id, map, "md5", hash)
+                        .await?;
+                } else {
+                    transaction.playlists().add(id, map).await?;
+                }
             }
         }
         let mut result = transaction

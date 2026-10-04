@@ -162,3 +162,95 @@ async fn scoped_discovery_stages_only_unique_new_installations_and_rejects_old_c
     assert!(state.selection.state.picking);
     assert!(state.selection.scans.is_empty());
 }
+
+#[test]
+fn refresh_staging_replaces_removal_and_cancels_only_the_same_action() {
+    let mut state = controller();
+    state.selection.state.open = true;
+    candidate(&mut state, "/registered", Some(7));
+    candidate(&mut state, "/new", None);
+    let path = "/registered/osu!.db";
+    state.refresh_selection(path);
+    assert_eq!(
+        state.selection.state.rows[0].pending,
+        Some(FolderAction::Refresh)
+    );
+    state.toggle_selection(path);
+    assert_eq!(
+        state.selection.state.rows[0].pending,
+        Some(FolderAction::Remove)
+    );
+    state.refresh_selection(path);
+    assert_eq!(
+        state.selection.state.rows[0].pending,
+        Some(FolderAction::Refresh)
+    );
+    state.refresh_selection(path);
+    assert_eq!(state.selection.state.rows[0].pending, None);
+    state.refresh_selection("/new/osu!.db");
+    assert_eq!(state.selection.state.rows[1].pending, None);
+    state.refresh_selection(path);
+    state.selection.state.applying = true;
+    state.toggle_selection(path);
+    state.refresh_selection(path);
+    assert_eq!(
+        state.selection.state.rows[0].pending,
+        Some(FolderAction::Refresh)
+    );
+    state.selection_event(FolderEvent::Applied {
+        epoch: 0,
+        path: path.into(),
+        result: Err("broken source".into()),
+    });
+    assert_eq!(
+        state.selection.state.rows[0].pending,
+        Some(FolderAction::Refresh)
+    );
+    assert_eq!(
+        state.selection.state.rows[0].error.as_deref(),
+        Some("broken source")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn successful_apply_refreshes_playlists_even_when_library_loading_fails() {
+    let (_directory, session) = super::super::tests::test_session().await;
+    let (mut state, _) = super::super::tests::controller();
+    state.session = Some(session);
+    state.selection.state.open = true;
+    state.playlists.view.active_id = Some(7);
+    candidate(&mut state, "/registered", Some(4));
+    state.refresh_selection("/registered/osu!.db");
+    state.selection_event(FolderEvent::Applied {
+        epoch: 0,
+        path: "/registered/osu!.db".into(),
+        result: Ok(Some(OsuFolder {
+            id: 4,
+            kind: "stable".into(),
+            root_path: "/registered".into(),
+            marker_path: "/registered/osu!.db".into(),
+            label: None,
+            enabled: true,
+            last_scanned_at: Some("2026-10-04T00:00:00Z".into()),
+        })),
+    });
+    state.selection_event(FolderEvent::ApplyDone { epoch: 0 });
+    assert!(!state.selection.state.open);
+    assert!(state.playlists.view.loading);
+    assert_eq!(
+        state.tasks.len(),
+        4,
+        "folder, library, playlist list and active detail refresh directly"
+    );
+    state.complete(Completed::Library {
+        request: state.library_request,
+        invalidate_artwork: true,
+        result: Err("library unavailable".into()),
+    });
+    assert!(state.playlists.view.loading);
+    assert_eq!(state.playlists.view.active_id, Some(7));
+    state.tasks.abort_all();
+    while state.tasks.join_next().await.is_some() {}
+    state.session.take().unwrap().shutdown().await.unwrap();
+}

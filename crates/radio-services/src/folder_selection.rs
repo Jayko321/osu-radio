@@ -1,6 +1,9 @@
 //! Read-only previews and atomic registration/import for folder selection.
 use crate::{OsuInstallationService, RegisterFolderError, RegisteredInstallation, UserDataService};
-use radio_core::{OsuKind, OsuMarker, import_types::ImportedBeatmapSet};
+use radio_core::{
+    OsuKind, OsuMarker,
+    import_types::{ImportedBeatmapSet, ImportedSnapshot},
+};
 pub use radio_scanner::discovery::{DiscoveryDepth, DiscoveryOptions};
 use std::{
     collections::HashMap,
@@ -76,10 +79,10 @@ impl OsuInstallationService<'_> {
         {
             return Ok(RegisteredInstallation::AlreadyRegistered(folder));
         }
-        let sets = radio_scanner::get_beatmap_sets(marker.clone())
+        let snapshot = radio_scanner::import_snapshot(marker.clone())
             .await
             .map_err(RegisterFolderError::Failed)?;
-        self.register_snapshot(&marker, &sets)
+        self.register_imported_snapshot(&marker, &snapshot)
             .await
             .map_err(RegisterFolderError::Failed)
     }
@@ -89,6 +92,21 @@ impl OsuInstallationService<'_> {
         &self,
         marker: &OsuMarker,
         imported: &[ImportedBeatmapSet],
+    ) -> anyhow::Result<RegisteredInstallation> {
+        self.register_imported_snapshot(
+            marker,
+            &ImportedSnapshot {
+                beatmap_sets: imported.to_vec(),
+                collections: Vec::new(),
+            },
+        )
+        .await
+    }
+
+    pub async fn register_imported_snapshot(
+        &self,
+        marker: &OsuMarker,
+        imported: &ImportedSnapshot,
     ) -> anyhow::Result<RegisteredInstallation> {
         let transaction = self.database.begin().await?;
         UserDataService::lock(transaction.user_data()).await?;
@@ -110,7 +128,12 @@ impl OsuInstallationService<'_> {
                 .await?
         };
         if registered.was_created() {
-            Self::replace_snapshot_in(&transaction, registered.installation().id, imported).await?;
+            Self::replace_imported_snapshot_in(
+                &transaction,
+                registered.installation().id,
+                imported,
+            )
+            .await?;
         }
         let folder = transaction
             .osu_installations()
@@ -124,6 +147,43 @@ impl OsuInstallationService<'_> {
         };
         transaction.commit().await?;
         Ok(result)
+    }
+    /// Read the complete source first; recheck its persisted identity before any replacement.
+    pub async fn reimport_folder(
+        &self,
+        id: i32,
+    ) -> Result<Option<crate::model::OsuInstallation>, RegisterFolderError> {
+        let Some(folder) = self.get(id).await.map_err(RegisterFolderError::Failed)? else {
+            return Ok(None);
+        };
+        let marker = resolve_marker(&folder.marker_path)?;
+        let snapshot = radio_scanner::import_snapshot(marker.clone())
+            .await
+            .map_err(RegisterFolderError::Failed)?;
+        self.reimport_snapshot(id, &marker, &snapshot)
+            .await
+            .map_err(RegisterFolderError::Failed)
+    }
+
+    pub(super) async fn reimport_snapshot(
+        &self,
+        id: i32,
+        marker: &OsuMarker,
+        imported: &ImportedSnapshot,
+    ) -> anyhow::Result<Option<crate::model::OsuInstallation>> {
+        let transaction = self.database.begin().await?;
+        UserDataService::lock(transaction.user_data()).await?;
+        let Some(folder) = transaction.osu_installations().get(id).await? else {
+            return Ok(None);
+        };
+        anyhow::ensure!(
+            folder.kind == marker.kind && resolved_path(&folder.marker_path) == marker.marker_path,
+            "Registered source changed during import"
+        );
+        Self::replace_imported_snapshot_in(&transaction, id, imported).await?;
+        let folder = transaction.osu_installations().get(id).await?;
+        transaction.commit().await?;
+        Ok(folder)
     }
 }
 

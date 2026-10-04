@@ -26,6 +26,8 @@ fn item(id: i32, playlist_id: i32, name: &str, available: bool) -> PlaylistItem 
         source_kind: "stable".into(),
         beatmap_hash: format!("demo-{id}"),
         title: Some("Karakara".into()),
+        title_unicode: Some("カラカラ".into()),
+        artist_unicode: Some("結束バンド".into()),
         artist: Some("Kessoku Band".into()),
         difficulty_name: Some(name.into()),
         beatmap_id: available.then_some(id),

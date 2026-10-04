@@ -139,7 +139,7 @@ async fn incomplete_or_invalid_discovery_is_an_error_and_cancellation_closes_the
 
 #[tokio::test]
 async fn folder_operations_override_the_ordinary_thirty_second_deadline() {
-    for operation in ["metadata", "import", "discover"] {
+    for operation in ["metadata", "import", "discover", "7/import"] {
         let (api, listener) = listener().await;
         let (ready, waiting) = tokio::sync::oneshot::channel();
         let (release, held) = tokio::sync::oneshot::channel();
@@ -156,7 +156,7 @@ async fn folder_operations_override_the_ordinary_thirty_second_deadline() {
             held.await.unwrap();
             let body = match route.as_str() {
                 "metadata" => r#"{"beatmap_count":0}"#,
-                "import" => {
+                "import" | "7/import" => {
                     r#"{"id":1,"kind":"stable","root_path":"/osu","marker_path":"/osu/osu!.db","label":null,"enabled":true,"last_scanned_at":null}"#
                 }
                 _ => "{\"event\":\"complete\"}\n",
@@ -176,6 +176,7 @@ async fn folder_operations_override_the_ordinary_thirty_second_deadline() {
             match operation.as_str() {
                 "metadata" => api.osu_folder_metadata("/osu/osu!.db").await.map(|_| ()),
                 "import" => api.import_osu_folder("/osu/osu!.db").await.map(|_| ()),
+                "7/import" => api.reimport_osu_folder(7).await.map(|_| ()),
                 _ => {
                     api.discover_osu_folders(&DiscoverFolders::default(), |_| {})
                         .await

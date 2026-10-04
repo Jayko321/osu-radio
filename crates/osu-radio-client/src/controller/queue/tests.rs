@@ -759,3 +759,58 @@ fn queue_media_demand_survives_empty_main_view_and_is_removed_on_close_or_new_qu
         "removed queue IDs cannot keep media work alive"
     );
 }
+
+#[tokio::test]
+async fn late_queue_and_assignment_metadata_use_current_unicode_choices_without_restarting() {
+    use crate::TrackNamePreferences;
+    let (mut state, _) = super::super::tests::controller();
+    let preferences = TrackNamePreferences {
+        use_unicode_titles: true,
+        use_unicode_artists: true,
+    };
+    let mut first = assignment(5, 9, 99, PlaybackMode::Paused);
+    let wire = first.track.as_mut().unwrap();
+    wire.title_unicode = Some("曲".into());
+    wire.artist_unicode = Some("演奏者".into());
+    let (worker, downloads) = crate::playback::Worker::spawn_fake(Arc::new(|_| {})).unwrap();
+    state.playback = Some(worker);
+    state.downloads = Some(downloads);
+    state.apply_assignment(first.clone());
+    let worker_generation = state.playback.as_ref().unwrap().generation();
+    state.command(AppCommand::SetTrackNamePreferences(preferences));
+    assert_eq!(state.current_track.as_ref().unwrap().title, "曲");
+    assert_eq!(state.assignment.as_ref().unwrap().playback_token, 9);
+    assert_eq!(
+        state.playback.as_ref().unwrap().generation(),
+        worker_generation
+    );
+    state.upcoming.open = true;
+    state.queue_loaded(
+        state.upcoming.request,
+        Ok(crate::models::QueueState {
+            audio_source_ids: vec![99, 99],
+            playlist_item_ids: vec![None, None],
+            current_index: Some(0),
+            mode: PlaybackMode::Paused,
+            revision: 5,
+            playback_token: 9,
+            upcoming_tracks: vec![first.track.clone().unwrap(), first.track.clone().unwrap()],
+        }),
+    );
+    assert!(
+        state
+            .upcoming
+            .view
+            .tracks
+            .iter()
+            .all(|row| row.title == "曲" && row.artist == "演奏者")
+    );
+    first.revision = 6;
+    state.apply_assignment(first);
+    assert_eq!(state.current_track.as_ref().unwrap().artist, "演奏者");
+    assert_eq!(
+        state.playback.as_ref().unwrap().generation(),
+        worker_generation
+    );
+    state.cancel_audio();
+}

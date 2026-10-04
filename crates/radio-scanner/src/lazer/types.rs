@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use radio_core::{
     OsuKind,
     import_types::{
-        BeatmapMetadata, ImportedBeatmap, ImportedBeatmapSet, RealmFile, RealmNamedFileUsage,
-        RealmUser,
+        BeatmapMetadata, ImportedBeatmap, ImportedBeatmapSet, ImportedCollection, RealmFile,
+        RealmNamedFileUsage, RealmUser,
     },
 };
 use serde::Deserialize;
@@ -28,6 +28,7 @@ struct LazerBeatmapSetRecord {
 
 #[derive(Debug, Deserialize)]
 struct LazerBeatmapRecord {
+    md5_hash: Option<String>,
     difficulty_name: Option<String>,
     bpm: Option<f64>,
     hash: Option<String>,
@@ -73,7 +74,61 @@ pub(crate) fn parse_lazer_beatmap_set_line(line: &str) -> Result<ImportedBeatmap
     let record: LazerBeatmapSetRecord =
         serde_json::from_str(line).context("failed to parse osu!lazer beatmap set JSON")?;
 
-    Ok(record.into())
+    let mut set: ImportedBeatmapSet = record.into();
+    for beatmap in &mut set.beatmaps {
+        beatmap.md5_hash = beatmap
+            .md5_hash
+            .as_deref()
+            .map(crate::normalize_md5)
+            .transpose()?;
+    }
+    Ok(set)
+}
+
+#[derive(Deserialize)]
+struct LazerCollectionRecord {
+    id: String,
+    name: String,
+    beatmap_md5_hashes: Vec<String>,
+}
+
+pub(crate) enum LazerRecord {
+    BeatmapSet(ImportedBeatmapSet),
+    Collection(ImportedCollection),
+}
+
+pub(crate) fn parse_lazer_line(line: &str) -> Result<LazerRecord> {
+    let value: serde_json::Value =
+        serde_json::from_str(line).context("invalid Realm helper JSON")?;
+    match value.get("type") {
+        None => Ok(LazerRecord::BeatmapSet(parse_lazer_beatmap_set_line(line)?)),
+        Some(serde_json::Value::String(kind)) if kind == "collection" => {
+            let record: LazerCollectionRecord =
+                serde_json::from_value(value).context("invalid osu!lazer collection JSON")?;
+            let id = record.id;
+            anyhow::ensure!(
+                id.len() == 36
+                    && id.bytes().enumerate().all(|(index, byte)| {
+                        if matches!(index, 8 | 13 | 18 | 23) {
+                            byte == b'-'
+                        } else {
+                            byte.is_ascii_hexdigit()
+                        }
+                    }),
+                "invalid osu!lazer collection Guid"
+            );
+            Ok(LazerRecord::Collection(ImportedCollection {
+                source_id: id.to_ascii_lowercase(),
+                name: record.name,
+                beatmap_md5_hashes: record
+                    .beatmap_md5_hashes
+                    .iter()
+                    .map(|hash| crate::normalize_md5(hash))
+                    .collect::<Result<_>>()?,
+            }))
+        }
+        _ => anyhow::bail!("unknown Realm helper record type"),
+    }
 }
 
 impl From<LazerBeatmapSetRecord> for ImportedBeatmapSet {
@@ -102,6 +157,7 @@ impl From<LazerBeatmapRecord> for ImportedBeatmap {
     fn from(record: LazerBeatmapRecord) -> Self {
         Self {
             difficulty_name: record.difficulty_name,
+            md5_hash: record.md5_hash,
             bpm: record.bpm,
             hash: record.hash,
             metadata: record.metadata.map(Into::into),

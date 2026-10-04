@@ -14,11 +14,15 @@ use std::{
 use anyhow::{Context, Result};
 use radio_core::{
     OsuKind,
-    import_types::{ImportedBeatmapSet, RealmFile, RealmNamedFileUsage},
+    import_types::{ImportedBeatmapSet, ImportedSnapshot, RealmFile, RealmNamedFileUsage},
 };
 
 /// Import a complete stable snapshot. Audio and artwork remain source references.
 pub async fn import_from_stable_db(db_path: &Path) -> Result<Vec<ImportedBeatmapSet>> {
+    Ok(import_snapshot_from_stable_db(db_path).await?.beatmap_sets)
+}
+
+pub async fn import_snapshot_from_stable_db(db_path: &Path) -> Result<ImportedSnapshot> {
     let db_path = db_path.to_path_buf();
     tokio::task::spawn_blocking(move || import(&db_path))
         .await
@@ -30,13 +34,22 @@ struct Group {
     filenames: HashSet<String>,
 }
 
-fn import(db_path: &Path) -> Result<Vec<ImportedBeatmapSet>> {
+fn import(db_path: &Path) -> Result<ImportedSnapshot> {
     let db_path = std::path::absolute(db_path)
         .with_context(|| format!("failed to resolve `{}`", db_path.display()))?;
     let bytes = fs::read(&db_path)
         .with_context(|| format!("failed to read stable database `{}`", db_path.display()))?;
     let records = reader::decode(&bytes, &db_path)?;
     let installation = db_path.parent().context("database path has no parent")?;
+    let collection_path = installation.join("collection.db");
+    let collections = match fs::read(&collection_path) {
+        Ok(bytes) => reader::decode_collections(&bytes, &collection_path)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read `{}`", collection_path.display()));
+        }
+    };
     let songs = media::songs_directory(installation)?;
     let mut indexes = HashMap::<PathBuf, usize>::new();
     let mut groups = Vec::<Group>::new();
@@ -92,7 +105,10 @@ fn import(db_path: &Path) -> Result<Vec<ImportedBeatmapSet>> {
         }
         group.set.beatmaps.push(record.beatmap);
     }
-    Ok(groups.into_iter().map(|group| group.set).collect())
+    Ok(ImportedSnapshot {
+        beatmap_sets: groups.into_iter().map(|group| group.set).collect(),
+        collections,
+    })
 }
 
 fn add_file(group: &mut Group, directory: &Path, filename: &str) {

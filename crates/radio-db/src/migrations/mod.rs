@@ -11,6 +11,8 @@ mod m20261001_000006_playlists;
 mod m20261001_000007_listening_history;
 mod m20261001_000008_audio_settings;
 mod m20261001_000009_playlist_covers;
+mod m20261003_000010_playlist_unicode_names;
+mod m20261004_000011_imported_collections;
 
 pub(crate) struct Migrator;
 
@@ -27,6 +29,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20261001_000007_listening_history::Migration),
             Box::new(m20261001_000008_audio_settings::Migration),
             Box::new(m20261001_000009_playlist_covers::Migration),
+            Box::new(m20261003_000010_playlist_unicode_names::Migration),
+            Box::new(m20261004_000011_imported_collections::Migration),
         ]
     }
 }

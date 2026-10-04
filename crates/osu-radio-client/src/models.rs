@@ -319,7 +319,11 @@ pub struct PlaylistItem {
     pub source_kind: String,
     pub beatmap_hash: String,
     pub title: Option<String>,
+    #[serde(default)]
+    pub title_unicode: Option<String>,
     pub artist: Option<String>,
+    #[serde(default)]
+    pub artist_unicode: Option<String>,
     pub difficulty_name: Option<String>,
     pub beatmap_id: Option<i32>,
     pub beatmap_set_id: Option<i32>,
