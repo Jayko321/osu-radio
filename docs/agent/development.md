@@ -42,7 +42,7 @@ frontends.
 
 [`Linux CI`](../../.github/workflows/linux-ci.yml) runs on pushes to `main`,
 pull requests and manual dispatch, with separate formatting, tests and Clippy
-jobs on Ubuntu 24.04. CI pins Rust 1.99.0 (including rustfmt/Clippy), installs
+jobs on Ubuntu 24.04. CI pins Rust 1.98.0 (including rustfmt/Clippy), installs
 the .NET 8 SDK for the real scanner helper build, and installs
 `build-essential`, `pkg-config` and `libasound2-dev`. The audio dependency needs
 ALSA headers to compile; the tests consume a controlled mixer without opening
