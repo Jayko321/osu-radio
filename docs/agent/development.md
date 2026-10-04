@@ -427,6 +427,13 @@ explicit assertions complete, with a native watchdog and outer process timeout.
 Settings checks activate its navigation tab, return through Songs and Playlists,
 retain the selected track and independent queries, and exercise the existing audio
 and folder retry controls. The gallery checks that Settings remains disabled.
+The `settings_search_filters_visible_labels_and_preserves_layout_and_state`
+smoke test uses the `settings-search` probe case: real keyboard edits/clearing,
+case-insensitive title/name filtering, whitespace, no-match recovery, conditional
+global volume, hidden-row spacing, long wrapped status scroll/reset and retained
+query/selection across tabs. Its isolated HTTP fixture also checks that Settings
+search never sends a library search query. Run it alone with
+`cargo test -p osu-radio-qt --locked --test launch_smoke settings_search_filters_visible_labels_and_preserves_layout_and_state`.
 The [media controller tests](../../crates/osu-radio-client/src/controller.rs)
 cover replacement of visible demand, canceled HTTP, selected/queue demand,
 independent cover and duration completion, stale/repeated acknowledgments and

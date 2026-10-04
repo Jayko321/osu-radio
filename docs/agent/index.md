@@ -85,7 +85,8 @@ Tests and their limits are linked in the component guides.
 | Client session, child supervision, HTTP wrappers | Implemented | [Frontend](frontend.md), [backend](backend.md); readiness output is a protocol, see backend API contracts. |
 | Optional OpenAPI/Scalar build | Implemented | [Backend](backend.md); both documentation feature states need verification. |
 | Songs/settings tabs, library selection, window actions | Implemented UI bindings | [Frontend interaction table](frontend.md#implemented-interactions-and-placeholders). Source binding is not cross-platform interaction validation. |
-| Songs search | Implemented | Server substring search through the shared controller, 200 ms debounce; Settings search remains a placeholder. See [frontend](frontend.md). |
+| Songs search | Implemented | Server substring search through the shared controller, 200 ms debounce. See [frontend](frontend.md). |
+| Qt Settings search | Implemented | Local case-insensitive substring filtering by section titles/current setting names, conditional rows and empty state; Vizia Settings search remains a placeholder. See [frontend](frontend.md#qt-frontend). |
 | Track sorting and listening dates | Implemented | Shared session sort for library/search/playlists; source-keyed successful-start history. See [frontend](frontend.md#track-sorting-and-listening-dates) and [database](database.md#listening-history). |
 | Library and folder settings | Implemented | [Frontend](frontend.md); server rows, bounded artwork loading, optional durations, folder dropdown, Qt staged discovery/import/removal and Vizia native chooser registration. Selection is presentation only. |
 | Server playback queue, transport, seeking and volume | Implemented | [Database](database.md), [backend](backend.md), [frontend](frontend.md); persisted queue and token-bound assignments, client downloads and plays locally. Seeking and audio output remain local; volume preferences are persisted. |
