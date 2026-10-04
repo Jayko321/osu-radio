@@ -36,7 +36,7 @@ frontends.
   from another OS or Vizia version.
 - Cargo and .NET dependency restoration may need network access on a fresh
   machine. `--locked` protects Cargo.lock; it does not make builds offline or
-prevent generated artifacts under `target/` and the helper build directories.
+  prevent generated artifacts under `target/` and the helper build directories.
 
 ### Linux CI
 
