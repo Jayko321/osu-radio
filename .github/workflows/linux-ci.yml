@@ -1,0 +1,72 @@
+name: Linux CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  DOTNET_NOLOGO: '1'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+
+jobs:
+  formatting:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt
+      - run: cargo fmt --check
+
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev
+      # radio-scanner's build.rs compiles the real .NET Realm helper.
+      # Default database features select SQLite; ignored benchmarks stay skipped.
+      - name: Core, scanner, SQLite backend and audio unit tests
+        run: cargo test -p radio-core -p radio-scanner -p radio-db -p radio-services -p osu-radio-cli -p osu-radio-server -p osu-radio-player --locked -- --test-threads=1
+      - name: Server without API docs
+        run: cargo test -p osu-radio-server --no-default-features --features sqlite --locked -- --test-threads=1
+      - name: Client unit tests
+        run: cargo test -p osu-radio-client --lib --locked -- --test-threads=1
+      - name: Client unit tests with mocks
+        run: cargo test -p osu-radio-client --features mock --lib --locked -- --test-threads=1
+
+  clippy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: clippy
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev
+      - name: Lint headless packages (SQLite, API docs enabled)
+        run: cargo clippy -p radio-core -p radio-scanner -p radio-db -p radio-services -p osu-radio-cli -p osu-radio-server -p osu-radio-player -p osu-radio-client --all-targets --locked -- -D warnings
+      - name: Lint server without API docs
+        run: cargo clippy -p osu-radio-server --no-default-features --features sqlite --all-targets --locked -- -D warnings
+      - name: Lint client with mocks
+        run: cargo clippy -p osu-radio-client --features mock --all-targets --locked -- -D warnings
