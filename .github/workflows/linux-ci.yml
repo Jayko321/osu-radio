@@ -15,6 +15,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
   DOTNET_NOLOGO: '1'
   DOTNET_CLI_TELEMETRY_OPTOUT: '1'
 
@@ -24,9 +25,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.98.0
-        with:
-          components: rustfmt
+      - name: Install repository Rust toolchain
+        run: rustup toolchain install --no-self-update
       - run: cargo fmt --check
 
   tests:
@@ -34,7 +34,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.98.0
+      - name: Install repository Rust toolchain
+        run: rustup toolchain install --no-self-update
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
@@ -56,9 +57,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.98.0
-        with:
-          components: clippy
+      - name: Install repository Rust toolchain
+        run: rustup toolchain install --no-self-update
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '8.0.x'
