@@ -17,9 +17,14 @@ Linux build do not establish validation on another platform. Vizia and a child
 server describe today's desktop implementation, not requirements for all future
 frontends.
 
-- Use Rust and Cargo with Rust 2024 support; the workspace declares its edition
-  in [`Cargo.toml`](../../Cargo.toml). Install rustfmt and Clippy for the checks
-  below. No repository toolchain pin is currently present.
+- Install Rust through rustup. The repository-wide
+  [`rust-toolchain.toml`](../../rust-toolchain.toml) pins Rust 1.98.0 with the
+  minimal profile plus rustfmt and Clippy. Run `rustup toolchain install` from
+  the repository to install it, and `rustup show` to display the selection.
+  Cargo commands in the root or member directories use this pin unless
+  explicitly overridden. The workspace
+  declares Rust 2024 in [`Cargo.toml`](../../Cargo.toml); the toolchain pin does
+  not declare a minimum supported Rust version (`rust-version`).
 - Building `radio-scanner` runs [`build.rs`](../../crates/radio-scanner/build.rs),
   which invokes `dotnet build --configuration Release` for the
   [Realm helper project](../../tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj).
@@ -42,8 +47,11 @@ frontends.
 
 [`Linux CI`](../../.github/workflows/linux-ci.yml) runs on pushes to `main`,
 pull requests and manual dispatch, with separate formatting, tests and Clippy
-jobs on Ubuntu 24.04. CI pins Rust 1.98.0 (including rustfmt/Clippy), installs
-the .NET 8 SDK for the real scanner helper build, and installs
+jobs on Ubuntu 24.04. Each job runs `rustup toolchain install --no-self-update`
+after checkout to install the repository-pinned toolchain and components from
+[`rust-toolchain.toml`](../../rust-toolchain.toml), without repeating the Rust
+version in the workflow. CI disables incremental compilation, installs the
+.NET 8 SDK for the real scanner helper build, and installs
 `build-essential`, `pkg-config` and `libasound2-dev`. The audio dependency needs
 ALSA headers to compile; the tests consume a controlled mixer without opening
 an output device. SQLite uses the bundled library from `libsqlite3-sys`;
