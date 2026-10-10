@@ -308,7 +308,8 @@ Refresh repeats the current query immediately; clearing requests the whole libra
 A query entered during connection retains its debounce deadline. Loading and errors
 use the existing library status, while an empty nonblank search says `Nothing found.`.
 Selection is retained by audio ID when present. The client receives filtered server
-results and does no local Songs filtering. Settings search remains a placeholder;
+results and does no local Songs filtering. Qt Settings search filters local section
+titles and setting names; Vizia Settings search remains a placeholder;
 component galleries stay offline. See [backend search](backend.md#library-search).
 
 Qt sends `AppCommand::SetVisibleMedia` snapshots of the currently visible Songs,
@@ -344,7 +345,7 @@ These are source-confirmed bindings, not a claim of interactive verification on 
 | --- | --- | --- |
 | Songs/Settings tabs | Change `Tab`; both panes are constructed and visibility follows the tab signal. The player remains visible. | [shell](../../apps/osu-radio-gui-vizia/src/views/mod.rs), [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs) |
 | Track cards | Change the selected audio-source ID, card highlight, cover/backdrop, title, artist, and duration. This does not start audio playback. | [track card](../../apps/osu-radio-gui-vizia/src/views/songs/track_card.rs), [player](../../apps/osu-radio-gui-vizia/src/views/player/mod.rs), [background](../../apps/osu-radio-gui-vizia/src/views/background.rs) |
-| Search fields | Songs searches the server through the shared controller; Settings only edits its independent placeholder query. | [search row](../../apps/osu-radio-gui-vizia/src/views/components/search_row.rs), [track list](../../apps/osu-radio-gui-vizia/src/views/songs/track_list.rs), [settings pane](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) |
+| Search fields | Songs searches the server through the shared controller. Qt Settings filters its local sections/settings; Vizia Settings only edits its independent placeholder query. | [Qt Songs/Settings](../../apps/osu-radio-qt/qml/Songs.qml), [search row](../../apps/osu-radio-gui-vizia/src/views/components/search_row.rs), [track list](../../apps/osu-radio-gui-vizia/src/views/songs/track_list.rs), [settings pane](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) |
 | Song filter chips | Static labels and visual hover treatment; no filter or picker actions. | [chip](../../apps/osu-radio-gui-vizia/src/views/components/chip.rs) |
 | Folder settings | Display-only dropdown selection, native directory picker with immediate registration, and failure-only retry. No GUI editing/removal, import or output-device selection. | [settings](../../apps/osu-radio-gui-vizia/src/views/settings/mod.rs) |
 | Transport and volume | Central Play/Pause controls the selected track; volume opens a popup for the global or selected audio volume. Qt Next/Previous use the server queue; Vizia's corresponding buttons remain disabled. Shuffle, repeat and playlist controls remain disabled. | [controls](../../apps/osu-radio-gui-vizia/src/views/player/controls.rs), [icon helpers](../../apps/osu-radio-gui-vizia/src/views/components/icon.rs), [top bar](../../apps/osu-radio-gui-vizia/src/views/top_bar.rs) |
@@ -549,7 +550,20 @@ storage still requires separate validation. **Audio**
 holds the individual-volume switch, conditional global slider, status and Retry.
 The Settings panel uses the bundled Nunito font, 20px side margins, a search icon
 on the right, 24px section icons and 44px dark fields with 8px corners.
-Settings search remains an independent placeholder. All panes stay constructed,
+Settings search trims surrounding whitespace and matches section titles and
+current setting names by case-insensitive substring. A section-title match shows
+all its currently available settings; a setting-name match shows only matching
+rows under their section header. Folder/audio status and Retry stay with the
+matching setting's section. Search does not match folder paths, status messages,
+or unavailable preferences, and never reveals the conditional global slider while
+individual volume is off. Hidden rows/sections leave no layout gaps; changing the
+query resets vertical scrolling to the top. A query with no matches shows
+`No settings found.` with guidance to change or clear the search. This is local
+presentation state and sends no library search command. The `settings-search`
+case in [`AdapterProbe.qml`](../../apps/osu-radio-qt/tests/AdapterProbe.qml) covers
+keyboard editing/clearing, title/name matches, conditional rows, empty states,
+scroll extent/reset and retained state across navigation.
+All panes stay constructed,
 retaining search text, selection and settings while the right-hand player remains
 visible. Output-device and other placeholder preferences remain deferred.
 Add is disabled during connection and folder loading; it opens the

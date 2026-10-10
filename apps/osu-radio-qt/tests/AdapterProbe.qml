@@ -21,6 +21,17 @@ QtObject {
     property int retainedResets: 0
     property bool passed: false
     property var sortMedia: ({})
+    property int settingsScenario: 0
+    readonly property var settingsQueries: [
+        { query: " GeNeRaL ", general: true, audio: false, individual: false },
+        { query: " FoLdErS ", general: true, audio: false, individual: false },
+        { query: "TrAcK", general: false, audio: true, individual: true },
+        { query: "volume", general: false, audio: true, individual: true },
+        { query: "Global volume", general: false, audio: false, individual: false },
+        { query: "[missing]", general: false, audio: false, individual: false },
+        { query: "", general: true, audio: true, individual: true },
+        { query: "   ", general: true, audio: true, individual: true }
+    ]
     readonly property TestCase input: TestCase { parent: probe.window ? probe.window.contentItem : null; when: false }
     readonly property var mock: gallery && window ? window.galleryStore.bridge : null
     readonly property Connections mockConnection: Connections {
@@ -415,6 +426,125 @@ QtObject {
             if (bridge.folderSelectionOpen || bridge.folderSelectionApplying) return;
             check(bridge.folders.length === 3, "refresh preserves registered folders");
             check(bridge.folderSelectionRows.length === 0, "successful refresh closes and discards preview state");
+            finish();
+            break;
+        }
+    }
+    function settingsSearchProbe(): void {
+        if (!bridge.connected || bridge.libraryLoading || bridge.foldersLoading || !bridge.audioSettingsLoaded) return;
+        const pane = findChild(window.contentItem, "settingsPane");
+        const search = findChild(pane, "settingsSearch");
+        const general = findChild(pane, "generalSettingsSection");
+        const audio = findChild(pane, "audioSettingsSection");
+        const individual = findChild(pane, "individualVolumeSwitch");
+        const global = findChild(pane, "globalVolumeSetting");
+        const empty = findChild(pane, "settingsSearchEmpty");
+        const content = findChild(pane, "settingsContent");
+        const scroll = findChild(pane, "settingsScroll").contentItem;
+        const message = findChild(pane, "audioSettingsMessage");
+        switch (stage) {
+        case 0:
+            if (bridge.trackCount !== 3) return;
+            bridge.selectTrack(42);
+            input.mouseClick(findChild(window.contentItem, "settingsButton"));
+            check(general.visible && audio.visible && individual.visible && !global.visible && !empty.visible,
+                "empty query shows current settings and respects conditional global volume");
+            input.mouseClick(search);
+            input.keyClick(Qt.Key_A, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_U, Qt.ShiftModifier, 0);
+            input.keyClick(Qt.Key_D, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_I, Qt.ShiftModifier, 0);
+            input.keyClick(Qt.Key_O, Qt.NoModifier, 0);
+            stage = 1;
+            break;
+        case 1:
+            check(search.text.toLowerCase() === "audio" && !general.visible && audio.visible && individual.visible && !empty.visible,
+                "real keyboard edits filter by the case-insensitive section title: " + search.text);
+            check(audio.y === 0, "hidden General leaves no gap before Audio");
+            search.text = settingsQueries[0].query;
+            stage = 2;
+            break;
+        case 2: {
+            const expected = settingsQueries[settingsScenario];
+            check(general.visible === expected.general && audio.visible === expected.audio
+                && individual.visible === expected.individual && !global.visible,
+                "section/setting substring filter: " + expected.query);
+            check(empty.visible === (!expected.general && !expected.audio), "empty result state: " + expected.query);
+            if (empty.visible) {
+                check(empty.text.includes("No settings found") && empty.y === 0 && content.implicitHeight === empty.height,
+                    "empty state is readable without hidden-section gaps");
+            }
+            if (++settingsScenario < settingsQueries.length) search.text = settingsQueries[settingsScenario].query;
+            else {
+                message.text = "Long audio status / Длинное сообщение / 日本語 / ".repeat(50);
+                stage = 3;
+            }
+            break;
+        }
+        case 3:
+            check(scroll.contentHeight > scroll.height, "wrapped status extends the Settings scroll content");
+            scroll.contentY = scroll.contentHeight - scroll.height;
+            check(scroll.contentY > 0, "long Settings content can be scrolled");
+            search.text = "no such setting";
+            stage = 4;
+            break;
+        case 4:
+            check(empty.visible && scroll.contentY === 0 && scroll.contentHeight === empty.height,
+                "narrowing from the bottom resets scroll and collapses hidden content");
+            search.forceActiveFocus();
+            input.keyClick(Qt.Key_A, Qt.ControlModifier, 0);
+            input.keyClick(Qt.Key_Backspace, Qt.NoModifier, 0);
+            stage = 5;
+            break;
+        case 5:
+            check(search.text === "" && general.visible && audio.visible && !empty.visible
+                && scroll.contentHeight > scroll.height, "keyboard clear restores the full scroll layout");
+            message.text = Qt.binding(() => bridge.audioSettingsMessage);
+            bridge.setIndividualVolumeEnabled(true);
+            stage = 6;
+            break;
+        case 6:
+            if (!bridge.individualVolumeEnabled) return;
+            check(global.visible, "global volume remains conditional on individual mode");
+            search.text = "gLoBaL vOlUmE";
+            stage = 7;
+            break;
+        case 7:
+            check(!general.visible && audio.visible && !individual.visible && global.visible && !empty.visible,
+                "matching a setting hides other settings inside the same section");
+            check(global.y === 0, "hidden individual-volume row leaves no layout gap");
+            check(bridge.selectedAudioId === 42 && findChild(window.contentItem, "playerPane").visible,
+                "filtering preserves the selected player");
+            input.mouseClick(findChild(window.contentItem, "songsTabButton"));
+            stage = 8;
+            break;
+        case 8:
+            if (bridge.libraryLoading) return;
+            check(findChild(window.contentItem, "songSearch").text === "" && bridge.selectedAudioId === 42,
+                "Settings query is independent of Songs and selection");
+            input.mouseClick(findChild(window.contentItem, "settingsButton"));
+            stage = 9;
+            break;
+        case 9:
+            check(search.text === "gLoBaL vOlUmE" && global.visible && !individual.visible,
+                "returning to Settings retains query and results");
+            search.text = "AuDiO";
+            stage = 10;
+            break;
+        case 10:
+            check(audio.visible && individual.visible && global.visible,
+                "matching a section shows all currently available settings");
+            bridge.setIndividualVolumeEnabled(false);
+            stage = 11;
+            break;
+        case 11:
+            if (bridge.individualVolumeEnabled) return;
+            search.text = "global volume";
+            stage = 12;
+            break;
+        case 12:
+            check(empty.visible && !audio.visible && !global.visible,
+                "search never reveals a conditionally unavailable setting");
             finish();
             break;
         }
@@ -1194,6 +1324,7 @@ QtObject {
         if (testCase.startsWith("names-")) { trackNamePreferencesProbe(); return; }
         if (testCase === "folders") { folderProbe(); return; }
         if (testCase === "search") { searchProbe(); return; }
+        if (testCase === "settings-search") { settingsSearchProbe(); return; }
         if (testCase === "playback") { playbackProbe(); return; }
         if (testCase === "queue") { queueProbe(); return; }
         if (testCase === "volume") { volumeProbe(); return; }
@@ -1285,6 +1416,7 @@ QtObject {
                 && findChild(window.contentItem, "songSearch").text === "", "navigation retains track and Songs query");
             retainedResets = resets;
             input.mouseClick(findChild(window.contentItem, "settingsButton"));
+            findChild(window.contentItem, "settingsSearch").text = "";
             findChild(window.contentItem, "folderMenu").choose(1);
             check(bridge.selectedAudioId === 42, "folder selection does not filter songs");
             stage = 4;

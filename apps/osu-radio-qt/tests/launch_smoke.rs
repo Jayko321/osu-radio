@@ -157,6 +157,33 @@ fn live_session_projects_independent_loads_targeted_media_and_id_selections() {
 
 #[cfg(unix)]
 #[test]
+fn settings_search_filters_visible_labels_and_preserves_layout_and_state() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("isolated settings search fixture");
+    let server = directory.path().join("fixture-server");
+    std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fixture");
+    assert_probe(&run(
+        &[],
+        "offscreen",
+        directory.path(),
+        &server,
+        "settings-search",
+    ));
+    let requests = std::fs::read_to_string(directory.path().join("requests")).expect("requests");
+    assert!(
+        requests
+            .lines()
+            .filter(|line| line.starts_with("/api/tracks"))
+            .all(|line| line == "/api/tracks?q="),
+        "Settings search must not search the library: {requests}"
+    );
+    assert_child_reaped(directory.path());
+}
+
+#[cfg(unix)]
+#[test]
 fn songs_search_debounces_retries_and_clears_through_the_live_adapter() {
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().expect("isolated search fixture");

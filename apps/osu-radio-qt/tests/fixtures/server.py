@@ -398,7 +398,7 @@ class Handler(BaseHTTPRequestHandler):
                     status, payload = 500, {"message": "visual fixture error: " + "Длинное описание ошибки / 日本語 / " * 6}
                 else:
                     payload = library([] if query == "missing" else [7, 42, 103] + list(range(200, 225)))
-            elif case in ("playback", "folders", "sorting", "volume", "playlist-covers", "playlist-cover-preview") or case.startswith("native"):
+            elif case in ("playback", "folders", "sorting", "volume", "playlist-covers", "playlist-cover-preview", "settings-search") or case.startswith("native"):
                 payload = library([7, 42, 103])
             elif case == "search":
                 query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]

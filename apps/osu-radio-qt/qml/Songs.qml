@@ -383,6 +383,16 @@ Basic.ApplicationWindow {
                     id: settingsPane
                     objectName: "settingsPane"
                     readonly property string fontFamily: Theme.fallbackFont.name || "Nunito"
+                    readonly property string query: settingsSearch.text.trim().toLowerCase()
+                    readonly property bool foldersMatch: matches(generalSettingsHeader.text, foldersLabel.text)
+                    readonly property bool individualVolumeMatches: matches(audioSettingsHeader.text, individualVolumeSwitch.text)
+                    readonly property bool globalVolumeMatches: bridge.individualVolumeEnabled && matches(audioSettingsHeader.text, globalVolumeLabel.settingName)
+                    readonly property bool hasMatches: foldersMatch || individualVolumeMatches || globalVolumeMatches
+                    function matches(section: string, setting: string): bool {
+                        return query.length === 0 || section.toLowerCase().includes(query) || setting.toLowerCase().includes(query);
+                    }
+                    // A narrower result must remain reachable after scrolling a long status.
+                    onQueryChanged: Qt.callLater(() => { settingsScroll.contentItem.contentY = 0; })
                     anchors.fill: parent
                     visible: root.selectedTab === 2
                     AppField {
@@ -420,13 +430,17 @@ Basic.ApplicationWindow {
                         width: parent.width - 40
                         height: parent.height - y - 20
                         contentWidth: availableWidth
+                        contentHeight: settingsContent.implicitHeight
                         clip: true
                         Basic.ScrollBar.horizontal.policy: Basic.ScrollBar.AlwaysOff
                         Column {
+                            id: settingsContent
+                            objectName: "settingsContent"
                             width: settingsScroll.availableWidth
                             spacing: 40
                             Column {
                                 objectName: "generalSettingsSection"
+                                visible: settingsPane.foldersMatch
                                 width: parent.width
                                 spacing: 24
                                 Row {
@@ -434,6 +448,7 @@ Basic.ApplicationWindow {
                                     spacing: 12
                                     AppIcon { name: "pencil-line" }
                                     Text {
+                                        id: generalSettingsHeader
                                         objectName: "generalSettingsHeader"
                                         text: "General"
                                         color: Theme.text
@@ -448,6 +463,7 @@ Basic.ApplicationWindow {
                                     width: parent.width
                                     spacing: 8
                                     Text {
+                                        id: foldersLabel
                                         text: "osu! folders"
                                         color: Theme.text
                                         font.family: settingsPane.fontFamily
@@ -552,6 +568,7 @@ Basic.ApplicationWindow {
                             }
                             Column {
                                 objectName: "audioSettingsSection"
+                                visible: settingsPane.individualVolumeMatches || settingsPane.globalVolumeMatches
                                 width: parent.width
                                 spacing: 24
                                 Row {
@@ -559,6 +576,7 @@ Basic.ApplicationWindow {
                                     spacing: 12
                                     AppIcon { name: "volume-up-fill" }
                                     Text {
+                                        id: audioSettingsHeader
                                         objectName: "audioSettingsHeader"
                                         text: "Audio"
                                         color: Theme.text
@@ -573,7 +591,9 @@ Basic.ApplicationWindow {
                                     width: parent.width
                                     spacing: 16
                                     AppSwitch {
+                                        id: individualVolumeSwitch
                                         objectName: "individualVolumeSwitch"
+                                        visible: settingsPane.individualVolumeMatches
                                         width: parent.width
                                         height: 44
                                         text: "Individual track volume"
@@ -584,11 +604,14 @@ Basic.ApplicationWindow {
                                         onToggled: bridge.setIndividualVolumeEnabled(checked)
                                     }
                                     Column {
+                                        objectName: "globalVolumeSetting"
                                         width: parent.width
                                         spacing: 8
-                                        visible: bridge.individualVolumeEnabled
+                                        visible: settingsPane.globalVolumeMatches
                                         Text {
-                                            text: "Global volume — " + bridge.globalVolumePercent + "%"
+                                            id: globalVolumeLabel
+                                            readonly property string settingName: "Global volume"
+                                            text: settingName + " — " + bridge.globalVolumePercent + "%"
                                             color: Theme.text
                                             font.family: settingsPane.fontFamily
                                             font.pixelSize: 16
@@ -627,6 +650,16 @@ Basic.ApplicationWindow {
                                         onClicked: bridge.retryAudioSettings()
                                     }
                                 }
+                            }
+                            Text {
+                                objectName: "settingsSearchEmpty"
+                                width: parent.width
+                                visible: !settingsPane.hasMatches
+                                text: "No settings found. Try a different search or clear the search field."
+                                color: Theme.muted
+                                font.family: settingsPane.fontFamily
+                                font.pixelSize: 16
+                                wrapMode: Text.Wrap
                             }
                         }
                     }

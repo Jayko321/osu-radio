@@ -38,6 +38,30 @@ frontends.
   machine. `--locked` protects Cargo.lock; it does not make builds offline or
   prevent generated artifacts under `target/` and the helper build directories.
 
+### Linux CI
+
+[`Linux CI`](../../.github/workflows/linux-ci.yml) runs on pushes to `main`,
+pull requests and manual dispatch, with separate formatting, tests and Clippy
+jobs on Ubuntu 24.04. CI pins Rust 1.98.0 (including rustfmt/Clippy), installs
+the .NET 8 SDK for the real scanner helper build, and installs
+`build-essential`, `pkg-config` and `libasound2-dev`. The audio dependency needs
+ALSA headers to compile; the tests consume a controlled mixer without opening
+an output device. SQLite uses the bundled library from `libsqlite3-sys`;
+the selected HTTP dependencies use rustls, so no OpenSSL development package
+is needed.
+
+The locked checks cover core/scanner, SQLite repositories/services, CLI, server
+with API docs on/off, player, and client library tests/Clippy with `mock` off/on.
+Tests run with `--test-threads=1` to avoid the documented process-fixture races.
+Ignored benchmarks and opt-in integration probes remain skipped.
+
+Qt/QML and inactive Vizia builds are outside this minimal workflow. Qt requires
+6.8+ and additional QML modules/plugins; add those checks only after validating
+that setup reproducibly on a hosted runner. PostgreSQL integration, desktop/GPU
+interaction, physical audio and Windows validation remain separate. Workspace
+formatting still checks both frontends. `--locked` applies to Cargo builds/tests/
+Clippy, not `cargo fmt` or the helper's NuGet restore.
+
 ## Environment and executable discovery
 
 | Input | Current use | Source |
@@ -403,6 +427,13 @@ explicit assertions complete, with a native watchdog and outer process timeout.
 Settings checks activate its navigation tab, return through Songs and Playlists,
 retain the selected track and independent queries, and exercise the existing audio
 and folder retry controls. The gallery checks that Settings remains disabled.
+The `settings_search_filters_visible_labels_and_preserves_layout_and_state`
+smoke test uses the `settings-search` probe case: real keyboard edits/clearing,
+case-insensitive title/name filtering, whitespace, no-match recovery, conditional
+global volume, hidden-row spacing, long wrapped status scroll/reset and retained
+query/selection across tabs. Its isolated HTTP fixture also checks that Settings
+search never sends a library search query. Run it alone with
+`cargo test -p osu-radio-qt --locked --test launch_smoke settings_search_filters_visible_labels_and_preserves_layout_and_state`.
 The [media controller tests](../../crates/osu-radio-client/src/controller.rs)
 cover replacement of visible demand, canceled HTTP, selected/queue demand,
 independent cover and duration completion, stale/repeated acknowledgments and
