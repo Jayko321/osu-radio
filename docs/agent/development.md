@@ -72,7 +72,7 @@ Clippy, not `cargo fmt` or the helper's NuGet restore.
 | `OSU_RADIO_SERVER_ADDRESS` | Standalone default is `127.0.0.1:3000`; the supervisor supplies `ServerOptions::address`, default `127.0.0.1:0`. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
 | `OSU_RADIO_SERVER_BIN` | Server executable override after explicit `ServerOptions::binary`, before sibling and `PATH` lookup. | [Supervisor](../../crates/osu-radio-client/src/server.rs) |
 | `SQLITE_DATABASE_URL` / `POSTGRES_DATABASE_URL` | Required by SQLite / PostgreSQL CLI and server builds respectively. SQLite accepts paths, SQLite URLs and `:memory:`. | [Server config](../../apps/osu-radio-server/src/config.rs) |
-| `.env` and process working directory | Server unconditionally propagates failure to load `.env`; environment variables alone do not permit launch without a discoverable, loadable file. `ServerOptions::working_directory` can select the child directory. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
+| `.env` and process working directory | Server allows a missing `.env` when the selected database URL is in the process environment. Existing variables take precedence over file values; other I/O/parse errors are fatal. `ServerOptions::working_directory` selects where dotenv searches the child directory and its ancestors. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
 
 Discovery's default candidates also consult OS location inputs such as
 `XDG_DATA_HOME` on Linux and `APPDATA`, `LOCALAPPDATA`, `USERPROFILE`, and program
@@ -168,6 +168,32 @@ cargo clippy -p radio-db -p radio-services -p osu-radio-cli -p osu-radio-server 
 cargo clippy -p osu-radio-server --no-default-features --features postgres,docs --all-targets --locked -- -D warnings
 ```
 
+The server commands also run isolated
+[configuration regressions](../../apps/osu-radio-server/src/config/tests.rs) and
+an actual [environment-only startup test](../../apps/osu-radio-server/tests/startup.rs).
+They use child-only environment variables, temporary directories, in-memory SQLite
+and an ephemeral loopback port; no configured application database is opened.
+Configuration probes run through an ignored helper test invoked explicitly by
+their parent tests. The helper is not an opt-in database integration test.
+The read-error fixture uses invalid UTF-8 so it remains effective when run as root.
+To check the PostgreSQL-specific configuration without connecting to a database:
+
+```sh
+cargo test -p osu-radio-server --no-default-features --features postgres --locked config::tests::
+```
+
+Executed on Linux on 2026-10-07 for optional server dotenv loading: locked
+SQLite server suites passed with docs enabled/disabled (44/39 unit tests plus
+one actual-server environment-only startup test in each build). The seven
+configuration regressions also passed in parallel and with PostgreSQL selected,
+without a PostgreSQL connection. The existing benchmark stayed ignored; the
+ignored configuration helper ran through its parent tests. Server all-target
+Clippy with warnings denied passed in both SQLite docs states, as did workspace
+formatting, whitespace and affected guide file links. Rust 1.98.0 was used.
+The .NET SDK failed to read process metadata in this environment, so these
+headless checks used the documented helper build override with `/bin/false`.
+Real Realm extraction and PostgreSQL integration were not exercised.
+
 The PostgreSQL service and repository contract tests are ignored by default. Provision a **fresh,
 disposable local cluster/database**, naming the database `radio_db_test_*`, and
 supply only its URL in `RADIO_DB_TEST_POSTGRES_URL`:
@@ -212,7 +238,8 @@ database. Run each stage on that same backup. The
 [HTTP measurement script](../../tools/search-benchmark/benchmark_http.py) captures exact
 payloads and medians for `rock`, `rock hard`, `星`, no matches and blank input.
 Use stage labels `baseline`, `stage1`, `stage2`, `stage3`; stage 3 uses `tracks`.
-Run from a directory with `.env`, as required by current server startup.
+Saved pre-fix binaries may still require a directory with `.env`; the current
+server accepts the database URL from process environment without that file.
 
 ```sh
 python3 tools/search-benchmark/benchmark_http.py --binary /absolute/saved/server-debug --database-backup /absolute/backup.sqlite --output /tmp/search-results --stage baseline --profile debug
@@ -334,7 +361,7 @@ executed result):
 | `cargo` or `rustc` unavailable | Verify the active shell's `PATH` and installed Rust toolchain; do not claim checks passed. |
 | Scanner/CLI/server build cannot start `dotnet` | Check SDK availability and the helper override. The server transitively builds the scanner even if the use case only validates folders. |
 | Helper cannot launch at runtime | Confirm the resolved helper exists, has the platform executable form/permissions, and has a compatible .NET runtime; preserve its stderr in reported failures. |
-| `Failed to load .env` | Check the actual child's working directory and a loadable `.env`; setting `SQLITE_DATABASE_URL` alone does not avoid the load call. |
+| `Failed to load .env` | Inspect the discovered file in the actual child's working directory or ancestors for parse/read errors. Only `NotFound` is ignored; an existing broken file is fatal even with environment configuration. |
 | GUI cannot find the server binary | Build the server first and check explicit option, environment override, sibling executable, then `PATH`. |
 | Embedded startup times out | Check forwarded stderr and the readiness marker before changing timeout settings. |
 | Style appears ignored or a control cannot be clicked | Follow [frontend pitfalls](frontend.md) and inspect the owning stylesheet, inclusion, overlapping layers, and child hit testing. |
@@ -403,8 +430,8 @@ cargo run -p osu-radio-qt --locked -- --component-gallery
 cargo run -p osu-radio-qt --locked -- --help
 ```
 
-Default launch is live: first build `osu-radio-server` and provide a `.env`
-pointing to the intended database. `--component-gallery` is offline and requires
+Default launch is live: first build `osu-radio-server` and supply the selected
+database URL in the environment or a loadable `.env`. `--component-gallery` is offline and requires
 no server, `.env`, database or osu! installation. `--help` and argument errors are handled before GUI initialization.
 Recommended automated checks:
 

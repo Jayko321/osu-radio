@@ -29,11 +29,11 @@ client. Neither hosted-source providers nor remote hosting are selected.
 
 ## Current startup configuration
 
-`ServerConfig::from_env` calls `dotenvy::dotenv()` and propagates its error before
-reading configuration. A discoverable, loadable `.env` is therefore required by
-today's implementation even if all configuration variables already exist in the
-process environment. Merely setting environment variables is not a workaround
-for `Failed to load .env`.
+`ServerConfig::from_env` calls `dotenvy::dotenv()` before reading configuration.
+A missing `.env` (`NotFound`) is allowed: process environment alone can supply
+configuration. A discovered file still loads without overriding existing process
+variables. Other I/O errors and malformed file contents propagate as
+`Failed to load .env`, even when the required database URL is already set.
 
 The default SQLite build requires `SQLITE_DATABASE_URL` (a path, SQLite URL or
 `:memory:`); the PostgreSQL build requires `POSTGRES_DATABASE_URL`. Startup opens
@@ -65,7 +65,18 @@ choice, not a permanent requirement for Windows, Linux, or future mobile apps.
 OS-assigned port. The option can be overridden; the supervisor does not always
 force port zero. `ServerOptions::working_directory` changes the child's working
 directory when present; otherwise it inherits the parent directory. This affects
-whether the server finds `.env`.
+which `.env` the server finds in that directory or its ancestors. No file is
+required when the process environment supplies the selected database URL.
+
+[Configuration regressions](../../apps/osu-radio-server/src/config/tests.rs)
+run in separate processes with cleared application environments and temporary
+working directories. They cover environment-only configuration, the default and
+explicit address, the required backend-specific URL, valid dotenv loading,
+process-variable precedence and fatal parse/read errors. The
+[startup test](../../apps/osu-radio-server/tests/startup.rs) launches the actual
+SQLite server without `.env`, using in-memory storage and an ephemeral loopback
+port. Both docs feature states run these checks; PostgreSQL configuration checks
+need no database connection.
 
 The server emits:
 
