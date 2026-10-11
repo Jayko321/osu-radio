@@ -8,7 +8,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-rodio = { version = "=0.22.2", default-features = false, features = ["playback", "mp3", "vorbis", "wav"] }
+rodio = { version = "=0.22.2", default-features = false, features = ["playback", "mp3", "vorbis", "wav", "symphonia-all"] }
 thiserror = "2"
 
 [dev-dependencies]
