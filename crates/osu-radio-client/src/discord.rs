@@ -1,10 +1,9 @@
-//! Optional, toolkit-free Discord RPC. The library owns the wire protocol; a dedicated
-//! worker supplies bounded Tokio socket I/O and waits for either input or new state.
+//! Optional, toolkit-free Discord RPC with bounded frames and correlated Activity replies.
 use crate::{
     Track,
     playback::{Playback, PlayerState},
 };
-use discord_rich_presence::{DiscordIpc, activity};
+use discord_rich_presence::{DiscordIpc, activity, error::Error};
 use std::{
     future::Future,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -51,7 +50,7 @@ impl Presence {
         let artist = field(&track.artist, "Unknown artist");
         let paused_label = field(
             &format!(
-                "Paused • {artist} • {}:{:02}",
+                "Paused • {}:{:02} • {artist}",
                 playback.snapshot.position.as_secs() / 60,
                 playback.snapshot.position.as_secs() % 60
             ),
@@ -193,93 +192,259 @@ impl Drop for Service {
     }
 }
 
-// Small transport seam: deterministic lifecycle tests need neither Discord nor a device.
+// Tests exercise this same worker with either a mock or real local IPC transport.
 trait Rpc {
-    fn connect(&mut self) -> bool;
-    fn set(&mut self, presence: &Presence) -> bool;
-    fn clear(&mut self) -> bool;
+    fn connect(&mut self) -> Result<(), Error>;
+    fn set(&mut self, presence: &Presence, artwork: bool) -> Result<String, Error>;
+    fn clear(&mut self) -> Result<String, Error>;
     fn close(&mut self);
-    fn incoming(&mut self) -> impl Future<Output = ()> + Send;
-    fn receive(&mut self) -> bool;
+    fn incoming(&mut self) -> impl Future<Output = Result<(), Error>> + Send;
+    fn receive(&mut self) -> Result<Reply, Error>;
+}
+#[derive(Debug)]
+enum Reply {
+    Other,
+    Ack(String),
+    Rejected {
+        nonce: Option<String>,
+        code: Option<i64>,
+        message: String,
+    },
 }
 impl Rpc for Transport {
-    fn connect(&mut self) -> bool {
-        DiscordIpc::connect(self).is_ok()
+    fn connect(&mut self) -> Result<(), Error> {
+        DiscordIpc::connect(self)
     }
-    fn set(&mut self, presence: &Presence) -> bool {
+    fn set(&mut self, presence: &Presence, artwork: bool) -> Result<String, Error> {
         let mut activity = presence.activity();
-        if self.use_assets {
+        if artwork {
             activity = activity.assets(
                 activity::Assets::new()
                     .large_image(LOGO_ASSET)
                     .large_text("osu! radio"),
             );
         }
-        self.set_activity(activity).is_ok()
+        let nonce = self.next_nonce();
+        self.send(
+            serde_json::json!({
+                "cmd": "SET_ACTIVITY",
+                "args": { "pid": std::process::id(), "activity": activity },
+                "nonce": nonce,
+            }),
+            1,
+        )?;
+        Ok(nonce)
     }
-    fn clear(&mut self) -> bool {
+    fn clear(&mut self) -> Result<String, Error> {
+        let nonce = self.next_nonce();
         self.cancellable = false;
-        let result = self.clear_activity().is_ok();
+        let result = self.send(
+            serde_json::json!({
+                "cmd": "SET_ACTIVITY",
+                "args": { "pid": std::process::id(), "activity": null },
+                "nonce": nonce,
+            }),
+            1,
+        );
         self.cancellable = true;
-        result
+        result?;
+        Ok(nonce)
     }
     fn close(&mut self) {
         let _ = DiscordIpc::close(self);
     }
-    async fn incoming(&mut self) {
-        self.ready().await;
+    async fn incoming(&mut self) -> Result<(), Error> {
+        self.ready().await
     }
-    fn receive(&mut self) -> bool {
-        match self.recv() {
-            Ok((1, payload)) => {
-                let rejected =
-                    payload.get("evt").and_then(serde_json::Value::as_str) == Some("ERROR");
-                if rejected {
-                    self.use_assets = false;
-                } // Retry without optional artwork.
-                !rejected
+    fn receive(&mut self) -> Result<Reply, Error> {
+        let (opcode, bytes) = self.recv_raw()?;
+        match opcode {
+            1 => {
+                let payload: serde_json::Value =
+                    serde_json::from_slice(&bytes).map_err(|_| Error::JsonParseResponse)?;
+                let nonce = payload.get("nonce").and_then(serde_json::Value::as_str);
+                if payload.get("evt").and_then(serde_json::Value::as_str) == Some("ERROR") {
+                    return Ok(Reply::Rejected {
+                        nonce: nonce
+                            .filter(|_| {
+                                payload.get("cmd").and_then(serde_json::Value::as_str)
+                                    == Some("SET_ACTIVITY")
+                            })
+                            .map(str::to_owned),
+                        code: payload
+                            .get("data")
+                            .and_then(|data| data.get("code"))
+                            .and_then(serde_json::Value::as_i64),
+                        message: field(
+                            payload
+                                .get("data")
+                                .and_then(|data| data.get("message"))
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("Unknown RPC error"),
+                            "Unknown RPC error",
+                        ),
+                    });
+                }
+                if payload.get("cmd").and_then(serde_json::Value::as_str) == Some("SET_ACTIVITY")
+                    && payload.get("evt").is_none_or(serde_json::Value::is_null)
+                    && let Some(nonce) = nonce
+                {
+                    return Ok(Reply::Ack(nonce.to_owned()));
+                }
+                Ok(Reply::Other)
             }
-            Ok((3, payload)) => self.send(payload, 4).is_ok(), // PING -> PONG, library framing.
-            _ => false,
+            3 => {
+                self.pong(&bytes)?;
+                Ok(Reply::Other)
+            }
+            4 => Ok(Reply::Other),
+            _ => Err(Error::ReadError(std::io::Error::new(
+                std::io::ErrorKind::ConnectionAborted,
+                format!("Discord IPC closed or invalid opcode: {opcode}"),
+            ))),
         }
+    }
+}
+struct Request {
+    nonce: String,
+    key: Option<Key>,
+    artwork: bool,
+    fallback: bool,
+}
+struct Worker<R> {
+    rpc: R,
+    connected: bool,
+    sent: Option<Key>,
+    pending: Option<Request>,
+    use_assets: bool,
+    retry: Duration,
+    deadline: Instant,
+}
+impl<R: Rpc> Worker<R> {
+    fn failed(&mut self, stage: &str, error: &Error) {
+        eprintln!("[discord] {stage}: {error:?}");
+        self.rpc.close();
+        self.connected = false;
+        self.sent = None;
+        self.pending = None;
+        self.deadline = Instant::now()
+            .checked_add(self.retry)
+            .unwrap_or_else(Instant::now);
+        self.retry = self.retry.saturating_mul(2).min(Duration::from_secs(30));
+    }
+    fn publish(
+        &mut self,
+        presence: Option<&Presence>,
+        artwork: bool,
+        fallback: bool,
+    ) -> Result<(), Error> {
+        let nonce = if let Some(presence) = presence {
+            self.rpc.set(presence, artwork)?
+        } else {
+            self.rpc.clear()?
+        };
+        self.sent = presence.map(|presence| presence.key.clone());
+        self.pending = Some(Request {
+            nonce,
+            key: self.sent.clone(),
+            artwork,
+            fallback,
+        });
+        Ok(())
+    }
+    fn receive(&mut self, desired: &watch::Receiver<Desired>) -> Result<(), Error> {
+        let reply = self.rpc.receive()?;
+        let state = desired.borrow().clone();
+        match reply {
+            Reply::Ack(nonce) => {
+                if self.pending.as_ref().is_some_and(|request| {
+                    request.nonce == nonce
+                        && request.key.as_ref()
+                            == state.presence.as_ref().map(|presence| &presence.key)
+                }) {
+                    if self
+                        .pending
+                        .as_ref()
+                        .is_some_and(|request| request.fallback)
+                    {
+                        self.use_assets = false;
+                    }
+                    self.pending = None;
+                    self.retry = Duration::from_secs(1);
+                }
+            }
+            Reply::Rejected {
+                nonce,
+                code,
+                message,
+            } => {
+                eprintln!("[discord] RPC ERROR code={code:?}: {message:?}");
+                if self
+                    .pending
+                    .as_ref()
+                    .is_some_and(|request| Some(&request.nonce) == nonce.as_ref())
+                {
+                    let request = self.pending.take();
+                    if let Some(request) = request
+                        && request.artwork
+                        && !request.fallback
+                        && request.key.is_some()
+                        && request.key.as_ref()
+                            == state.presence.as_ref().map(|presence| &presence.key)
+                    {
+                        self.publish(state.presence.as_ref(), false, true)?;
+                    }
+                    // Keep sent: a rejected key is retried only after change or reconnect.
+                }
+            }
+            Reply::Other => {}
+        }
+        Ok(())
+    }
+    fn park(&mut self) {
+        if self.connected
+            && let Err(error) = self.rpc.clear()
+        {
+            eprintln!("[discord] clear: {error:?}");
+        }
+        self.rpc.close();
+        self.connected = false;
+        self.sent = None;
+        self.pending = None;
+        self.retry = Duration::from_secs(1);
+        self.deadline = Instant::now();
     }
 }
 enum Wake {
     Changed,
-    Input,
+    Input(Result<(), Error>),
     Retry,
 }
-fn run(mut rpc: impl Rpc, mut desired: watch::Receiver<Desired>, runtime: &tokio::runtime::Handle) {
-    let mut connected = false;
-    let mut sent: Option<Key> = None;
-    let mut retry = Duration::from_secs(1);
-    let mut deadline = Instant::now();
+fn run(rpc: impl Rpc, mut desired: watch::Receiver<Desired>, runtime: &tokio::runtime::Handle) {
+    let mut worker = Worker {
+        rpc,
+        connected: false,
+        sent: None,
+        pending: None,
+        use_assets: true,
+        retry: Duration::from_secs(1),
+        deadline: Instant::now(),
+    };
     loop {
         let mut state = desired.borrow_and_update().clone();
         if state.shutdown || !state.enabled {
-            if connected {
-                let _ = rpc.clear();
-            }
-            rpc.close();
-            connected = false;
-            sent = None;
-            retry = Duration::from_secs(1);
-            deadline = Instant::now();
+            worker.park();
             if state.shutdown {
                 break;
             }
         } else {
-            if !connected && Instant::now() >= deadline {
-                connected = rpc.connect();
-                if connected {
-                    retry = Duration::from_secs(1);
-                    sent = None;
-                } else {
-                    rpc.close();
-                    deadline = Instant::now()
-                        .checked_add(retry)
-                        .unwrap_or_else(Instant::now);
-                    retry = retry.saturating_mul(2).min(Duration::from_secs(30));
+            if !worker.connected && Instant::now() >= worker.deadline {
+                match worker.rpc.connect() {
+                    Ok(()) => {
+                        worker.connected = true;
+                        worker.sent = None;
+                    }
+                    Err(error) => worker.failed("connect/handshake", &error),
                 }
                 // Connection can take time. Always re-read the newest coalesced snapshot.
                 if desired.has_changed().unwrap_or(true) {
@@ -287,51 +452,33 @@ fn run(mut rpc: impl Rpc, mut desired: watch::Receiver<Desired>, runtime: &tokio
                 }
                 state = desired.borrow().clone();
             }
-            if connected {
-                let key = state.presence.as_ref().map(|presence| presence.key.clone());
-                if key != sent {
-                    let success = if let Some(presence) = &state.presence {
-                        rpc.set(presence)
-                    } else {
-                        rpc.clear()
-                    };
-                    if success {
-                        sent = key;
-                    } else {
-                        rpc.close();
-                        connected = false;
-                        sent = None;
-                        deadline = Instant::now()
-                            .checked_add(retry)
-                            .unwrap_or_else(Instant::now);
-                    }
-                }
+            if worker.connected
+                && state.presence.as_ref().map(|presence| &presence.key) != worker.sent.as_ref()
+                && let Err(error) =
+                    worker.publish(state.presence.as_ref(), worker.use_assets, false)
+            {
+                worker.failed("write Activity", &error);
             }
         }
         let wake = runtime.block_on(async {
             tokio::select! {
                 biased;
                 _ = desired.changed() => Wake::Changed,
-                () = rpc.incoming(), if connected => Wake::Input,
-                () = tokio::time::sleep_until(deadline), if state.enabled && !connected => Wake::Retry,
+                result = worker.rpc.incoming(), if worker.connected => Wake::Input(result),
+                () = tokio::time::sleep_until(worker.deadline), if state.enabled && !worker.connected => Wake::Retry,
             }
         });
-        if matches!(wake, Wake::Changed) && desired.has_changed().is_err() {
-            break;
-        }
-        if matches!(wake, Wake::Input) && !rpc.receive() {
-            rpc.close();
-            connected = false;
-            sent = None;
-            deadline = Instant::now()
-                .checked_add(retry)
-                .unwrap_or_else(Instant::now);
+        match wake {
+            Wake::Changed if desired.has_changed().is_err() => break,
+            Wake::Input(result) => {
+                if let Err(error) = result.and_then(|()| worker.receive(&desired)) {
+                    worker.failed("read/reply", &error);
+                }
+            }
+            _ => {}
         }
     }
-    if connected {
-        let _ = rpc.clear();
-    }
-    rpc.close();
+    worker.park();
 }
 
 #[cfg(test)]

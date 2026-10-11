@@ -29,13 +29,20 @@ QtObject {
     property int steadyTicks: 0
     property int warmedResets: 0
     property int modelResets: 0
+    property int playlistModelResets: 0
     property var retainedQueueDelegate: null
     readonly property Connections flickerModel: Connections {
-        target: probe.bridge
-        ignoreUnknownSignals: true
+        target: probe.bridge ? probe.bridge.library.tracks : null
         function onModelReset() { ++probe.modelResets; }
+    }
+    readonly property Connections playlistModel: Connections {
+        target: probe.bridge ? probe.bridge.playlists.tracks : null
+        function onModelReset() { ++probe.playlistModelResets; }
+    }
+    readonly property Connections flickerPlayer: Connections {
+        target: probe.bridge ? probe.bridge.player : null
         function onSelectedArtworkUrlChanged() {
-            if (probe.monitorArtwork) probe.check(probe.bridge.selectedArtworkUrl === probe.retainedArtwork, "selected source changes during warmed navigation/scroll");
+            if (probe.monitorArtwork) probe.check(probe.bridge.player.selectedArtworkUrl === probe.retainedArtwork, "selected source changes during warmed navigation/scroll");
         }
     }
     function imageWithSource(item: var, source: string, wide: bool): var {
@@ -84,7 +91,7 @@ QtObject {
         onTriggered: {
             const art = probe.imageWithSource(probe.find(probe.window.contentItem, "selectedArtwork"), probe.retainedArtwork, false);
             const backdrop = probe.imageWithSource(probe.window.contentItem, probe.retainedArtwork, true);
-            probe.check(probe.bridge.selectedArtworkUrl === probe.retainedArtwork && art && art.status === Image.Ready,
+            probe.check(probe.bridge.player.selectedArtworkUrl === probe.retainedArtwork && art && art.status === Image.Ready,
                 "player image loses readiness/source");
             probe.check(backdrop && backdrop.status === Image.Ready, "background image loses readiness/source");
             if (probe.stage >= 3 && probe.stage <= 6 && probe.continuityFrames < 18) {
@@ -230,7 +237,7 @@ QtObject {
         const popup = find(window.contentItem, "volumePopup");
         switch (stage) {
         case 0:
-            if (!bridge.connected || bridge.libraryLoading || bridge.foldersLoading || bridge.trackCount === 0 || bridge.selectedArtworkUrl.length === 0) return;
+            if (!bridge.connected || bridge.library.libraryLoading || bridge.settings.foldersLoading || bridge.library.tracks.trackCount === 0 || bridge.player.selectedArtworkUrl.length === 0) return;
             stage = 1; break;
         case 1:
             shot("songs");
@@ -269,7 +276,7 @@ QtObject {
             const scroll = find(window.contentItem, "settingsScroll").contentItem;
             check(scroll.contentY > 0, "Settings wheel scrolls downward");
             shot("settings-scrolled");
-            find(window.contentItem, "audioSettingsMessage").text = Qt.binding(() => bridge.audioSettingsMessage);
+            find(window.contentItem, "audioSettingsMessage").text = Qt.binding(() => bridge.settings.audioSettingsMessage);
             scroll.contentY = 0;
             find(window.contentItem, "settingsSearch").forceActiveFocus();
             input.keyClick(Qt.Key_Tab, Qt.NoModifier, 0);
@@ -296,7 +303,7 @@ QtObject {
             check(!popup.visible && opener.activeFocus, "volume Escape restores focus"); popup.close();
             find(window.contentItem, "playlistsTabButton").clicked(); stage = 8; break;
         case 8:
-            if (bridge.playlistLoading) return;
+            if (bridge.playlists.playlistLoading) return;
             shot("playlists-empty");
             pane.createRequested(); pane.nameEdited("Длинное название плейлиста / 日本語 " + "long ".repeat(12)); stage = 9; break;
         case 9:
@@ -305,10 +312,10 @@ QtObject {
             pane.cancelRequested();
             // Real-library checks never start unscoped discovery.
             if (testCase === "visual-real") { finish(); return; }
-            find(window.contentItem, "settingsButton").clicked(); bridge.addFolder(); stage = 10; break;
+            find(window.contentItem, "settingsButton").clicked(); bridge.settings.addFolder(); stage = 10; break;
         case 10: {
             const dialog = find(window.contentItem, "folderSelectionDialog");
-            if (!dialog.opened || bridge.folderSelectionDiscovering) return;
+            if (!dialog.opened || bridge.settings.folderSelectionDiscovering) return;
             shot("folders");
             for (let i = 0; i < 12; ++i) {
                 input.keyClick(Qt.Key_Tab, Qt.NoModifier, 0);
@@ -319,19 +326,19 @@ QtObject {
             input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0); stage = 11; break;
         }
         case 11:
-            bridge.togglePlayback(); stage = 12; break;
+            bridge.player.togglePlayback(); stage = 12; break;
         case 12:
             shot("playback-loading"); stage = 13; break;
         case 13:
-            if (!bridge.playbackMessage.includes("fixture audio unavailable")) return;
+            if (!bridge.player.playbackMessage.includes("fixture audio unavailable")) return;
             shot("playback-error");
             find(window.contentItem, "songsTabButton").clicked();
-            bridge.searchLibrary("missing"); stage = 14; break;
+            bridge.library.searchLibrary("missing"); stage = 14; break;
         case 14:
-            if (bridge.libraryLoading || bridge.trackCount !== 0) return;
-            shot("songs-empty"); bridge.searchLibrary("visual-error"); stage = 15; break;
+            if (bridge.library.libraryLoading || bridge.library.tracks.trackCount !== 0) return;
+            shot("songs-empty"); bridge.library.searchLibrary("visual-error"); stage = 15; break;
         case 15:
-            if (bridge.libraryLoading || !bridge.libraryMessage.includes("visual fixture error")) return;
+            if (bridge.library.libraryLoading || !bridge.library.libraryMessage.includes("visual fixture error")) return;
             shot("songs-error"); finish(); break;
         }
     }
@@ -339,10 +346,10 @@ QtObject {
         const picker = find(window.contentItem, "playlistCoverPicker");
         switch (stage) {
         case 0:
-            if (!bridge.connected || bridge.libraryLoading || !bridge.audioSettingsLoaded) return;
+            if (!bridge.connected || bridge.library.libraryLoading || !bridge.settings.audioSettingsLoaded) return;
             if (testCase === "native-picker") {
                 find(window.contentItem, "playlistsTabButton").clicked();
-                bridge.beginPlaylistCreate(); stage = 41; break;
+                bridge.playlists.beginPlaylistCreate(); stage = 41; break;
             }
             originalWidth = window.width; originalHeight = window.height;
             window.showMinimized(); stage = 1; break;
@@ -359,32 +366,32 @@ QtObject {
             if (window.visibility !== Window.Windowed) return;
             check(window.width === originalWidth && window.height === originalHeight, "restored window geometry");
             find(window.contentItem, "playlistsTabButton").clicked();
-            bridge.beginPlaylistCreate(); stage = 41; break;
+            bridge.playlists.beginPlaylistCreate(); stage = 41; break;
         case 41:
-            if (!bridge.playlistEditorOpen) return;
+            if (!bridge.playlists.playlistEditorOpen) return;
             if (coverPath.length > 0) picker.currentFolder = "file://" + coverPath.slice(0, coverPath.lastIndexOf("/"));
-            bridge.choosePlaylistCover(); stage = 5; break;
+            bridge.playlists.choosePlaylistCover(); stage = 5; break;
         case 5:
             if (!picker.visible) return;
             console.info("Cover picker visible"); shot("cover-picker"); stage = 6; break;
         case 6:
             picker.close();
-            bridge.completePlaylistCoverPick(bridge.playlistEditorEpoch, ""); stage = 7; break;
+            bridge.playlists.completePlaylistCoverPick(bridge.playlists.playlistEditorEpoch, ""); stage = 7; break;
         case 7:
-            check(!picker.visible && bridge.playlistEditorOpen && !bridge.playlistCoverPreparing, "native picker cancellation retains editor");
-            bridge.cancelPlaylistEditor(); finish(); break;
+            check(!picker.visible && bridge.playlists.playlistEditorOpen && !bridge.playlists.playlistCoverPreparing, "native picker cancellation retains editor");
+            bridge.playlists.cancelPlaylistEditor(); finish(); break;
         }
     }
     function queueStep(): void {
         const panel = find(window.contentItem, "queuePanel");
         switch (stage) {
         case 0:
-            if (!bridge.connected || bridge.libraryLoading || !bridge.audioSettingsLoaded) return;
+            if (!bridge.connected || bridge.library.libraryLoading || !bridge.settings.audioSettingsLoaded) return;
             find(window.contentItem, "queueButton").clicked(); stage = 1; break;
         case 1:
-            if (!panel.opened || bridge.queueLoading || bridge.queueTracks.length !== 2) return;
-            if (bridge.queueTracks.some(track => track.artworkUrl.length === 0 || track.durationLabel === "--:--")) return;
-            check(bridge.queueTracks[0].audioId === 42 && bridge.queueTracks[1].audioId === 103, "queue visual order");
+            if (!panel.opened || bridge.queue.queueLoading || bridge.queue.queueTracks.length !== 2) return;
+            if (bridge.queue.queueTracks.some(track => track.artworkUrl.length === 0 || track.durationLabel === "--:--")) return;
+            check(bridge.queue.queueTracks[0].audioId === 42 && bridge.queue.queueTracks[1].audioId === 103, "queue visual order");
             stage = 2; break;
         case 2:
             stage = 4; break;
@@ -403,36 +410,38 @@ QtObject {
         const panel = find(window.contentItem, "queuePanel");
         switch (stage) {
         case 0: {
-            if (!bridge.connected || bridge.libraryLoading || bridge.trackCount !== 80 || !bridge.selectedArtworkUrl) return;
-            const image = imageWithSource(find(window.contentItem, "selectedArtwork"), bridge.selectedArtworkUrl, false);
+            if (!bridge.connected || bridge.library.libraryLoading || bridge.library.tracks.trackCount !== 80 || !bridge.player.selectedArtworkUrl) return;
+            const image = imageWithSource(find(window.contentItem, "selectedArtwork"), bridge.player.selectedArtworkUrl, false);
             if (!image || image.status !== Image.Ready) return;
-            check(bridge.selectedAudioId === 1 && bridge.selectedDurationLabel === "--:--", "ready artwork precedes slow duration HTTP");
+            check(bridge.player.selectedAudioId === 1 && bridge.player.selectedDurationLabel === "--:--", "ready artwork precedes slow duration HTTP");
             console.info("flicker early artwork ready before duration");
             shot("early-art"); stage = 1; break;
         }
         case 1:
-            if (!rowsReady(visibleRows(list), false) || bridge.selectedDurationLabel === "--:--" || bridge.playlistLoading) return;
-            retainedArtwork = bridge.selectedArtworkUrl;
+            if (!rowsReady(visibleRows(list), false) || bridge.player.selectedDurationLabel === "--:--" || bridge.playlists.playlistLoading) return;
+            retainedArtwork = bridge.player.selectedArtworkUrl;
             monitorArtwork = true;
             warmedResets = modelResets;
             shot("warm-songs");
             window.selectedTab = 1; stage = 3; break;
         case 3:
-            if (bridge.playlistLoading || bridge.playlists.length !== 1 || !bridge.playlists[0].artworkUrl) return;
-            check(modelResets === warmedResets, "identical library rows avoid model reset on playlist list");
-            shot("nav-list"); bridge.selectPlaylist(1); stage = 4; break;
+            if (bridge.playlists.playlistLoading || bridge.playlists.playlists.length !== 1 || !bridge.playlists.playlists[0].artworkUrl) return;
+            check(modelResets === warmedResets && bridge.library.tracks.trackCount === 80, "playlist list preserves the independent library model");
+            shot("nav-list"); bridge.playlists.selectPlaylist(1); stage = 4; break;
         case 4:
-            if (bridge.activePlaylistId !== 1 || bridge.trackCount !== 2 || bridge.selectedPlaylistItemId !== 1
+            if (bridge.playlists.activePlaylistId !== 1 || bridge.playlists.tracks.trackCount !== 2 || bridge.playlists.selectedPlaylistItemId !== 1
                 || !rowsReady(visibleRows(pane.tracksList), false)) return;
             check(pane.tracksList.itemAtIndex(0).audioId === pane.tracksList.itemAtIndex(1).audioId
                 && pane.tracksList.itemAtIndex(0).playlistItemId !== pane.tracksList.itemAtIndex(1).playlistItemId,
                 "duplicate audio keeps separate playlist item identities");
-            shot("nav-detail"); bridge.selectPlaylistItem(2); stage = 5; break;
+            check(modelResets === warmedResets && bridge.library.tracks.trackCount === 80 && playlistModelResets > 0, "playlist detail replaces only its own model");
+            shot("nav-detail"); bridge.playlists.selectPlaylistItem(2); stage = 5; break;
         case 5:
-            if (bridge.selectedPlaylistItemId !== 2) return;
+            if (bridge.playlists.selectedPlaylistItemId !== 2) return;
             shot("nav-duplicate"); window.selectedTab = 0; stage = 6; break;
         case 6:
-            if (bridge.playlistVisible || bridge.trackCount !== 80 || !rowsReady(visibleRows(list), false)) return;
+            if (bridge.playlists.playlistVisible || bridge.library.tracks.trackCount !== 80 || !rowsReady(visibleRows(list), false)) return;
+            check(modelResets === warmedResets && bridge.playlists.tracks.trackCount === 2, "returning to Songs retains both independent models");
             shot("nav-songs"); scrollStep = 0; stage = 7; break;
         case 7:
             list.contentY = Math.max(0, list.contentHeight - list.height) * (++scrollStep / 8);
@@ -450,7 +459,7 @@ QtObject {
             if (window.height < 1200) window.height = 1200;
             find(window.contentItem, "queueButton").clicked(); stage = 11; break;
         case 11: {
-            if (!panel.opened || bridge.queueLoading || bridge.queueTracks.length !== 16) return;
+            if (!panel.opened || bridge.queue.queueLoading || bridge.queue.queueTracks.length !== 16) return;
             const rows = []; queueRows(panel.contentItem, rows);
             if (rows.length === 0) return;
             retainedQueueDelegate = rows[0]; stage = 12; break;

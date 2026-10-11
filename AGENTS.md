@@ -21,12 +21,13 @@ new database or an explicitly requested reset; ordinary startup never resets.
 | `crates/radio-db` | Persistence boundary; concrete repositories own SQL and constraints; opaque transactions bind repositories. |
 | `crates/osu-radio-client` | Toolkit-free frontend access, session/supervision, temporary audio downloads and playback worker. |
 | `crates/osu-radio-player` | Synchronous local-file MP3, Ogg/Vorbis and WAV playback, seek and volume; no HTTP, database or GUI. |
-| `apps/osu-radio-gui-vizia` | Inactive Vizia frontend: views, signals, events, styles and assets. |
-| `apps/osu-radio-qt` | Qt/QML Songs, Settings and standalone gallery; typed adapters, artwork cache, window interactions and assets. |
+| `apps/osu-radio-qt` | Qt VM adapters, track models, QML panels and standalone gallery; artwork cache, window interactions and assets. |
 
-Qt (`apps/osu-radio-qt`) is the actively developed GUI. Vizia (`apps/osu-radio-gui-vizia`) is no longer under active development. Route all future GUI requests to the Qt client unless the user explicitly requests Vizia changes.
+Qt (`apps/osu-radio-qt`) is the desktop GUI. Vizia has been removed.
 
-Preserve domain/backend/client/GUI boundaries. The GUI toolkits and child-process server are implementation details, not permanent requirements for future platforms. Track selection changes presentation independently of playback; explicit Play starts the selected track through the client-owned audio worker. Keep UI-only assets and classes out of client view models. Qt and Vizia share the toolkit-free `AppController` for live session, library/media, playback and folder workflows. Their standalone galleries remain offline; Qt uses the opt-in client `mock` module only for gallery demonstrations. Frontends never access persistence directly.
+Preserve domain/backend/client/GUI boundaries. The GUI toolkit and child-process server are implementation details, not permanent requirements for future platforms. Track selection changes presentation independently of playback; explicit Play starts the selected track through the client-owned audio worker. Keep UI-only assets and classes out of client view models. The toolkit-free `AppController` coordinates five state-owning VMs through one event loop. The standalone Qt gallery stays offline and uses the opt-in client `mock` module. Frontends never access persistence directly.
+
+Architectural decisions belong to the user. Changes to crate boundaries, state ownership, dependencies, coordination, protocols, lifecycle or storage require the user's decision. Follow the approved decisions in [architecture](docs/agent/architecture.md); raise unexpected architectural questions before changing those decisions. QSettings is temporary storage, not the chosen future persistence contract.
 
 Preserve unrelated working-tree changes. Use explicit roots in discovery tests and manual checks; unscoped discovery can walk every mounted root. Scanner import reads source data and returns it; it must not copy audio or decide persistence. Do not use Cargo `--all-features`: the workspace contains incompatible database backend features. Use the scoped [verification matrix](docs/agent/development.md#verification-matrix).
 

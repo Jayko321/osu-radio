@@ -1,6 +1,6 @@
 use crate::{
-    controller::{PlaylistAction, PlaylistCandidate, PlaylistsState, TrackSort},
     models::{Playlist, PlaylistItem, PlaylistSummary},
+    view_models::{PlaylistAction, PlaylistCandidate, PlaylistsState, TrackSort},
 };
 use std::collections::HashMap;
 
@@ -164,7 +164,14 @@ impl MockPlaylists {
     }
     fn sort_active(&mut self) {
         if let Some(playlist) = &mut self.view.active {
-            let mut tracks = playlist.items.iter().map(PlaylistItem::track).collect();
+            let mut tracks: Vec<_> = playlist
+                .items
+                .iter()
+                .map(|item| crate::view_models::PlaylistTrack {
+                    item_id: item.id,
+                    track: item.track(),
+                })
+                .collect();
             self.track_sort.sort_playlist(playlist, &mut tracks);
         }
     }

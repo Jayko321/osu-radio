@@ -71,7 +71,7 @@ fn run(mode: LaunchMode) -> ExitCode {
     let smoke = std::env::var_os("OSU_RADIO_QT_SMOKE_TEST").is_some();
     runtime::ffi::configure_engine(engine.as_mut(), smoke);
     let root = if mode == LaunchMode::Songs {
-        "Songs"
+        "Main"
     } else {
         "Gallery"
     };

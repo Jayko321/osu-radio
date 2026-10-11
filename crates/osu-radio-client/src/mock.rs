@@ -3,7 +3,7 @@
 //! Sample IDs are stable so frontends can associate their own artwork after sorting.
 //! Durations are demonstration values; selecting a song does not start playback.
 
-use crate::controller::TrackSort;
+use crate::view_models::TrackSort;
 use serde::Serialize;
 mod playlists;
 pub use playlists::MockPlaylists;
@@ -89,7 +89,7 @@ fn folder_rows() -> Vec<MockFolderRow> {
 /// Frontends translate their events to these toolkit-independent actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
-    Playlist(crate::controller::PlaylistAction),
+    Playlist(crate::view_models::PlaylistAction),
     FolderReset,
     FolderToggle(String),
     FolderRefresh(String),

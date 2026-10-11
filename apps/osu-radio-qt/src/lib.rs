@@ -14,4 +14,15 @@ pub mod runtime;
 
 // CXX-Qt inherited-method declarations cannot carry must_use attributes.
 #[allow(clippy::must_use_candidate)]
+#[expect(
+    clippy::unnecessary_box_returns,
+    reason = "CXX-Qt generated constructor declarations return Box to transfer Rust state through the C++ ABI"
+)]
 pub mod app_bridge;
+
+#[allow(clippy::must_use_candidate)]
+#[expect(
+    clippy::unnecessary_box_returns,
+    reason = "CXX-Qt generated constructor declarations return Box to transfer Rust state through the C++ ABI"
+)]
+pub mod qt_view_models;

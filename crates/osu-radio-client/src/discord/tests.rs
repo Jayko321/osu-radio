@@ -173,30 +173,43 @@ struct MockState {
 }
 struct Mock(Arc<MockState>);
 impl Rpc for Mock {
-    fn connect(&mut self) -> bool {
+    fn connect(&mut self) -> Result<(), Error> {
         self.0.events.lock().unwrap().push("connect".into());
-        self.0.available.load(Ordering::SeqCst)
+        if self.0.available.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            Err(Error::IPCNotFound)
+        }
     }
-    fn set(&mut self, presence: &Presence) -> bool {
+    fn set(&mut self, presence: &Presence, _artwork: bool) -> Result<String, Error> {
         self.0
             .events
             .lock()
             .unwrap()
             .push(format!("set:{}", presence.key.title));
-        !self.0.fail_set.swap(false, Ordering::SeqCst)
+        if self.0.fail_set.swap(false, Ordering::SeqCst) {
+            Err(Error::IPCConnectionFailed)
+        } else {
+            Ok(presence.key.title.clone())
+        }
     }
-    fn clear(&mut self) -> bool {
+    fn clear(&mut self) -> Result<String, Error> {
         self.0.events.lock().unwrap().push("clear".into());
-        true
+        Ok("clear".into())
     }
     fn close(&mut self) {
         self.0.events.lock().unwrap().push("close".into());
     }
-    async fn incoming(&mut self) {
+    async fn incoming(&mut self) -> Result<(), Error> {
         self.0.notify.notified().await;
+        Ok(())
     }
-    fn receive(&mut self) -> bool {
-        !self.0.broken.load(Ordering::SeqCst)
+    fn receive(&mut self) -> Result<Reply, Error> {
+        if self.0.broken.load(Ordering::SeqCst) {
+            Err(Error::IPCConnectionFailed)
+        } else {
+            Ok(Reply::Other)
+        }
     }
 }
 async fn wait_event(state: &MockState, name: &str, count: usize) {
@@ -337,4 +350,52 @@ async fn failed_activity_write_reconnects_and_replays_current_snapshot() {
     );
     sender.send_modify(|value| value.shutdown = true);
     task.await.unwrap();
+}
+
+#[test]
+fn long_paused_artists_preserve_time_and_utf8_limit() {
+    let (mut track, playback) = sample(PlayerState::Paused);
+    for artist in ["a".repeat(200), "かめりあ".repeat(100)] {
+        track.artist = artist;
+        let presence = Presence::from_playback(Some(&track), &playback).unwrap();
+        assert!(presence.paused_label.starts_with("Paused • 1:24 • "));
+        assert!(presence.paused_label.len() <= 128);
+        assert_eq!(
+            serde_json::to_value(presence.activity()).unwrap()["state"],
+            presence.paused_label
+        );
+    }
+    track.title = "a".into();
+    track.artist = "曲".into();
+    let presence = Presence::from_playback(Some(&track), &playback).unwrap();
+    assert_eq!(presence.key.title, "a");
+    assert_eq!(presence.key.artist, "曲");
+}
+
+#[cfg(unix)]
+mod ipc;
+
+#[tokio::test]
+async fn every_transport_failure_grows_retry_up_to_thirty_seconds() {
+    let mut worker = Worker {
+        rpc: Mock(Arc::new(MockState::default())),
+        connected: true,
+        sent: None,
+        pending: None,
+        use_assets: true,
+        retry: Duration::from_secs(1),
+        deadline: Instant::now(),
+    };
+    for delay in [1, 2, 4, 8, 16, 30, 30] {
+        let before = Instant::now();
+        worker.failed("test failure", &Error::IPCConnectionFailed);
+        assert!(worker.deadline.saturating_duration_since(before) >= Duration::from_secs(delay));
+        assert_eq!(
+            worker.retry,
+            Duration::from_secs(delay)
+                .saturating_mul(2)
+                .min(Duration::from_secs(30))
+        );
+        assert!(!worker.connected);
+    }
 }

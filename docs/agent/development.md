@@ -13,7 +13,7 @@ storage imports, or broad machine discovery as routine verification.
 
 The user-confirmed current targets are Linux and Windows. macOS is unverified;
 Android and iOS are future goals. OS-specific discovery branches and a successful
-Linux build do not establish validation on another platform. Vizia and a child
+Linux build do not establish validation on another platform. Qt and a child
 server describe today's desktop implementation, not requirements for all future
 frontends.
 
@@ -35,10 +35,10 @@ frontends.
   `OSU_LAZER_REALM_PARSER_PATH`. Use a real helper for runtime imports; the build
   override itself does not validate that the file exists or works.
 - GUI compilation depends on the platform toolchain and the native requirements
-  of the currently resolved Vizia/graphics stack. A display session is needed
+  of Qt 6.8+ and CXX-Qt 0.10. A display session is needed
   to check actual interactions. Consult current upstream documentation through
   Context7 for platform package/setup advice instead of copying package lists
-  from another OS or Vizia version.
+  from another OS or Qt version.
 - Cargo and .NET dependency restoration may need network access on a fresh
   machine. `--locked` protects Cargo.lock; it does not make builds offline or
   prevent generated artifacts under `target/` and the helper build directories.
@@ -63,11 +63,11 @@ with API docs on/off, player, and client library tests/Clippy with `mock` off/on
 Tests run with `--test-threads=1` to avoid the documented process-fixture races.
 Ignored benchmarks and opt-in integration probes remain skipped.
 
-Qt/QML and inactive Vizia builds are outside this minimal workflow. Qt requires
+Qt/QML builds are outside this minimal workflow. Qt requires
 6.8+ and additional QML modules/plugins; add those checks only after validating
 that setup reproducibly on a hosted runner. PostgreSQL integration, desktop/GPU
 interaction, physical audio and Windows validation remain separate. Workspace
-formatting still checks both frontends. `--locked` applies to Cargo builds/tests/
+formatting checks all remaining packages. `--locked` applies to Cargo builds/tests/
 Clippy, not `cargo fmt` or the helper's NuGet restore.
 
 ## Environment and executable discovery
@@ -152,7 +152,6 @@ playback.
 | Persisted individual/global volume | Repository/service checks on SQLite/PostgreSQL, both server router variants, client mock off/on and Qt offscreen/lint | Verify defaults, upgrade/reimport, shared audio, A/B selection, debounce/retry/stale replies, volume before play and shutdown flush. Physical output and Linux/Windows slider checks remain manual. |
 | Persisted playback queue and assignment protocol | Repository/service tests on each backend, server tests with and without `docs`, client tests with and without `mock`, Qt tests and QML lint below | Use disposable databases; verify recovery, duplicates, stale callbacks/downloads, reconnect and current metadata outside search. Physical output and Windows remain separate. |
 | Client formatting, state, readiness parsing | `cargo test -p osu-radio-client --lib --locked` | [Client tests](../../crates/osu-radio-client/src/lib.rs), [Track tests](../../crates/osu-radio-client/src/view_models/track.rs), [readiness tests](../../crates/osu-radio-client/src/server.rs) and controller tests; process fixtures are isolated. |
-| GUI code and embedded stylesheet paths | `cargo check -p osu-radio-gui-vizia --release --locked` | Release `include_style!` resolves stylesheet paths at compile time. Debug can defer missing paths to runtime. |
 | Server changes, default docs | `cargo clippy -p osu-radio-server --all-targets --locked` | Compiles the documentation-enabled router; does not launch the server. |
 | Server changes, docs disabled | `cargo clippy -p osu-radio-server --no-default-features --features sqlite --all-targets --locked` | Compiles the other router and checks OpenAPI annotations remain optional. |
 | Covered cross-crate changes | Combine the affected rows above | Do not automatically expand to persistence workflows or real installation reads. |
@@ -289,7 +288,7 @@ necessary. See [database](database.md) for lock, hash and cleanup guarantees.
 
 For a GUI interaction check, first build the server with
 `cargo build -p osu-radio-server --locked`, then launch the GUI with
-`cargo run -p osu-radio-gui-vizia --locked` only in an already prepared, authorized
+`cargo run -p osu-radio-qt --locked` only in an already prepared, authorized
 runtime environment. The GUI starts a server and therefore uses the current
 database-dependent startup path. This is not part of documentation-only
 validation. Check the affected interactions using the [GUI skill](../../.agents/skills/osu-radio-gui/SKILL.md).
@@ -301,27 +300,16 @@ replacement for the isolated readiness parser tests; it creates its own temporar
 ## Component gallery
 
 ```sh
-cargo run -p osu-radio-gui-vizia --locked -- --component-gallery
+cargo run -p osu-radio-qt --locked -- --component-gallery
 ```
 
 This launch mode is chosen before constructing the normal app or Tokio runtime.
 It needs no server binary, `.env`, database or osu! installation; examples and
 state live in memory. `--help` prints the launch syntax without opening a window.
 
-Headless verification for component changes:
-
-```sh
-cargo test -p osu-radio-gui-vizia --locked
-cargo check -p osu-radio-gui-vizia --release --locked
-cargo clippy -p osu-radio-gui-vizia --all-targets --locked -- -D warnings
-cargo fmt -p osu-radio-gui-vizia --check
-```
-
-The CSS test uses the exact Vizia 0.4 parser and checks errors, recovery warnings,
-unknown custom declarations and unresolved property forms. The release check alone
-does not parse stylesheets. Unit tests also cover launch flags, tag cycles,
-single tab selection, case-insensitive menu search, keyboard-index transitions,
-and scroll direction, fractional deltas, scaling, routing and unaffected non-scroll events.
+Headless verification uses the [Qt matrix](#qt-frontend): client tests with
+`mock` off/on, serial Qt probes, generated-import QML lint and scoped Clippy.
+The offline gallery never reads native preferences or starts a server.
 
 The user runs and visually checks the GUI. Suggested manual matrix (not an
 executed result):
@@ -333,15 +321,15 @@ executed result):
   Buttons, tabs, window controls, menu options and switches must not show a focus
   outline, but Tab navigation and keyboard activation must still work. Song
   outlines and the white input-container focus outline must remain.
-- Edit empty/filled fields, inspect sibling placeholders, toggle switches, select
+- Edit empty/filled fields, inspect native placeholders, toggle switches, select
   tabs and cycle each filter tag through all three states.
 - Check white selected-tab backgrounds with dark labels/icons in both the gallery
   and Songs/Settings navigation. Focus fields/searches by mouse and keyboard: one
   white outline must surround the input container. Verify a white blinking caret
   before typing, while editing, and after clearing; blur/disable must hide the
-  empty caret, and the separate placeholder must remain visible when empty.
+  empty caret, and the placeholder must remain visible when empty.
 - Scroll in both directions through the gallery, song list, settings, long menus
-  and modal at 100%, 150% and 200% scaling. Target 60 logical pixels per wheel unit;
+  and modal at 100%, 150% and 200% scaling. Qt doubles the platform's default wheel line count;
   test fractional/touchpad motion, Shift/horizontal scrolling, nested routing and
   both scroll bounds. The toolkit combines wheel/touchpad deltas, so both change.
 - Search the playlist menu (including no results), scroll long/wrapped names,
@@ -372,8 +360,7 @@ executed result):
 | `Failed to load .env` | Inspect the discovered file in the actual child's working directory or ancestors for parse/read errors. Only `NotFound` is ignored; an existing broken file is fatal even with environment configuration. |
 | GUI cannot find the server binary | Build the server first and check explicit option, environment override, sibling executable, then `PATH`. |
 | Embedded startup times out | Check forwarded stderr and the readiness marker before changing timeout settings. |
-| Style appears ignored or a control cannot be clicked | Follow [frontend pitfalls](frontend.md) and inspect the owning stylesheet, inclusion, overlapping layers, and child hit testing. |
-| A nonempty textbox works but an empty placeholder crashes | Use the existing sibling-label pattern described in [frontend](frontend.md); do not add `.placeholder(...)` to an empty Vizia textbox. |
+| Style appears ignored or a control cannot be clicked | Follow [frontend](frontend.md) and inspect QML resources, overlapping layers, enabled state and hit testing. |
 
 ## Skill selection and upstream documentation
 
@@ -446,8 +433,9 @@ Recommended automated checks:
 ```sh
 cargo test -p osu-radio-client --lib --locked
 cargo test -p osu-radio-client --features mock --lib --locked
-cargo test -p osu-radio-qt --locked
+cargo test -p osu-radio-qt --locked -- --test-threads=1
 cargo build -p osu-radio-qt --locked
+cargo clippy -p osu-radio-client --all-targets --locked -- -D warnings
 cargo clippy -p osu-radio-client --features mock -p osu-radio-qt --all-targets --locked -- -D warnings
 cargo fmt -p osu-radio-client -p osu-radio-qt --check
 ```
@@ -573,6 +561,57 @@ cursor. GPU runs remain necessary to inspect blur, shadows and rounded masks;
 the offscreen software renderer cannot establish those effects. Native window
 operations and cover-picker cancellation have a separate internal `native` probe;
 the folder chooser, physical drag/resize and Windows require separate checks.
+
+## View model refactor verification
+
+The 2026-10-12 refactor follows the approved [architecture](architecture.md):
+five client state/handler owners, a single coordinator/event loop, separate Qt
+adapters and panels, independent track models, common media scheduling and
+temporary native QSettings. Vizia is removed. The server only relocates its JPEG
+test fixture; HTTP/storage contracts and remaining dependency versions are unchanged.
+
+Verification runs on Linux with Rust 1.98.0 and Qt 6.12.0. The root Qt/server
+matrix uses Rust-bundled LLD, `CXXFLAGS=-g0`, incremental compilation disabled
+and one test codegen unit; final client suites reuse an isolated cached target.
+Local HTTP/IPC fixtures require execution outside the restricted sandbox;
+Qt probes run sequentially with offscreen/software rendering. The original
+working tree was saved before implementation and passed client tests with mock
+off/on (122/131), player tests (6), server tests with/without docs (44/39 plus
+startup), five Qt unit tests and 17 ordinary Qt probes.
+
+Executed after the initial refactor integration:
+
+| Check | Result |
+| --- | --- |
+| Client library with mock off/on, sequential | 128/137 passed; two existing timing benchmarks ignored in each configuration |
+| Player tests | Six passed |
+| Server tests with/without docs on SQLite, sequential | 44/39 passed; startup probe passed in each configuration; two existing ignored tests per configuration |
+| Qt, sequential | Five unit tests and 17 ordinary integration probes passed |
+| Explicit Qt real-backend probes | Both passed on disposable SQLite |
+| Client embedded-server probe | Passed; restart preserves temporary database state and the source marker remains unchanged |
+| Scoped all-target Clippy | Client mock off/on, player, Qt and both server configurations passed with warnings denied |
+| Generated-module QML lint | Passed with zero warnings (`-W 0`); all production QML and probes included |
+| Workspace formatting and whitespace | `cargo fmt --all --check` and `git diff --check` passed |
+
+The subsequent 2026-10-12 module relocation places all five VMs and their
+folder, volume and sorting support in `osu-radio-client/src/view_models/`.
+Imports, exports and source links were updated together. Client library tests
+were rerun with mock off/on (128/137 passed, two ignored timing benchmarks each),
+as were all-target Clippy for the client in both configurations and Qt with
+warnings denied, workspace formatting, whitespace and local guide link checks.
+The broader runtime/backend matrix above was not repeated for this source-only
+relocation; GUI behavior, audio output and Windows were not manually rechecked.
+
+The same independent reviewer checked the complete integration and rechecked
+all fixes; no actionable finding remains. Regression coverage includes popup
+closure/focus after a volume-mode change, persistent independent models during
+navigation, identical selection after cache invalidation/decode failure and
+audio-worker startup error presentation with token-bound pause. Pre-existing
+Discord source/tests and guide sections remain unchanged. Cargo.lock pruning
+preserves all remaining package versions, sources and checksums.
+
+Physical sound, desktop/GPU/native picker interaction, Windows execution,
+PostgreSQL execution and real installation imports require separate validation.
 
 ## Audio playback verification
 
@@ -718,13 +757,13 @@ still appears during compilation.
 
 Use the repository/backend and Qt matrices above: SQLite and fresh disposable
 PostgreSQL separately, server `docs` on/off, client `mock` on/off, Qt offscreen
-and disposable real-backend probes, Vizia compatibility, scoped Clippy, QML lint,
+and disposable real-backend probes, scoped Clippy, QML lint,
 formatting and guide-link checks. The
 [repository history checks](../../crates/radio-db/src/tests/listening_history.rs)
 cover a populated upgrade, source identity, rollback, batched reads and reset;
 [service history checks](../../crates/radio-services/src/tests/listening_history.rs)
 cover durable dates, source removal/return, queue clear and token acknowledgements.
-[Client sorting checks](../../crates/osu-radio-client/src/controller/sorting/tests.rs)
+[Client sorting checks](../../crates/osu-radio-client/src/view_models/sorting/tests.rs)
 cover display keys, late responses and media-preserving reorder; worker and queue
 tests cover successful start, failures and callback retries. Qt model and QML
 probes exercise item identity, cache retention and menu keyboard controls.
@@ -754,7 +793,7 @@ not exercised.
 
 The folder-selection change adds isolated tests in
 [client stream tests](../../crates/osu-radio-client/src/api/folder_tests.rs),
-[controller tests](../../crates/osu-radio-client/src/controller/folders_tests.rs),
+[folder workflow tests](../../crates/osu-radio-client/src/view_models/folders_tests.rs),
 [service tests](../../crates/radio-services/src/tests/folder_selection.rs),
 [route tests](../../apps/osu-radio-server/src/routes/folder_selection_tests.rs),
 and the [Qt probe](../../apps/osu-radio-qt/tests/AdapterProbe.qml). They use explicit
@@ -803,7 +842,7 @@ were therefore not verified; icon origins are recorded in
 
 Use the existing SQLite/PostgreSQL, server `docs` on/off, client `mock` on/off,
 Qt offscreen/lint and scoped Clippy matrix above. The
-[client preference tests](../../crates/osu-radio-client/src/controller/preferences/tests.rs)
+[client preference tests](../../crates/osu-radio-client/src/view_models/preferences/tests.rs)
 cover all four title/artist combinations, whitespace fallback, retained suffixes,
 late responses, display sorting, pending playlist captions and unchanged media.
 [Playlist contracts](../../crates/radio-db/src/tests/playlists.rs) and
@@ -853,7 +892,7 @@ repeat import, preserved item IDs/order/custom covers, overwritten manual edits,
 missing/restored maps, source removal/return and rollback after collection writes.
 [Folder checks](../../crates/radio-services/src/tests/folder_selection.rs) cover
 bad source reads and concurrent settings/deletion across the read boundary.
-[Client checks](../../crates/osu-radio-client/src/controller/folders_tests.rs)
+[Client checks](../../crates/osu-radio-client/src/view_models/folders_tests.rs)
 exercise staged refresh and independent playlist reload after a library error;
 playlist tests cover stale responses during a concurrent mutation. The
 [Qt probe](../../apps/osu-radio-qt/tests/AdapterProbe.qml) activates the refresh
@@ -892,7 +931,15 @@ Use `cargo test -p osu-radio-client --lib --locked` and the same command with
 `scripts/lint-qml.sh` under the Qt app, and scoped all-target Clippy for the
 client (mock off/on) and Qt, with `--locked -- -D warnings`. Run
 `cargo fmt --check`. None of the RPC mocks require Discord, a database or audio
-hardware. The Qt `discord_preference_persists_searches_and_toggles_without_discord_or_server`
+hardware. The [real Unix IPC worker tests](../../crates/osu-radio-client/src/discord/tests/ipc.rs)
+also run in the client library suite: they bind isolated temporary sockets without
+changing global environment or connecting to installed Discord. They cover idle
+silence beyond the two-second I/O deadline after READY/ACK, fragment completion,
+64 KiB bounds (including handshake), malformed/unfinished frames, cancellation,
+byte-exact PING/PONG, nonce-correlated artwork fallback and clear errors, stale
+responses and increasing/resettable reconnect delays. These tests exercise the
+production worker and transport; they do not establish native Discord acceptance.
+The Qt `discord_preference_persists_searches_and_toggles_without_discord_or_server`
 probe uses isolated native settings and an intentionally unavailable server.
 
 If a Windows GNU cross toolchain is installed, additionally run

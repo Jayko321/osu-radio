@@ -463,7 +463,7 @@ mod tests {
     async fn serves_only_stored_media_ids_and_handles_missing_files() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("cover");
-        let bytes = include_bytes!("../../../osu-radio-gui-vizia/assets/covers/karakara.jpg");
+        let bytes = include_bytes!("../../tests/fixtures/karakara.jpg");
         std::fs::write(&path, bytes).unwrap();
         let mut set = beatmap_set(1, "/missing/audio");
         set.beatmaps[0].metadata.as_mut().unwrap().background_file = Some("bg.jpg".into());

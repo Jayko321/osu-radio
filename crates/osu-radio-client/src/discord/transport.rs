@@ -1,4 +1,4 @@
-//! Socket I/O only. Handshake, frame encoding, Activity, clear and decode belong to the crate.
+//! Bounded IPC frames; the crate supplies Activity serialization and outgoing JSON framing.
 use super::{APPLICATION_ID, Desired, IO_TIMEOUT};
 use discord_rich_presence::{DiscordIpc, error::Error};
 use std::{future::Future, io};
@@ -16,23 +16,89 @@ pub(super) struct Transport {
     runtime: Handle,
     state: watch::Receiver<Desired>,
     socket: Option<Socket>,
+    first_byte: Option<u8>,
+    nonce: u64,
+    #[cfg(all(test, unix))]
+    test_path: Option<std::path::PathBuf>,
     pub(super) cancellable: bool,
-    pub(super) use_assets: bool,
 }
+const MAX_PAYLOAD: u32 = 64 * 1024;
 impl Transport {
     pub(super) const fn new(runtime: Handle, state: watch::Receiver<Desired>) -> Self {
         Self {
             runtime,
             state,
             socket: None,
+            first_byte: None,
+            nonce: 0,
+            #[cfg(all(test, unix))]
+            test_path: None,
             cancellable: true,
-            use_assets: true,
         }
     }
-    pub(super) async fn ready(&self) {
-        if let Some(socket) = &self.socket {
-            let _ = socket.readable().await;
+    pub(super) async fn ready(&mut self) -> Result<(), Error> {
+        if self.first_byte.is_none() {
+            let socket = self.socket.as_mut().ok_or(Error::NotConnected)?;
+            let mut byte = [0];
+            // read is cancellation-safe; readiness alone can be a false positive.
+            if socket.read(&mut byte).await.map_err(Error::ReadError)? == 0 {
+                return Err(Error::ReadError(io::ErrorKind::UnexpectedEof.into()));
+            }
+            self.first_byte = byte.first().copied();
         }
+        Ok(())
+    }
+    pub(super) fn next_nonce(&mut self) -> String {
+        self.nonce = self.nonce.wrapping_add(1);
+        self.nonce.to_string()
+    }
+    pub(super) fn recv_raw(&mut self) -> Result<(u32, Vec<u8>), Error> {
+        let socket = self.socket.as_mut().ok_or(Error::NotConnected)?;
+        let first_byte = self.first_byte.take();
+        bounded(&self.runtime, &mut self.state, self.cancellable, async {
+            let mut header = [[0; 4]; 2];
+            let bytes = header.as_flattened_mut();
+            if let Some(byte) = first_byte {
+                let (head, tail) = bytes.split_at_mut(1);
+                head.copy_from_slice(&[byte]);
+                socket.read_exact(tail).await?;
+            } else {
+                socket.read_exact(bytes).await?;
+            }
+            let [opcode, length] = header;
+            let opcode = u32::from_le_bytes(opcode);
+            let length = u32::from_le_bytes(length);
+            if length > MAX_PAYLOAD {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Discord IPC frame exceeds 64 KiB",
+                ));
+            }
+            let length = usize::try_from(length).map_err(io::Error::other)?;
+            let mut payload = vec![0; length];
+            socket.read_exact(&mut payload).await?;
+            Ok((opcode, payload))
+        })
+        .map_err(Error::ReadError)
+    }
+    pub(super) fn pong(&mut self, payload: &[u8]) -> Result<(), Error> {
+        let length = u32::try_from(payload.len())
+            .map_err(|error| Error::WriteError(io::Error::other(error)))?;
+        let mut frame = Vec::with_capacity(8_usize.saturating_add(payload.len()));
+        frame.extend_from_slice(&4_u32.to_le_bytes());
+        frame.extend_from_slice(&length.to_le_bytes());
+        frame.extend_from_slice(payload);
+        self.write(&frame)
+    }
+    #[cfg(all(test, unix))]
+    pub(super) fn with_path(
+        runtime: Handle,
+        state: watch::Receiver<Desired>,
+        path: std::path::PathBuf,
+    ) -> Self {
+        let mut transport = Self::new(runtime, state);
+        transport.test_path = Some(path);
+        transport
     }
 }
 fn bounded<T>(
@@ -56,10 +122,16 @@ impl DiscordIpc for Transport {
         APPLICATION_ID
     }
     fn connect_ipc(&mut self) -> Result<(), Error> {
-        self.socket = Some(
-            bounded(&self.runtime, &mut self.state, true, open())
-                .map_err(|_| Error::IPCConnectionFailed)?,
-        );
+        #[cfg(all(test, unix))]
+        if let Some(path) = &self.test_path {
+            self.socket = Some(
+                bounded(&self.runtime, &mut self.state, true, Socket::connect(path))
+                    .map_err(Error::ReadError)?,
+            );
+            return Ok(());
+        }
+        self.socket =
+            Some(bounded(&self.runtime, &mut self.state, true, open()).map_err(Error::ReadError)?);
         Ok(())
     }
     fn send_handshake(&mut self) -> Result<(), Error> {
@@ -71,8 +143,16 @@ impl DiscordIpc for Transport {
         if opcode == 1 && payload.get("evt").and_then(serde_json::Value::as_str) == Some("READY") {
             Ok(())
         } else {
-            Err(Error::IPCConnectionFailed)
+            Err(Error::ReadError(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Discord handshake expected READY",
+            )))
         }
+    }
+    fn recv(&mut self) -> Result<(u32, serde_json::Value), Error> {
+        let (opcode, payload) = self.recv_raw()?;
+        let value = serde_json::from_slice(&payload).map_err(|_| Error::JsonParseResponse)?;
+        Ok((opcode, value))
     }
     fn read(&mut self, buffer: &mut [u8]) -> Result<(), Error> {
         let socket = self.socket.as_mut().ok_or(Error::NotConnected)?;
@@ -98,6 +178,7 @@ impl DiscordIpc for Transport {
     fn close(&mut self) -> Result<(), Error> {
         // Dropping the socket is sufficient and cannot block on an unresponsive peer.
         self.socket = None;
+        self.first_byte = None;
         Ok(())
     }
 }
@@ -164,6 +245,38 @@ async fn open() -> io::Result<Socket> {
 mod tests {
     use super::*;
     use std::time::Duration;
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn cancelling_first_byte_wait_preserves_frame_and_close_discards_saved_byte() {
+        let (_sender, receiver) = watch::channel(Desired {
+            enabled: true,
+            ..Desired::default()
+        });
+        let mut transport = Transport::new(Handle::current(), receiver);
+        let (socket, mut peer) = Socket::pair().unwrap();
+        transport.socket = Some(socket);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), transport.ready())
+                .await
+                .is_err()
+        );
+        peer.write_all(&[3, 0, 0, 0, 2, 0, 0, 0, 0xff, 0])
+            .await
+            .unwrap();
+        transport.ready().await.unwrap();
+        let mut transport = tokio::task::spawn_blocking(move || {
+            assert_eq!(transport.recv_raw().unwrap(), (3, vec![0xff, 0]));
+            transport
+        })
+        .await
+        .unwrap();
+        peer.write_all(&[1]).await.unwrap();
+        transport.ready().await.unwrap();
+        assert_eq!(transport.first_byte, Some(1));
+        transport.close().unwrap();
+        assert_eq!(transport.first_byte, None);
+        assert!(matches!(transport.ready().await, Err(Error::NotConnected)));
+    }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn unresponsive_io_times_out_and_disable_interrupts_an_inflight_read() {
         let (sender, receiver) = watch::channel(Desired {

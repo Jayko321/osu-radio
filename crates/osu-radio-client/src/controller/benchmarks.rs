@@ -203,7 +203,7 @@ async fn controller_http_timings() {
             };
             let mut samples = Vec::new();
             for sample in 0..6 {
-                controller.library_query = query.into();
+                controller.library.query = query.into();
                 let start = Instant::now();
                 if compact {
                     controller.load_library(delay, false);
@@ -222,12 +222,12 @@ async fn controller_http_timings() {
                         .unwrap();
                     let tracks = original_library_tracks(&sets);
                     controller.complete(Completed::Library {
-                        request: controller.library_request,
+                        request: controller.library.request,
                         invalidate_artwork: true,
                         result: Ok(tracks),
                     });
                 }
-                assert!(controller.library.retry.is_none());
+                assert!(controller.library.status.retry.is_none());
                 if sample != 0 {
                     samples.push(start.elapsed().as_secs_f64() * 1000.);
                 }

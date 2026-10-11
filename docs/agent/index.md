@@ -9,7 +9,7 @@ successful playback or validation on every target platform.
 ## Reading order
 
 1. Read the shared entry point and this page when entering the project.
-2. Read only the relevant component guide: [scanner](scanner.md),
+2. Read approved [architecture](architecture.md), then only the relevant component guide: [scanner](scanner.md),
    [frontend](frontend.md), [database](database.md), or [backend](backend.md). Follow its source/test links
    before editing an affected behavior.
 3. Use [development](development.md) for environment requirements, scoped
@@ -35,9 +35,8 @@ Tokio runtime dependency. The helper is a separate .NET project.
 | `radio-services` | [Shared handle and model services](../../crates/radio-services/src/lib.rs) | Persisted-model access and transactional workflows for server and CLI. |
 | `radio-db` | [Package boundary](../../crates/radio-db/Cargo.toml) | [Repositories, SQL and persistence constraints](database.md). |
 | `osu-radio-player` | [Local player](../../crates/osu-radio-player/src/lib.rs) | Local MP3, Ogg/Vorbis and WAV decoding/output, transport, seek and session volume; no source IDs or HTTP. |
-| `osu-radio-client` | [Public facade](../../crates/osu-radio-client/src/lib.rs), [session](../../crates/osu-radio-client/src/session.rs), [view models](../../crates/osu-radio-client/src/view_models/track.rs) | Changing reusable frontend communication, supervision or toolkit-free UI data. |
-| `osu-radio-gui-vizia` | [App state/events](../../apps/osu-radio-gui-vizia/src/app.rs), [view shell](../../apps/osu-radio-gui-vizia/src/views/mod.rs), [assets](../../apps/osu-radio-gui-vizia/src/assets.rs) | Changing desktop presentation and interactions. |
-| `osu-radio-qt` | [Rust launch/adapter](../../apps/osu-radio-qt/src/main.rs), [QML views](../../apps/osu-radio-qt/qml/Songs.qml) | Live Qt Songs/Playlists/Settings tabs and standalone component gallery; shares the client application controller with Vizia. |
+| `osu-radio-client` | [Public facade](../../crates/osu-radio-client/src/lib.rs), [session](../../crates/osu-radio-client/src/session.rs), [view models](../../crates/osu-radio-client/src/view_models/mod.rs) | Changing reusable frontend communication, supervision or toolkit-free UI data. |
+| `osu-radio-qt` | [Rust launch/adapter](../../apps/osu-radio-qt/src/main.rs), [QML shell](../../apps/osu-radio-qt/qml/Main.qml) | Live Qt Songs/Playlists/Settings tabs and standalone component gallery; uses the client VMs and application coordinator. |
 
 ## Architecture
 
@@ -46,9 +45,8 @@ arrows show intended future capabilities; they are not implemented paths.
 
 ```mermaid
 flowchart LR
-    Qt["Qt/QML Songs and Settings"] --> Client
+    Qt["Qt/QML panels and adapters"] --> Client["Toolkit-free client: five VMs and coordinator"]
     Gallery["Standalone component galleries"] --> Mock["Memory-only demo state"]
-    GUI["Vizia GUI: views, signals, events"] --> Client["Toolkit-free client: session, HTTP, view models"]
     Client -->|"HTTP; supervises child today"| Server["Backend: routes and services"]
     Server --> Services["radio-services: model services and transactions"]
     Services -->|"folder discovery"| Scanner["Scanner: discovery and source readers"]
@@ -68,7 +66,7 @@ Persistence workflows are described in [database](database.md). The backend boun
 source-file access, source reading, persistence and audio serving; reusable
 scanner/domain pieces also support the development CLI. The frontend talks
 through the toolkit-free client. A replacement toolkit or hosting mechanism must
-preserve these responsibilities without inheriting Vizia or subprocess hosting
+preserve these responsibilities without inheriting Qt or subprocess hosting
 as a permanent platform requirement.
 
 ## Capability status
@@ -86,9 +84,9 @@ Tests and their limits are linked in the component guides.
 | Optional OpenAPI/Scalar build | Implemented | [Backend](backend.md); both documentation feature states need verification. |
 | Songs/settings tabs, library selection, window actions | Implemented UI bindings | [Frontend interaction table](frontend.md#implemented-interactions-and-placeholders). Source binding is not cross-platform interaction validation. |
 | Songs search | Implemented | Server substring search through the shared controller, 200 ms debounce. See [frontend](frontend.md). |
-| Qt Settings search | Implemented | Local case-insensitive substring filtering by section titles/current setting names, conditional rows and empty state; Vizia Settings search remains a placeholder. See [frontend](frontend.md#qt-frontend). |
+| Qt Settings search | Implemented | Local case-insensitive substring filtering by section titles/current setting names, conditional rows and empty state. See [frontend](frontend.md#qt-frontend). |
 | Track sorting and listening dates | Implemented | Shared session sort for library/search/playlists; source-keyed successful-start history. See [frontend](frontend.md#track-sorting-and-listening-dates) and [database](database.md#listening-history). |
-| Library and folder settings | Implemented | [Frontend](frontend.md); server rows, bounded artwork loading, optional durations, folder dropdown, Qt staged discovery/import/removal and Vizia native chooser registration. Selection is presentation only. |
+| Library and folder settings | Implemented | [Frontend](frontend.md); server rows, bounded artwork loading, optional durations, folder dropdown, Qt staged discovery/import/removal. Selection is presentation only. |
 | Server playback queue, transport, seeking and volume | Implemented | [Database](database.md), [backend](backend.md), [frontend](frontend.md); persisted queue and token-bound assignments, client downloads and plays locally. Seeking and audio output remain local; volume preferences are persisted. |
 | Individual track volume | Implemented | Absolute source-keyed overrides, retained mode/global settings, pre-play assignment volume and Qt controls; see [frontend](frontend.md#individual-track-volume) and [database](database.md#audio-volume-settings). |
 | User playlists of individual difficulties and osu! collections | Implemented | [Storage and service](database.md#user-playlists), [HTTP](backend.md#database-backed-http-contracts), [Qt/client](frontend.md#user-playlists); stable source keys, unavailable entries, persisted custom covers and queue launch snapshots. Stable/lazer collections import with folders and refresh through the staged folder action. |
@@ -107,7 +105,7 @@ discovery do not establish that a complete app has been validated there.
 
 Preserve source-neutral domain types, backend ownership of OS/source access,
 a toolkit-free client, and a GUI concerned with presentation and events. Neither
-the current Vizia choice nor a server subprocess constrains the future platform
+the current Qt choice nor a server subprocess constrains the future platform
 implementation. Hosted sources must not be ruled out by assuming every user
 needs a local installation.
 

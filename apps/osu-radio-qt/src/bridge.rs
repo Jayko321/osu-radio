@@ -1,8 +1,8 @@
 //! Qt-only projection of the shared, memory-only component gallery.
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
-use osu_radio_client::controller::PlaylistAction;
 use osu_radio_client::mock::{Action, MockState};
+use osu_radio_client::view_models::PlaylistAction;
 use serde_json::json;
 use std::pin::Pin;
 

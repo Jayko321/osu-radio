@@ -16,8 +16,10 @@ if not roots:
 print(max(roots, key=lambda p: p.stat().st_mtime).parent.parent)
 PY
 )
-mapfile -t qml_files < <(rg --files apps/osu-radio-qt/qml apps/osu-radio-qt/tests -g '*.qml' | sort)
 mkdir -p "$lint_root/OsuRadio"
 cp "$qml_import/OsuRadio/qmldir" "$qml_import/OsuRadio/plugin.qmltypes" "$lint_root/OsuRadio/"
-ln -s "$project_root/apps/osu-radio-qt/qml" "$lint_root/OsuRadio/qml"
-"$qml_lint" -I "$lint_root" "${qml_files[@]}"
+# Lint the copied files at their registered module paths. A symlink back to the
+# source tree makes direct singleton checks lose the generated module context.
+cp -R "$project_root/apps/osu-radio-qt/qml" "$lint_root/OsuRadio/qml"
+mapfile -t qml_files < <(rg --files "$lint_root/OsuRadio/qml" apps/osu-radio-qt/tests -g '*.qml' | sort)
+"$qml_lint" -I "$lint_root" -W 0 "${qml_files[@]}"

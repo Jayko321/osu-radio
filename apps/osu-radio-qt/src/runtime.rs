@@ -11,6 +11,32 @@ pub mod ffi {
         include!("src/runtime.h");
         include!("src/native_tests.h");
         type AppBridge = crate::app_bridge::ffi::AppBridge;
+        include!("src/view_models.h");
+        type LibraryViewModel = crate::qt_view_models::ffi::LibraryViewModel;
+        #[rust_name = "new_library_view_model"]
+        #[must_use]
+        fn newLibraryViewModel() -> UniquePtr<LibraryViewModel>;
+        type PlaylistsViewModel = crate::qt_view_models::ffi::PlaylistsViewModel;
+        #[rust_name = "new_playlists_view_model"]
+        #[must_use]
+        fn newPlaylistsViewModel() -> UniquePtr<PlaylistsViewModel>;
+        type SettingsViewModel = crate::qt_view_models::ffi::SettingsViewModel;
+        #[rust_name = "new_settings_view_model"]
+        #[must_use]
+        fn newSettingsViewModel() -> UniquePtr<SettingsViewModel>;
+        type PlayerViewModel = crate::qt_view_models::ffi::PlayerViewModel;
+        #[rust_name = "new_player_view_model"]
+        #[must_use]
+        fn newPlayerViewModel() -> UniquePtr<PlayerViewModel>;
+        type QueueViewModel = crate::qt_view_models::ffi::QueueViewModel;
+        #[rust_name = "new_queue_view_model"]
+        #[must_use]
+        fn newQueueViewModel() -> UniquePtr<QueueViewModel>;
+        type TrackListModel = crate::qt_view_models::ffi::TrackListModel;
+        #[rust_name = "new_track_list_model"]
+        #[must_use]
+        fn newTrackListModel() -> UniquePtr<TrackListModel>;
+
         #[rust_name = "new_app_bridge"]
         #[must_use]
         fn newAppBridge() -> UniquePtr<AppBridge>;
@@ -75,6 +101,12 @@ pub mod ffi {
         fn preparePlaylistCover(url: &QString, error: &mut QString) -> QByteArray;
     }
     impl UniquePtr<AppBridge> {}
+    impl UniquePtr<LibraryViewModel> {}
+    impl UniquePtr<PlaylistsViewModel> {}
+    impl UniquePtr<SettingsViewModel> {}
+    impl UniquePtr<PlayerViewModel> {}
+    impl UniquePtr<QueueViewModel> {}
+    impl UniquePtr<TrackListModel> {}
 }
 
 static CONTEXT: Mutex<Option<Arc<RuntimeContext>>> = Mutex::new(None);

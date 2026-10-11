@@ -39,7 +39,13 @@ QtObject {
         function onStateJsonChanged() { probe.notifications++; }
     }
     readonly property Connections modelConnection: Connections {
-        target: probe.bridge
+        target: probe.bridge ? probe.bridge.library.tracks : null
+        ignoreUnknownSignals: true
+        function onDataChanged() { probe.rowChanges++; }
+        function onModelReset() { probe.resets++; }
+    }
+    readonly property Connections playlistModelConnection: Connections {
+        target: probe.bridge ? probe.bridge.playlists.tracks : null
         ignoreUnknownSignals: true
         function onDataChanged() { probe.rowChanges++; }
         function onModelReset() { probe.resets++; }
@@ -339,68 +345,68 @@ QtObject {
         }
     }
     function folderProbe(): void {
-        if (!bridge.connected || bridge.foldersLoading || bridge.libraryLoading) return;
+        if (!bridge.connected || bridge.settings.foldersLoading || bridge.library.libraryLoading) return;
         const dialog = findChild(window.contentItem, "folderSelectionDialog");
         const fresh = "/fixtures/101/osu!.db";
         const failed = "/fixtures/102/client.realm";
         switch (stage) {
         case 0:
-            bridge.addFolder();
+            bridge.settings.addFolder();
             stage = 1;
             break;
         case 1:
-            if (bridge.folderSelectionDiscovering || bridge.folderSelectionRows.length !== 4 || !dialog.opened) return;
-            if (bridge.folderSelectionRows.some(row => row.countPending)) return;
-            check(bridge.folderSelectionRows[3].countError.includes("fixture preview"), "count failure is separate from staging");
-            bridge.retryFolderCount(failed);
+            if (bridge.settings.folderSelectionDiscovering || bridge.settings.folderSelectionRows.length !== 4 || !dialog.opened) return;
+            if (bridge.settings.folderSelectionRows.some(row => row.countPending)) return;
+            check(bridge.settings.folderSelectionRows[3].countError.includes("fixture preview"), "count failure is separate from staging");
+            bridge.settings.retryFolderCount(failed);
             stage = 2;
             break;
         case 2:
-            if (bridge.folderSelectionRows[3].countPending) return;
-            check(bridge.folderSelectionRows[3].count === "0", "zero is a real count");
-            bridge.toggleFolderSelection(fresh);
-            bridge.toggleFolderSelection(fresh);
+            if (bridge.settings.folderSelectionRows[3].countPending) return;
+            check(bridge.settings.folderSelectionRows[3].count === "0", "zero is a real count");
+            bridge.settings.toggleFolderSelection(fresh);
+            bridge.settings.toggleFolderSelection(fresh);
             stage = 3;
             break;
         case 3:
-            if (bridge.folderSelectionRows[2].action !== "") return;
-            check(bridge.folders.length === 2, "choosing and staging do not save");
-            bridge.toggleFolderSelection(fresh);
-            bridge.toggleFolderSelection(failed);
-            bridge.toggleFolderSelection("/fixtures/31/client.realm");
+            if (bridge.settings.folderSelectionRows[2].action !== "") return;
+            check(bridge.settings.folders.length === 2, "choosing and staging do not save");
+            bridge.settings.toggleFolderSelection(fresh);
+            bridge.settings.toggleFolderSelection(failed);
+            bridge.settings.toggleFolderSelection("/fixtures/31/client.realm");
             stage = 4;
             break;
         case 4:
-            if (bridge.folderSelectionRows[2].action !== "add" || bridge.folderSelectionRows[0].action !== "remove") return;
-            bridge.applyFolderSelection();
+            if (bridge.settings.folderSelectionRows[2].action !== "add" || bridge.settings.folderSelectionRows[0].action !== "remove") return;
+            bridge.settings.applyFolderSelection();
             stage = 5;
             break;
         case 5:
-            if (!bridge.folderSelectionApplying) return;
+            if (!bridge.settings.folderSelectionApplying) return;
             check(!dialog.dismissible && !findChild(dialog.contentItem, "applyFolders").enabled, "Apply disables editing and dismissal");
             input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0);
-            bridge.closeFolderSelection();
+            bridge.settings.closeFolderSelection();
             stage = 6;
             break;
         case 6:
-            if (bridge.folderSelectionApplying) return;
-            check(bridge.folderSelectionOpen && dialog.visible, "partial failure remains open");
-            check(bridge.folderSelectionRows[2].registered && bridge.folderSelectionRows[2].action === "", "successful addition clears immediately");
-            check(!bridge.folderSelectionRows[0].registered && bridge.folderSelectionRows[0].action === "", "successful removal clears immediately");
-            check(bridge.folderSelectionRows[3].action === "add" && bridge.folderSelectionRows[3].error.includes("fixture import"), "failed action retained");
-            check(bridge.folders.length === 2, "saved folders refreshed after partial success");
-            bridge.applyFolderSelection();
+            if (bridge.settings.folderSelectionApplying) return;
+            check(bridge.settings.folderSelectionOpen && dialog.visible, "partial failure remains open");
+            check(bridge.settings.folderSelectionRows[2].registered && bridge.settings.folderSelectionRows[2].action === "", "successful addition clears immediately");
+            check(!bridge.settings.folderSelectionRows[0].registered && bridge.settings.folderSelectionRows[0].action === "", "successful removal clears immediately");
+            check(bridge.settings.folderSelectionRows[3].action === "add" && bridge.settings.folderSelectionRows[3].error.includes("fixture import"), "failed action retained");
+            check(bridge.settings.folders.length === 2, "saved folders refreshed after partial success");
+            bridge.settings.applyFolderSelection();
             stage = 7;
             break;
         case 7:
-            if (bridge.folderSelectionOpen || bridge.folderSelectionApplying) return;
-            check(bridge.folders.length === 3, "retry saves remaining action");
-            bridge.addFolder();
+            if (bridge.settings.folderSelectionOpen || bridge.settings.folderSelectionApplying) return;
+            check(bridge.settings.folders.length === 3, "retry saves remaining action");
+            bridge.settings.addFolder();
             stage = 8;
             break;
         case 8:
-            if (!bridge.folderSelectionOpen || bridge.folderSelectionRows.length === 0 || !dialog.opened
-                || bridge.folderSelectionDiscovering || bridge.folderSelectionRows.some(row => row.countPending)) return;
+            if (!bridge.settings.folderSelectionOpen || bridge.settings.folderSelectionRows.length === 0 || !dialog.opened
+                || bridge.settings.folderSelectionDiscovering || bridge.settings.folderSelectionRows.some(row => row.countPending)) return;
             const refresh = findChild(dialog.contentItem, "folderRefresh0");
             check(refresh.accessibleName === "Обновить импорт", "registered row has accessible refresh control");
             refresh.forceActiveFocus();
@@ -408,30 +414,30 @@ QtObject {
             stage = 9;
             break;
         case 9:
-            if (bridge.folderSelectionRows[0].action !== "refresh") return;
-            bridge.toggleFolderSelection("/fixtures/52/client.realm");
+            if (bridge.settings.folderSelectionRows[0].action !== "refresh") return;
+            bridge.settings.toggleFolderSelection("/fixtures/52/client.realm");
             stage = 10;
             break;
         case 10:
-            if (bridge.folderSelectionRows[0].action !== "remove") return;
-            bridge.refreshFolderSelection("/fixtures/52/client.realm");
+            if (bridge.settings.folderSelectionRows[0].action !== "remove") return;
+            bridge.settings.refreshFolderSelection("/fixtures/52/client.realm");
             stage = 11;
             break;
         case 11:
-            if (bridge.folderSelectionRows[0].action !== "refresh") return;
-            bridge.applyFolderSelection();
+            if (bridge.settings.folderSelectionRows[0].action !== "refresh") return;
+            bridge.settings.applyFolderSelection();
             stage = 12;
             break;
         case 12:
-            if (bridge.folderSelectionOpen || bridge.folderSelectionApplying) return;
-            check(bridge.folders.length === 3, "refresh preserves registered folders");
-            check(bridge.folderSelectionRows.length === 0, "successful refresh closes and discards preview state");
+            if (bridge.settings.folderSelectionOpen || bridge.settings.folderSelectionApplying) return;
+            check(bridge.settings.folders.length === 3, "refresh preserves registered folders");
+            check(bridge.settings.folderSelectionRows.length === 0, "successful refresh closes and discards preview state");
             finish();
             break;
         }
     }
     function settingsSearchProbe(): void {
-        if (!bridge.connected || bridge.libraryLoading || bridge.foldersLoading || !bridge.audioSettingsLoaded) return;
+        if (!bridge.connected || bridge.library.libraryLoading || bridge.settings.foldersLoading || !bridge.settings.audioSettingsLoaded) return;
         const pane = findChild(window.contentItem, "settingsPane");
         const search = findChild(pane, "settingsSearch");
         const general = findChild(pane, "generalSettingsSection");
@@ -444,8 +450,8 @@ QtObject {
         const message = findChild(pane, "audioSettingsMessage");
         switch (stage) {
         case 0:
-            if (bridge.trackCount !== 3) return;
-            bridge.selectTrack(42);
+            if ((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 3) return;
+            bridge.library.selectTrack(42);
             input.mouseClick(findChild(window.contentItem, "settingsButton"));
             check(general.visible && audio.visible && individual.visible && !global.visible && !empty.visible,
                 "empty query shows current settings and respects conditional global volume");
@@ -499,12 +505,12 @@ QtObject {
         case 5:
             check(search.text === "" && general.visible && audio.visible && !empty.visible
                 && scroll.contentHeight > scroll.height, "keyboard clear restores the full scroll layout");
-            message.text = Qt.binding(() => bridge.audioSettingsMessage);
-            bridge.setIndividualVolumeEnabled(true);
+            message.text = Qt.binding(() => bridge.settings.audioSettingsMessage);
+            bridge.settings.setIndividualVolumeEnabled(true);
             stage = 6;
             break;
         case 6:
-            if (!bridge.individualVolumeEnabled) return;
+            if (!bridge.settings.individualVolumeEnabled) return;
             check(global.visible, "global volume remains conditional on individual mode");
             search.text = "gLoBaL vOlUmE";
             stage = 7;
@@ -513,14 +519,14 @@ QtObject {
             check(!general.visible && audio.visible && !individual.visible && global.visible && !empty.visible,
                 "matching a setting hides other settings inside the same section");
             check(global.y === 0, "hidden individual-volume row leaves no layout gap");
-            check(bridge.selectedAudioId === 42 && findChild(window.contentItem, "playerPane").visible,
+            check(bridge.player.selectedAudioId === 42 && findChild(window.contentItem, "playerPane").visible,
                 "filtering preserves the selected player");
             input.mouseClick(findChild(window.contentItem, "songsTabButton"));
             stage = 8;
             break;
         case 8:
-            if (bridge.libraryLoading) return;
-            check(findChild(window.contentItem, "songSearch").text === "" && bridge.selectedAudioId === 42,
+            if (bridge.library.libraryLoading) return;
+            check(findChild(window.contentItem, "songSearch").text === "" && bridge.player.selectedAudioId === 42,
                 "Settings query is independent of Songs and selection");
             input.mouseClick(findChild(window.contentItem, "settingsButton"));
             stage = 9;
@@ -534,11 +540,11 @@ QtObject {
         case 10:
             check(audio.visible && individual.visible && global.visible,
                 "matching a section shows all currently available settings");
-            bridge.setIndividualVolumeEnabled(false);
+            bridge.settings.setIndividualVolumeEnabled(false);
             stage = 11;
             break;
         case 11:
-            if (bridge.individualVolumeEnabled) return;
+            if (bridge.settings.individualVolumeEnabled) return;
             search.text = "global volume";
             stage = 12;
             break;
@@ -550,61 +556,61 @@ QtObject {
         }
     }
     function searchProbe(): void {
-        if (!bridge.connected || bridge.libraryLoading) return;
+        if (!bridge.connected || bridge.library.libraryLoading) return;
         const search = findChild(window.contentItem, "songSearch");
         switch (stage) {
         case 0:
-            if (bridge.trackCount !== 3) return;
+            if ((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 3) return;
             findChild(window.contentItem, "settingsSearch").text = "settings query";
-            bridge.selectTrack(42);
+            bridge.library.selectTrack(42);
             search.text = "r";
             search.text = "ro";
             search.text = "roc hard";
             stage = 1;
             break;
         case 1:
-            check(bridge.trackCount === 1 && bridge.selectedAudioId === 42, "search preserves selected audio ID");
-            check(bridge.selectedSubtitle === "Fixture artist | Hard", "filtered split label remains stable");
+            check((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) === 1 && bridge.player.selectedAudioId === 42, "search preserves selected audio ID");
+            check(bridge.player.selectedSubtitle === "Fixture artist | Hard", "filtered split label remains stable");
             check(findChild(window.contentItem, "settingsSearch").text === "settings query", "Songs search preserves the independent Settings query");
             search.text = "missing";
             stage = 2;
             break;
         case 2:
-            check(bridge.trackCount === 0 && bridge.libraryMessage === "Nothing found.", "separate search empty state");
+            check((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) === 0 && bridge.library.libraryMessage === "Nothing found.", "separate search empty state");
             search.text = "retry";
             stage = 3;
             break;
         case 3:
-            check(bridge.libraryMessage.includes("fixture search"), "search error visible");
-            bridge.refreshLibrary();
+            check(bridge.library.libraryMessage.includes("fixture search"), "search error visible");
+            bridge.library.refreshLibrary();
             stage = 4;
             break;
         case 4:
-            check(bridge.trackCount === 1 && bridge.selectedAudioId === 42, "refresh retries current query");
+            check((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) === 1 && bridge.player.selectedAudioId === 42, "refresh retries current query");
             search.text = "";
             stage = 5;
             break;
         case 5:
-            check(bridge.trackCount === 3 && bridge.selectedAudioId === 42, "clear restores library and selection");
+            check((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) === 3 && bridge.player.selectedAudioId === 42, "clear restores library and selection");
             finish();
             break;
         }
     }
     function playbackProbe(): void {
-        if (!bridge.connected || bridge.libraryLoading || !bridge.audioSettingsLoaded) return;
+        if (!bridge.connected || bridge.library.libraryLoading || !bridge.settings.audioSettingsLoaded) return;
         const play = findChild(window.contentItem, "playPauseButton");
         const progress = findChild(window.contentItem, "playbackProgress");
         switch (stage) {
         case 0:
-            if (bridge.trackCount !== 3) return;
-            check(bridge.currentAudioId === -1 && bridge.loadingAudioId === -1, "selection alone does not start audio");
+            if ((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 3) return;
+            check(bridge.player.currentAudioId === -1 && bridge.player.loadingAudioId === -1, "selection alone does not start audio");
             check(play.enabled && play.accessibleName === "Play", "selected track can play");
-            check(!progress.enabled && bridge.playbackPositionLabel === "00:00", "noncurrent selection has no seeking");
-            bridge.selectTrack(42);
+            check(!progress.enabled && bridge.player.playbackPositionLabel === "00:00", "noncurrent selection has no seeking");
+            bridge.library.selectTrack(42);
             stage = 1;
             break;
         case 1:
-            if (bridge.selectedAudioId !== 42) return;
+            if (bridge.player.selectedAudioId !== 42) return;
             findChild(window.contentItem, "volumeButton").clicked();
             stage = 2;
             break;
@@ -633,23 +639,23 @@ QtObject {
             break;
         }
         case 3:
-            if (bridge.loadingAudioId !== 42 || Math.round(bridge.volume * 100) !== 25) return;
-            check(bridge.playbackMessage.includes("Loading"), "loading status projects immediately");
-            check(bridge.currentAudioId === 42 && !progress.enabled, "assignment selects current before audio finishes loading");
-            bridge.selectTrack(7);
+            if (bridge.player.loadingAudioId !== 42 || Math.round(bridge.settings.volume * 100) !== 25) return;
+            check(bridge.player.playbackMessage.includes("Loading"), "loading status projects immediately");
+            check(bridge.player.currentAudioId === 42 && !progress.enabled, "assignment selects current before audio finishes loading");
+            bridge.library.selectTrack(7);
             stage = 4;
             break;
         case 4:
-            if (bridge.selectedAudioId !== 7 || bridge.loadingAudioId !== -1 || bridge.currentAudioId !== -1) return;
-            check(bridge.playbackMessage.includes("fixture audio unavailable"), "download error is visible beside controls");
-            check(bridge.currentAudioId === -1 && !progress.enabled, "failed download leaves playback empty");
-            check(Math.round(bridge.volume * 100) === 25, "volume survives selection changes and failed download");
+            if (bridge.player.selectedAudioId !== 7 || bridge.player.loadingAudioId !== -1 || bridge.player.currentAudioId !== -1) return;
+            check(bridge.player.playbackMessage.includes("fixture audio unavailable"), "download error is visible beside controls");
+            check(bridge.player.currentAudioId === -1 && !progress.enabled, "failed download leaves playback empty");
+            check(Math.round(bridge.settings.volume * 100) === 25, "volume survives selection changes and failed download");
             finish();
             break;
         }
     }
     function volumeProbe(): void {
-        if (!bridge.connected || bridge.libraryLoading) return;
+        if (!bridge.connected || bridge.library.libraryLoading) return;
         const toggle = findChild(window.contentItem, "individualVolumeSwitch");
         const global = findChild(window.contentItem, "globalVolumeSlider");
         const play = findChild(window.contentItem, "playPauseButton");
@@ -657,8 +663,8 @@ QtObject {
         const slider = findChild(window.contentItem, "volumeSlider");
         switch (stage) {
         case 0:
-            if (!bridge.audioSettingsCanRetry) return;
-            check(!bridge.audioSettingsLoaded && !play.enabled && !toggle.enabled, "loading failure blocks playback and editing");
+            if (!bridge.settings.audioSettingsCanRetry) return;
+            check(!bridge.settings.audioSettingsLoaded && !play.enabled && !toggle.enabled, "loading failure blocks playback and editing");
             input.mouseClick(findChild(window.contentItem, "settingsButton"));
             check(findChild(window.contentItem, "audioSettingsMessage").visible, "loading failure appears in Audio");
             const settingsScroll = findChild(window.contentItem, "settingsScroll");
@@ -673,73 +679,80 @@ QtObject {
                 "Audio Retry is reachable inside the Settings viewport");
             input.mouseClick(retry); stage = 1; break;
         case 1:
-            if (!bridge.audioSettingsLoaded || bridge.currentAudioId !== 7) return;
-            check(bridge.globalVolumePercent === 20 && Math.round(bridge.volume * 100) === 20 && !global.visible, "loaded general volume");
+            if (!bridge.settings.audioSettingsLoaded || bridge.player.currentAudioId !== 7) return;
+            check(bridge.settings.globalVolumePercent === 20 && Math.round(bridge.settings.volume * 100) === 20 && !global.visible, "loaded general volume");
             input.mouseClick(toggle);
             stage = 2; break;
         case 2:
-            if (!bridge.individualVolumeEnabled) return;
+            if (!bridge.settings.individualVolumeEnabled) return;
             check(global.visible && global.enabled, "individual mode shows general slider");
-            bridge.selectTrack(42); stage = 3; break;
+            bridge.library.selectTrack(42); stage = 3; break;
         case 3:
-            if (bridge.selectedAudioId !== 42) return;
+            if (bridge.player.selectedAudioId !== 42) return;
             findChild(window.contentItem, "volumeButton").clicked(); stage = 4; break;
         case 4:
             if (!popup.opened) return;
-            check(slider.enabled && Math.round(bridge.volume * 100) === 20, "B inherits general volume");
+            check(slider.enabled && Math.round(bridge.settings.volume * 100) === 20, "B inherits general volume");
             slider.value = 0.1; slider.moved(); stage = 5; break;
         case 5:
-            if (!bridge.audioSettingsCanRetry || Math.round(bridge.volume * 100) !== 10) return;
-            check(bridge.currentAudioId === 7 && bridge.volumeHasOverride, "editing B preserves current A and exposes retry");
+            if (!bridge.settings.audioSettingsCanRetry || Math.round(bridge.settings.volume * 100) !== 10) return;
+            check(bridge.player.currentAudioId === 7 && bridge.settings.volumeHasOverride, "editing B preserves current A and exposes retry");
             findChild(window.contentItem, "retryVolumeSave").clicked(); stage = 6; break;
         case 6:
-            if (bridge.audioSettingsCanRetry) return;
+            if (bridge.settings.audioSettingsCanRetry) return;
             global.value = 40; global.moved(); stage = 7; break;
         case 7:
-            if (bridge.globalVolumePercent !== 40) return;
-            check(Math.round(bridge.volume * 100) === 10, "absolute B volume survives general increase");
+            if (bridge.settings.globalVolumePercent !== 40) return;
+            check(Math.round(bridge.settings.volume * 100) === 10, "absolute B volume survives general increase");
             input.mouseClick(findChild(window.contentItem, "songsTabButton"));
             input.mouseClick(findChild(window.contentItem, "settingsButton"));
-            check(toggle.checked && global.value === 40 && bridge.selectedAudioId === 42, "Settings navigation retains volume preferences and selection");
+            check(toggle.checked && global.value === 40 && bridge.player.selectedAudioId === 42, "Settings navigation retains volume preferences and selection");
             findChild(window.contentItem, "useGlobalVolumeButton").clicked(); stage = 8; break;
         case 8:
-            if (bridge.volumeHasOverride || Math.round(bridge.volume * 100) !== 40) return;
+            if (bridge.settings.volumeHasOverride || Math.round(bridge.settings.volume * 100) !== 40) return;
             slider.value = 0.1; slider.moved(); stage = 9; break;
         case 9:
-            if (!bridge.volumeHasOverride || Math.round(bridge.volume * 100) !== 10) return;
-            input.mouseClick(toggle); stage = 10; break;
+            if (!bridge.settings.volumeHasOverride || Math.round(bridge.settings.volume * 100) !== 10) return;
+            if (!popup.opened) {
+                findChild(window.contentItem, "volumeButton").clicked();
+                return;
+            }
+            check(contained(popup.contentItem, window.activeFocusItem), "volume editor has focus before mode change");
+            bridge.settings.setIndividualVolumeEnabled(false); stage = 10; break;
         case 10:
-            if (bridge.individualVolumeEnabled) return;
-            check(Math.round(bridge.volume * 100) === 40 && !global.visible && !popup.opened, "disabled mode uses general and ends popup editing");
+            if (bridge.settings.individualVolumeEnabled) return;
+            if (popup.visible) return;
+            check(Math.round(bridge.settings.volume * 100) === 40 && !global.visible && !popup.opened, "disabled mode uses general and ends popup editing");
+            check(findChild(window.contentItem, "volumeButton").activeFocus, "mode change closes volume editing and restores button focus");
             input.mouseClick(toggle); stage = 11; break;
         case 11:
-            if (!bridge.individualVolumeEnabled) return;
-            check(Math.round(bridge.volume * 100) === 10 && bridge.volumeHasOverride, "reenabling restores B override");
-            bridge.selectTrack(7); stage = 12; break;
+            if (!bridge.settings.individualVolumeEnabled) return;
+            check(Math.round(bridge.settings.volume * 100) === 10 && bridge.settings.volumeHasOverride, "reenabling restores B override");
+            bridge.library.selectTrack(7); stage = 12; break;
         case 12:
-            if (bridge.selectedAudioId !== 7) return;
-            check(Math.round(bridge.volume * 100) === 40, "A retains general volume");
+            if (bridge.player.selectedAudioId !== 7) return;
+            check(Math.round(bridge.settings.volume * 100) === 40, "A retains general volume");
             findChild(window.contentItem, "volumeButton").clicked(); stage = 13; break;
         case 13:
             if (!popup.opened) return;
-            bridge.selectTrack(-1); stage = 14; break;
+            bridge.library.selectTrack(-1); stage = 14; break;
         case 14:
-            if (bridge.hasSelection) return;
-            check(!popup.opened && !bridge.volumeEnabled && !slider.enabled, "selection change closes editing and disables unavailable volume");
-            bridge.setGlobalVolume(55);
+            if (bridge.player.hasSelection) return;
+            check(!popup.opened && !bridge.settings.volumeEnabled && !slider.enabled, "selection change closes editing and disables unavailable volume");
+            bridge.settings.setGlobalVolume(55);
             finish(); break;
         }
     }
     function queueProbe(): void {
-        if (!bridge.connected || bridge.libraryLoading) return;
+        if (!bridge.connected || bridge.library.libraryLoading) return;
         const next = findChild(window.contentItem, "nextTrackButton");
         const previous = findChild(window.contentItem, "previousTrackButton");
         const queueButton = findChild(window.contentItem, "queueButton");
         const panel = findChild(window.contentItem, "queuePanel");
         switch (stage) {
         case 0:
-            if (bridge.currentAudioId !== 7 || !next.enabled || !previous.enabled) return;
-            check(bridge.selectedAudioId === 7 && !bridge.selectedIsPlaying, "restored queue selects current and stays paused");
+            if (bridge.player.currentAudioId !== 7 || !next.enabled || !previous.enabled) return;
+            check(bridge.player.selectedAudioId === 7 && !bridge.player.selectedIsPlaying, "restored queue selects current and stays paused");
             const queueOrigin = queueButton.mapToItem(window.contentItem, 0, 0);
             check(queueOrigin.y === 0 && queueButton.height === 50 && queueOrigin.x + queueButton.width === window.width - 3 * 46,
                 "queue button is in the title bar immediately before window controls");
@@ -747,20 +760,20 @@ QtObject {
             input.mouseClick(queueButton, queueButton.width / 2, queueButton.height / 2, Qt.LeftButton, Qt.NoModifier, 0);
             stage = 10; break;
         case 10:
-            if (!panel.opened || bridge.queueLoading || !bridge.queueMessage.includes("fixture queue unavailable")) return;
+            if (!panel.opened || bridge.queue.queueLoading || !bridge.queue.queueMessage.includes("fixture queue unavailable")) return;
             check(panel.width === 430 && panel.x + panel.width === findChild(window.contentItem, "playerPane").width,
                 "queue panel aligns with the player right edge");
             findChild(window.contentItem, "queueRetryButton").clicked(); stage = 11; break;
         case 11:
-            if (bridge.queueLoading || bridge.queueTracks.length !== 2) return;
-            if (bridge.queueTracks.some(track => track.artworkUrl.length === 0 || track.durationLabel !== "02:05")) return;
-            check(bridge.queueTracks[0].audioId === 42 && bridge.queueTracks[1].audioId === 103, "queue excludes current track and preserves order");
+            if (bridge.queue.queueLoading || bridge.queue.queueTracks.length !== 2) return;
+            if (bridge.queue.queueTracks.some(track => track.artworkUrl.length === 0 || track.durationLabel !== "02:05")) return;
+            check(bridge.queue.queueTracks[0].audioId === 42 && bridge.queue.queueTracks[1].audioId === 103, "queue excludes current track and preserves order");
             check(contained(panel.contentItem, window.activeFocusItem), "queue opens with keyboard focus");
             for (let i = 0; i < 4; ++i) {
                 input.keyClick(Qt.Key_Tab, Qt.NoModifier, 0);
                 check(contained(panel.contentItem, window.activeFocusItem), "queue contains Tab focus");
             }
-            panel.tracks = Array.from({length: 16}, (_, i) => bridge.queueTracks[i % 2]);
+            panel.tracks = Array.from({length: 16}, (_, i) => bridge.queue.queueTracks[i % 2]);
             stage = 18; break;
         case 18: {
             const scroll = findChild(window.contentItem, "queueScroll").contentItem;
@@ -772,43 +785,43 @@ QtObject {
             const scroll = findChild(window.contentItem, "queueScroll").contentItem;
             check(scroll.contentY > 0, "queue wheel scrolls to later songs");
             scroll.contentY = 0;
-            panel.tracks = Qt.binding(() => bridge.queueTracks);
-            bridge.nextTrack(); stage = 1; break;
+            panel.tracks = Qt.binding(() => bridge.queue.queueTracks);
+            bridge.player.nextTrack(); stage = 1; break;
         }
         case 1:
-            if (bridge.currentAudioId !== 42) return;
-            check(bridge.selectedAudioId === 42 && !bridge.selectedIsPlaying, "Next changes current and preserves pause");
-            if (bridge.queueLoading || bridge.queueTracks.length !== 1 || bridge.queueTracks[0].audioId !== 103) return;
+            if (bridge.player.currentAudioId !== 42) return;
+            check(bridge.player.selectedAudioId === 42 && !bridge.player.selectedIsPlaying, "Next changes current and preserves pause");
+            if (bridge.queue.queueLoading || bridge.queue.queueTracks.length !== 1 || bridge.queue.queueTracks[0].audioId !== 103) return;
             input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0); stage = 12; break;
         case 12:
             if (panel.visible) return;
             check(queueButton.activeFocus, "queue Escape restores opener focus");
             previous.clicked(); stage = 2; break;
         case 2:
-            if (bridge.currentAudioId !== 7) return;
-            check(bridge.selectedAudioId === 7 && !bridge.selectedIsPlaying, "Previous changes current and preserves pause");
+            if (bridge.player.currentAudioId !== 7) return;
+            check(bridge.player.selectedAudioId === 7 && !bridge.player.selectedIsPlaying, "Previous changes current and preserves pause");
             next.clicked(); stage = 3; break;
         case 3:
-            if (bridge.currentAudioId !== 42) return;
-            bridge.searchLibrary("missing"); stage = 4; break;
+            if (bridge.player.currentAudioId !== 42) return;
+            bridge.library.searchLibrary("missing"); stage = 4; break;
         case 4:
-            if (bridge.trackCount !== 0 || bridge.libraryLoading || bridge.selectedArtworkUrl.length === 0) return;
-            check(bridge.currentAudioId === 42 && bridge.selectedAudioId === 42, "search does not discard current selection");
-            check(bridge.selectedTitle === "Track 42" && bridge.selectedDurationLabel === "02:05", "current metadata survives empty search");
-            check(next.enabled && previous.enabled && !bridge.selectedIsPlaying, "queue controls survive empty search on pause");
+            if ((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 0 || bridge.library.libraryLoading || bridge.player.selectedArtworkUrl.length === 0) return;
+            check(bridge.player.currentAudioId === 42 && bridge.player.selectedAudioId === 42, "search does not discard current selection");
+            check(bridge.player.selectedTitle === "Track 42" && bridge.player.selectedDurationLabel === "02:05", "current metadata survives empty search");
+            check(next.enabled && previous.enabled && !bridge.player.selectedIsPlaying, "queue controls survive empty search on pause");
             queueButton.forceActiveFocus(); queueButton.clicked(); stage = 13; break;
         case 13:
-            if (!panel.opened || bridge.queueLoading || bridge.queueTracks.length !== 1) return;
-            if (bridge.queueTracks[0].artworkUrl.length === 0 || bridge.queueTracks[0].durationLabel !== "02:05") return;
-            check(bridge.queueTracks[0].audioId === 103 && bridge.trackCount === 0, "queue media works outside Songs search");
-            bridge.nextTrack(); stage = 14; break;
+            if (!panel.opened || bridge.queue.queueLoading || bridge.queue.queueTracks.length !== 1) return;
+            if (bridge.queue.queueTracks[0].artworkUrl.length === 0 || bridge.queue.queueTracks[0].durationLabel !== "02:05") return;
+            check(bridge.queue.queueTracks[0].audioId === 103 && (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) === 0, "queue media works outside Songs search");
+            bridge.player.nextTrack(); stage = 14; break;
         case 14:
-            if (bridge.currentAudioId !== 103 || bridge.queueLoading || bridge.queueTracks.length !== 0) return;
+            if (bridge.player.currentAudioId !== 103 || bridge.queue.queueLoading || bridge.queue.queueTracks.length !== 0) return;
             check(findChild(window.contentItem, "queueStatus").text === "No upcoming songs", "exhausted upcoming list has an empty state");
             input.mouseClick(window.contentItem, 490, 150, Qt.LeftButton, Qt.NoModifier, 0); stage = 15; break;
         case 15:
             if (panel.visible) return;
-            check(bridge.selectedAudioId === 103, "outside click closes queue without selecting a track");
+            check(bridge.player.selectedAudioId === 103, "outside click closes queue without selecting a track");
             queueButton.clicked(); stage = 16; break;
         case 16:
             if (!panel.opened) return;
@@ -826,24 +839,24 @@ QtObject {
             check(row.artworkUrl === sortMedia[row.audioId].artwork && row.durationLabel === sortMedia[row.audioId].duration,
                 "sorting retains media by audio ID");
         }
-        check(bridge.selectedAudioId === 42 && bridge.selectedTitle === "Track 42", "sorting retains selection");
-        check(bridge.selectedDurationLabel === "02:05" && bridge.selectedArtworkUrl === sortMedia[42].artwork,
+        check(bridge.player.selectedAudioId === 42 && bridge.player.selectedTitle === "Track 42", "sorting retains selection");
+        check(bridge.player.selectedDurationLabel === "02:05" && bridge.player.selectedArtworkUrl === sortMedia[42].artwork,
             "sorting retains player media");
         check(resets === retainedResets, "sorting uses row notifications without model reset");
         return true;
     }
     function sortProbe(): void {
-        if (!bridge.connected || bridge.libraryLoading || bridge.trackCount !== 3) return;
+        if (!bridge.connected || bridge.library.libraryLoading || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 3) return;
         const menu = findChild(window.contentItem, "trackSortMenu");
         const list = findChild(window.contentItem, "songList");
         switch (stage) {
         case 0:
             check(menu.currentIndex === 0 && menu.entries.length === 3, "default title sort and three modes");
-            bridge.selectTrack(42);
+            bridge.library.selectTrack(42);
             stage = 1;
             break;
         case 1:
-            if (bridge.selectedAudioId !== 42 || bridge.selectedDurationLabel !== "02:05" || bridge.selectedArtworkUrl === "") return;
+            if (bridge.player.selectedAudioId !== 42 || bridge.player.selectedDurationLabel !== "02:05" || bridge.player.selectedArtworkUrl === "") return;
             for (let i = 0; i < 3; ++i) {
                 const row = list.itemAtIndex(i);
                 if (!row || row.durationLabel !== "02:05" || row.artworkUrl === "") return;
@@ -866,7 +879,7 @@ QtObject {
             stage = 3;
             break;
         case 3:
-            if (bridge.trackSortIndex !== 1 || menu.popup.visible || !sortedRowsMatch([42, 103, 7])) return;
+            if (bridge.library.trackSortIndex !== 1 || menu.popup.visible || !sortedRowsMatch([42, 103, 7])) return;
             check(menu.activeFocus, "sort selection restores trigger focus");
             menu.popup.open();
             stage = 4;
@@ -878,7 +891,7 @@ QtObject {
             stage = 5;
             break;
         case 5:
-            if (bridge.trackSortIndex !== 2 || menu.popup.visible || !sortedRowsMatch([7, 42, 103])) return;
+            if (bridge.library.trackSortIndex !== 2 || menu.popup.visible || !sortedRowsMatch([7, 42, 103])) return;
             check(menu.activeFocus, "recent selection restores trigger focus");
             menu.popup.open();
             stage = 6;
@@ -890,7 +903,7 @@ QtObject {
             break;
         case 7:
             if (menu.popup.visible) return;
-            check(menu.activeFocus && bridge.trackSortIndex === 2, "Escape retains sort and restores focus");
+            check(menu.activeFocus && bridge.library.trackSortIndex === 2, "Escape retains sort and restores focus");
             menu.popup.open();
             stage = 8;
             break;
@@ -901,18 +914,18 @@ QtObject {
             stage = 9;
             break;
         case 9:
-            if (bridge.trackSortIndex !== 0 || menu.popup.visible || !sortedRowsMatch([103, 42, 7])) return;
+            if (bridge.library.trackSortIndex !== 0 || menu.popup.visible || !sortedRowsMatch([103, 42, 7])) return;
             finish();
             break;
         }
     }
     function playlistsProbe(): void {
-        if (!bridge.connected || bridge.libraryLoading || bridge.foldersLoading || bridge.playlistBusy || bridge.playlistLoading) return;
+        if (!bridge.connected || bridge.library.libraryLoading || bridge.settings.foldersLoading || bridge.playlists.playlistBusy || bridge.playlists.playlistLoading) return;
         const dialog = findChild(window.contentItem, "playlistsDialog");
         const pane = findChild(window.contentItem, "playlistsPane");
         switch (stage) {
         case 0:
-            if (bridge.playlists.length !== 1 || bridge.trackCount !== 1) return;
+            if (bridge.playlists.playlists.length !== 1 || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 1) return;
             check(!findChild(window.contentItem, "playlistsButton"), "previous playlist entry removed");
             findChild(window.contentItem, "playlistsTabButton").clicked();
             stage = 1;
@@ -920,7 +933,7 @@ QtObject {
         case 1: {
             if (!pane.visible || pane.activeId >= 0) return;
             check(window.selectedTab === 1 && !dialog.visible, "Playlists opens separate left pane");
-            check(bridge.playlists[0].itemCount === 1, "list counts unavailable difficulty");
+            check(bridge.playlists.playlists[0].itemCount === 1, "list counts unavailable difficulty");
             const list = findChild(pane, "playlistList");
             const card = list.itemAtIndex(0);
             if (!card) return;
@@ -929,70 +942,70 @@ QtObject {
             break;
         }
         case 2:
-            if (bridge.activePlaylistId !== 1 || bridge.trackCount !== 1 || bridge.playlistMessage.length > 0) return;
-            check(bridge.selectedSubtitle.includes("Unavailable") && !bridge.selectedAvailable, "missing entry remains selectable and unavailable");
+            if (bridge.playlists.activePlaylistId !== 1 || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 1 || bridge.playlists.playlistMessage.length > 0) return;
+            check(bridge.player.selectedSubtitle.includes("Unavailable") && !bridge.player.selectedAvailable, "missing entry remains selectable and unavailable");
             check(!findChild(window.contentItem, "playPauseButton").enabled, "unavailable playlist entry cannot play");
             findChild(pane, "playlistBackButton").clicked();
             stage = 3;
             break;
         case 3:
-            if (bridge.activePlaylistId >= 0) return;
+            if (bridge.playlists.activePlaylistId >= 0) return;
             findChild(pane, "createPlaylistButton").clicked();
             stage = 31;
             break;
         case 31:
-            if (!bridge.playlistEditorOpen) return;
+            if (!bridge.playlists.playlistEditorOpen) return;
             check(findChild(pane, "playlistEditor").visible, "plus opens inline create card");
-            bridge.setPlaylistEditorName(" New playlist ");
+            bridge.playlists.setPlaylistEditorName(" New playlist ");
             findChild(pane, "savePlaylistEditor").clicked();
             stage = 4;
             break;
         case 4:
-            if (bridge.playlists.length !== 2 || bridge.playlistEditorOpen) return;
-            check(bridge.playlists[1].name === "New playlist", "live creation trims name and closes editor");
+            if (bridge.playlists.playlists.length !== 2 || bridge.playlists.playlistEditorOpen) return;
+            check(bridge.playlists.playlists[1].name === "New playlist", "live creation trims name and closes editor");
             findChild(window.contentItem, "songsTabButton").clicked();
             stage = 41;
             break;
         case 41:
-            if (bridge.playlistVisible || bridge.trackCount !== 1) return;
+            if (bridge.playlists.playlistVisible || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 1) return;
             check(findChild(window.contentItem, "songSearch").enabled, "Songs always presents searchable library");
             findChild(window.contentItem, "addToPlaylistButton").clicked();
             stage = 5;
             break;
         case 5:
-            if (!dialog.opened || !bridge.playlistAdding) return;
-            check(bridge.playlistCandidates.length === 2, "selected song exposes every concrete difficulty");
+            if (!dialog.opened || !bridge.playlists.playlistAdding) return;
+            check(bridge.playlists.playlistCandidates.length === 2, "selected song exposes every concrete difficulty");
             dialog.targetRequested(2);
             dialog.difficultyRequested(2);
             dialog.addRequested();
             stage = 6;
             break;
         case 6:
-            if (bridge.playlistOpen) return;
+            if (bridge.playlists.playlistOpen) return;
             findChild(window.contentItem, "songSearch").text = "no-song-matches-playlists";
             stage = 61;
             break;
         case 61:
-            if (bridge.trackCount !== 0 || bridge.libraryLoading) return;
+            if ((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 0 || bridge.library.libraryLoading) return;
             findChild(window.contentItem, "playlistsTabButton").clicked();
-            bridge.selectPlaylist(2);
+            bridge.playlists.selectPlaylist(2);
             stage = 7;
             break;
         case 7:
-            if (bridge.activePlaylistId !== 2 || bridge.trackCount !== 1 || bridge.playlistMessage.length > 0) return;
-            check(bridge.selectedSubtitle.includes("Easy"), "chosen difficulty displayed separately");
+            if (bridge.playlists.activePlaylistId !== 2 || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 1 || bridge.playlists.playlistMessage.length > 0) return;
+            check(bridge.player.selectedSubtitle.includes("Easy"), "chosen difficulty displayed separately");
             findChild(window.contentItem, "addToPlaylistButton").clicked();
             stage = 8;
             break;
         case 8:
-            if (!dialog.opened || !bridge.playlistAdding || bridge.playlistCandidates.length !== 2) return;
-            check(bridge.playlistCandidates.length === 2, "adding from playlist outside search reloads all song difficulties");
+            if (!dialog.opened || !bridge.playlists.playlistAdding || bridge.playlists.playlistCandidates.length !== 2) return;
+            check(bridge.playlists.playlistCandidates.length === 2, "adding from playlist outside search reloads all song difficulties");
             dialog.targetRequested(2);
             dialog.addRequested();
             stage = 9;
             break;
         case 9: {
-            if (bridge.playlistOpen || bridge.trackCount !== 2 || bridge.playlistMessage.length > 0) return;
+            if (bridge.playlists.playlistOpen || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 2 || bridge.playlists.playlistMessage.length > 0) return;
             const list = findChild(pane, "playlistTrackList");
             const first = list.itemAtIndex(0);
             const second = list.itemAtIndex(1);
@@ -1007,33 +1020,33 @@ QtObject {
             break;
         }
         case 91:
-            if (bridge.trackSortIndex !== 1 || bridge.selectedPlaylistItemId !== sortMedia.selected) return;
-            check(bridge.selectedSubtitle.includes("Hard") && !bridge.selectedIsPlaying,
+            if (bridge.library.trackSortIndex !== 1 || bridge.playlists.selectedPlaylistItemId !== sortMedia.selected) return;
+            check(bridge.player.selectedSubtitle.includes("Hard") && !bridge.player.selectedIsPlaying,
                 "sorting preserves selected difficulty without starting playback");
             check(resets === retainedResets, "playlist sorting does not reset model");
             findChild(window.contentItem, "songsTabButton").clicked();
             stage = 92;
             break;
         case 92:
-            if (bridge.playlistVisible || bridge.trackCount !== 0) return;
+            if (bridge.playlists.playlistVisible || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 0) return;
             check(findChild(window.contentItem, "songSearch").text === "no-song-matches-playlists", "Songs keeps its own query");
             findChild(window.contentItem, "playlistsTabButton").clicked();
             stage = 93;
             break;
         case 93:
-            if (!bridge.playlistVisible || bridge.trackCount !== 2) return;
-            check(bridge.activePlaylistId === 2 && bridge.selectedPlaylistItemId === sortMedia.selected,
+            if (!bridge.playlists.playlistVisible || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 2) return;
+            check(bridge.playlists.activePlaylistId === 2 && bridge.playlists.selectedPlaylistItemId === sortMedia.selected,
                 "return to Playlists restores detail and selected item");
             findChild(pane, "editPlaylistButton").clicked();
-            bridge.setPlaylistEditorName(" Renamed ");
+            bridge.playlists.setPlaylistEditorName(" Renamed ");
             findChild(pane, "savePlaylistEditor").clicked();
             stage = 10;
             break;
         case 10:
-            if (bridge.activePlaylistName !== "Renamed" || bridge.playlistEditorOpen) return;
+            if (bridge.playlists.activePlaylistName !== "Renamed" || bridge.playlists.playlistEditorOpen) return;
             check(findChild(pane, "activePlaylistTitle").text === "Renamed", "inline edit updates detail header");
-            bridge.selectPlaylistItem(sortMedia.first);
-            bridge.setTrackSort(0);
+            bridge.playlists.selectPlaylistItem(sortMedia.first);
+            bridge.library.setTrackSort(0);
             stage = 11;
             break;
         case 11: {
@@ -1056,216 +1069,216 @@ QtObject {
             break;
         }
         case 12:
-            if (bridge.trackCount !== 1 || bridge.playlistMessage.length > 0) return;
-            check(bridge.selectedSubtitle.includes("Hard"), "context removal retains other difficulty");
-            bridge.deletePlaylist(2);
+            if ((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 1 || bridge.playlists.playlistMessage.length > 0) return;
+            check(bridge.player.selectedSubtitle.includes("Hard"), "context removal retains other difficulty");
+            bridge.playlists.deletePlaylist(2);
             stage = 13;
             break;
         case 13:
-            if (bridge.activePlaylistId >= 0 || bridge.playlists.length !== 1) return;
+            if (bridge.playlists.activePlaylistId >= 0 || bridge.playlists.playlists.length !== 1) return;
             check(window.selectedTab === 1 && pane.activeId < 0, "deleting active playlist returns to list");
             pane.searchEdited("no-playlist-matches");
             stage = 14;
             break;
         case 14:
-            if (bridge.filteredPlaylists.length !== 0 || findChild(pane, "playlistList").count !== 0) return;
-            check(bridge.playlists.length === 1 && pane.playlists.length === 0,
+            if (bridge.playlists.filteredPlaylists.length !== 0 || findChild(pane, "playlistList").count !== 0) return;
+            check(bridge.playlists.playlists.length === 1 && pane.playlists.length === 0,
                 "playlist search filters actual cards without dropping canonical summaries");
             findChild(window.contentItem, "songsTabButton").clicked();
             findChild(window.contentItem, "songSearch").text = "";
             stage = 15;
             break;
         case 15:
-            if (bridge.trackCount !== 1 || bridge.libraryLoading) return;
-            check(bridge.selectedTitle === "Test song", "Songs library remains independent of playlist search");
+            if ((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 1 || bridge.library.libraryLoading) return;
+            check(bridge.player.selectedTitle === "Test song", "Songs library remains independent of playlist search");
             findChild(window.contentItem, "playlistsTabButton").clicked();
             stage = 16;
             break;
         case 16:
-            if (!bridge.playlistVisible) return;
-            check(bridge.playlistQuery === "no-playlist-matches" && pane.playlists.length === 0, "playlist query survives tab switches");
+            if (!bridge.playlists.playlistVisible) return;
+            check(bridge.playlists.playlistQuery === "no-playlist-matches" && pane.playlists.length === 0, "playlist query survives tab switches");
             pane.searchEdited("");
             stage = 17;
             break;
         case 17:
-            if (bridge.filteredPlaylists.length !== 1 || findChild(pane, "playlistList").count !== 1) return;
-            check(bridge.playlistQuery === "" && pane.playlists.length === 1, "clearing query restores actual playlist cards");
+            if (bridge.playlists.filteredPlaylists.length !== 1 || findChild(pane, "playlistList").count !== 1) return;
+            check(bridge.playlists.playlistQuery === "" && pane.playlists.length === 1, "clearing query restores actual playlist cards");
             finish();
             break;
         }
     }
     function playlistCoversProbe(): void {
-        if (!bridge.connected || bridge.libraryLoading || bridge.foldersLoading || bridge.playlistBusy || bridge.playlistLoading) return;
+        if (!bridge.connected || bridge.library.libraryLoading || bridge.settings.foldersLoading || bridge.playlists.playlistBusy || bridge.playlists.playlistLoading) return;
         const pane = findChild(window.contentItem, "playlistsPane");
         switch (stage) {
         case 0:
-            if (bridge.trackCount === 0) return;
+            if ((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) === 0) return;
             findChild(window.contentItem, "playlistsTabButton").clicked();
-            bridge.beginPlaylistCreate();
-            bridge.setPlaylistEditorName("Cover retry");
+            bridge.playlists.beginPlaylistCreate();
+            bridge.playlists.setPlaylistEditorName("Cover retry");
             stage = 10;
             break;
         case 10:
-            if (!bridge.playlistEditorOpen || bridge.playlistEditorName !== "Cover retry") return;
+            if (!bridge.playlists.playlistEditorOpen || bridge.playlists.playlistEditorName !== "Cover retry") return;
             check(coverPath.length > 0, "local cover fixture provided");
-            bridge.completePlaylistCoverPick(bridge.playlistEditorEpoch, "file://" + coverPath);
-            check(bridge.playlistCoverPreparing && !findChild(pane, "savePlaylistEditor").enabled,
+            bridge.playlists.completePlaylistCoverPick(bridge.playlists.playlistEditorEpoch, "file://" + coverPath);
+            check(bridge.playlists.playlistCoverPreparing && !findChild(pane, "savePlaylistEditor").enabled,
                 "Save waits for asynchronous cover preparation");
-            bridge.savePlaylistEditor();
-            check(bridge.playlists.length === 0, "saving during preparation does not create playlist");
+            bridge.playlists.savePlaylistEditor();
+            check(bridge.playlists.playlists.length === 0, "saving during preparation does not create playlist");
             stage = 1;
             break;
         case 1:
-            if (bridge.playlistCoverPreparing || bridge.playlistEditorArtworkUrl.length === 0) return;
+            if (bridge.playlists.playlistCoverPreparing || bridge.playlists.playlistEditorArtworkUrl.length === 0) return;
             check(findChild(pane, "savePlaylistEditor").enabled, "Save resumes after preparation completes");
             check(findChild(pane, "playlistEditor").artworkUrl.toString().length > 0, "prepared cover shown before save");
-            sortMedia = {preview: bridge.playlistEditorArtworkUrl};
+            sortMedia = {preview: bridge.playlists.playlistEditorArtworkUrl};
             findChild(pane, "savePlaylistEditor").clicked();
             stage = 2;
             break;
         case 2:
-            if (bridge.playlistMessage.length === 0 || bridge.playlistEditorId < 0) return;
-            check(bridge.playlists.length === 1 && bridge.playlistEditorOpen, "cover upload failure retains created playlist and inline editor");
-            check(bridge.playlistEditorName === "Cover retry" && bridge.playlistEditorArtworkUrl === sortMedia.preview,
+            if (bridge.playlists.playlistMessage.length === 0 || bridge.playlists.playlistEditorId < 0) return;
+            check(bridge.playlists.playlists.length === 1 && bridge.playlists.playlistEditorOpen, "cover upload failure retains created playlist and inline editor");
+            check(bridge.playlists.playlistEditorName === "Cover retry" && bridge.playlists.playlistEditorArtworkUrl === sortMedia.preview,
                 "cover error preserves editor name and prepared preview");
-            sortMedia.id = bridge.playlistEditorId;
+            sortMedia.id = bridge.playlists.playlistEditorId;
             findChild(pane, "savePlaylistEditor").clicked();
             stage = 3;
             break;
         case 3:
-            if (bridge.playlistEditorOpen || bridge.playlists.length !== 1) return;
-            check(bridge.playlists[0].id === sortMedia.id, "retry updates same playlist without duplicate create");
-            bridge.requestPlaylistArtwork(sortMedia.id);
+            if (bridge.playlists.playlistEditorOpen || bridge.playlists.playlists.length !== 1) return;
+            check(bridge.playlists.playlists[0].id === sortMedia.id, "retry updates same playlist without duplicate create");
+            bridge.playlists.requestPlaylistArtwork(sortMedia.id);
             stage = 4;
             break;
         case 4:
-            if (bridge.playlists[0].artworkUrl.length === 0) return;
-            sortMedia.saved = bridge.playlists[0].artworkUrl;
-            bridge.beginPlaylistEdit(sortMedia.id);
+            if (bridge.playlists.playlists[0].artworkUrl.length === 0) return;
+            sortMedia.saved = bridge.playlists.playlists[0].artworkUrl;
+            bridge.playlists.beginPlaylistEdit(sortMedia.id);
             stage = 5;
             break;
         case 5:
-            if (bridge.playlistEditorArtworkUrl.length === 0) return;
-            check(bridge.playlistEditorName === "Cover retry", "existing editor retains name and saved cover");
-            sortMedia.epoch = bridge.playlistEditorEpoch;
-            bridge.completePlaylistCoverPick(sortMedia.epoch, "");
-            check(bridge.playlistEditorArtworkUrl.length > 0, "cancelled chooser retains existing cover");
-            bridge.cancelPlaylistEditor();
+            if (bridge.playlists.playlistEditorArtworkUrl.length === 0) return;
+            check(bridge.playlists.playlistEditorName === "Cover retry", "existing editor retains name and saved cover");
+            sortMedia.epoch = bridge.playlists.playlistEditorEpoch;
+            bridge.playlists.completePlaylistCoverPick(sortMedia.epoch, "");
+            check(bridge.playlists.playlistEditorArtworkUrl.length > 0, "cancelled chooser retains existing cover");
+            bridge.playlists.cancelPlaylistEditor();
             stage = 51;
             break;
         case 51:
-            if (bridge.playlistEditorOpen) return;
-            bridge.beginPlaylistEdit(sortMedia.id);
+            if (bridge.playlists.playlistEditorOpen) return;
+            bridge.playlists.beginPlaylistEdit(sortMedia.id);
             stage = 52;
             break;
         case 52:
-            if (!bridge.playlistEditorOpen || bridge.playlistEditorEpoch === sortMedia.epoch) return;
-            bridge.completePlaylistCoverPick(sortMedia.epoch, "file://" + coverPath);
-            check(!bridge.playlistCoverPreparing, "obsolete picker result ignored before starting preparation");
-            bridge.resetPlaylistCover();
+            if (!bridge.playlists.playlistEditorOpen || bridge.playlists.playlistEditorEpoch === sortMedia.epoch) return;
+            bridge.playlists.completePlaylistCoverPick(sortMedia.epoch, "file://" + coverPath);
+            check(!bridge.playlists.playlistCoverPreparing, "obsolete picker result ignored before starting preparation");
+            bridge.playlists.resetPlaylistCover();
             stage = 53;
             break;
         case 53:
-            if (bridge.playlistCoverPreparing || bridge.playlistEditorArtworkUrl.length > 0) return;
+            if (bridge.playlists.playlistCoverPreparing || bridge.playlists.playlistEditorArtworkUrl.length > 0) return;
             findChild(pane, "savePlaylistEditor").clicked();
             stage = 6;
             break;
         case 6:
-            if (bridge.playlistEditorOpen) return;
-            check(bridge.playlists.length === 1 && bridge.playlists[0].artworkUrl.length === 0, "cover reset restores automatic placeholder for empty playlist");
+            if (bridge.playlists.playlistEditorOpen) return;
+            check(bridge.playlists.playlists.length === 1 && bridge.playlists.playlists[0].artworkUrl.length === 0, "cover reset restores automatic placeholder for empty playlist");
             findChild(window.contentItem, "songsTabButton").clicked();
             stage = 7;
             break;
         case 7:
-            if (bridge.playlistVisible || bridge.trackCount === 0) return;
+            if (bridge.playlists.playlistVisible || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) === 0) return;
             findChild(window.contentItem, "playlistsTabButton").clicked();
             stage = 8;
             break;
         case 8:
-            if (!bridge.playlistVisible) return;
-            check(bridge.playlists.length === 1 && bridge.playlists[0].id === sortMedia.id, "tab switch retains saved playlist");
+            if (!bridge.playlists.playlistVisible) return;
+            check(bridge.playlists.playlists.length === 1 && bridge.playlists.playlists[0].id === sortMedia.id, "tab switch retains saved playlist");
             finish();
             break;
         }
     }
     function playlistCoverPreviewProbe(): void {
-        if (!bridge.connected || bridge.libraryLoading || bridge.foldersLoading || bridge.playlistBusy
-            || (stage !== 0 && bridge.playlistLoading)) return;
+        if (!bridge.connected || bridge.library.libraryLoading || bridge.settings.foldersLoading || bridge.playlists.playlistBusy
+            || (stage !== 0 && bridge.playlists.playlistLoading)) return;
         const pane = findChild(window.contentItem, "playlistsPane");
         const editor = findChild(pane, "playlistEditor");
         const save = findChild(editor, "savePlaylistEditor");
         switch (stage) {
         case 0:
-            if (bridge.trackCount !== 3 || bridge.selectedDurationLabel === "--:--" || bridge.selectedArtworkUrl.length === 0) return;
-            check(bridge.playlists.length === 0, "initial playlist response stays pending before tab opens");
+            if ((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 3 || bridge.player.selectedDurationLabel === "--:--" || bridge.player.selectedArtworkUrl.length === 0) return;
+            check(bridge.playlists.playlists.length === 0, "initial playlist response stays pending before tab opens");
             retainedResets = resets;
             findChild(window.contentItem, "playlistsTabButton").clicked();
             check(window.selectedTab === 1, "playlist tab opens before its first list response");
             stage = 1;
             break;
         case 1:
-            if (bridge.playlists.length !== 1 || bridge.playlists[0].artworkUrl.length === 0) return;
+            if (bridge.playlists.playlists.length !== 1 || bridge.playlists.playlists[0].artworkUrl.length === 0) return;
             console.info("initial visible playlist receives custom artwork");
             check(resets === retainedResets, "identical rows avoid model reset when opening playlist list");
-            sortMedia.saved = bridge.playlists[0].artworkUrl;
-            bridge.selectPlaylist(1);
+            sortMedia.saved = bridge.playlists.playlists[0].artworkUrl;
+            bridge.playlists.selectPlaylist(1);
             stage = 2;
             break;
         case 2:
-            if (bridge.activePlaylistId !== 1 || bridge.trackCount !== 1) return;
-            check(bridge.playlists[0].artworkUrl === sortMedia.saved, "detail navigation preserves decoded playlist cache");
+            if (bridge.playlists.activePlaylistId !== 1 || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 1) return;
+            check(bridge.playlists.playlists[0].artworkUrl === sortMedia.saved, "detail navigation preserves decoded playlist cache");
             findChild(pane, "editPlaylistButton").clicked();
             stage = 3;
             break;
         case 3:
-            if (!bridge.playlistEditorOpen || bridge.playlistEditorArtworkUrl.length === 0) return;
-            check(bridge.playlistEditorArtworkUrl === sortMedia.saved, "editor reuses saved custom cover inside playlist");
+            if (!bridge.playlists.playlistEditorOpen || bridge.playlists.playlistEditorArtworkUrl.length === 0) return;
+            check(bridge.playlists.playlistEditorArtworkUrl === sortMedia.saved, "editor reuses saved custom cover inside playlist");
             check(Math.abs(save.width - (editor.width - 32)) < 1, "Save fills editor content width");
-            sortMedia.saved = bridge.playlistEditorArtworkUrl;
+            sortMedia.saved = bridge.playlists.playlistEditorArtworkUrl;
             findChild(editor, "resetPlaylistCover").clicked();
             stage = 4;
             break;
         case 4:
-            if (!bridge.playlistEditorArtworkUrl.includes("auto-7")) return;
-            check(editor.artworkUrl.toString() === bridge.playlistEditorArtworkUrl, "automatic cover previews before saving");
-            check(bridge.playlists[0].artworkUrl === sortMedia.saved, "automatic preview leaves saved custom cover intact");
+            if (!bridge.playlists.playlistEditorArtworkUrl.includes("auto-7")) return;
+            check(editor.artworkUrl.toString() === bridge.playlists.playlistEditorArtworkUrl, "automatic cover previews before saving");
+            check(bridge.playlists.playlists[0].artworkUrl === sortMedia.saved, "automatic preview leaves saved custom cover intact");
             findChild(editor, "closePlaylistEditor").clicked();
             stage = 5;
             break;
         case 5:
-            if (bridge.playlistEditorOpen) return;
+            if (bridge.playlists.playlistEditorOpen) return;
             findChild(pane, "editPlaylistButton").clicked();
             stage = 6;
             break;
         case 6:
-            if (!bridge.playlistEditorOpen || bridge.playlistEditorArtworkUrl !== sortMedia.saved) return;
+            if (!bridge.playlists.playlistEditorOpen || bridge.playlists.playlistEditorArtworkUrl !== sortMedia.saved) return;
             findChild(editor, "resetPlaylistCover").clicked();
             stage = 7;
             break;
         case 7:
-            if (!bridge.playlistEditorArtworkUrl.includes("auto-7")) return;
+            if (!bridge.playlists.playlistEditorArtworkUrl.includes("auto-7")) return;
             save.clicked();
             stage = 8;
             break;
         case 8:
-            if (bridge.playlistEditorOpen || bridge.trackCount !== 1) return;
+            if (bridge.playlists.playlistEditorOpen || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 1) return;
             findChild(pane, "editPlaylistButton").clicked();
             stage = 9;
             break;
         case 9:
-            if (!bridge.playlistEditorOpen || !bridge.playlistEditorArtworkUrl.includes("auto-7")) return;
-            check(bridge.playlistEditorId === 1, "editor loads saved automatic cover inside playlist");
+            if (!bridge.playlists.playlistEditorOpen || !bridge.playlists.playlistEditorArtworkUrl.includes("auto-7")) return;
+            check(bridge.playlists.playlistEditorId === 1, "editor loads saved automatic cover inside playlist");
             findChild(editor, "closePlaylistEditor").clicked();
             stage = 10;
             break;
         case 10:
-            if (bridge.playlistEditorOpen) return;
-            bridge.beginPlaylistCreate();
-            bridge.setPlaylistEditorName("New playlist");
+            if (bridge.playlists.playlistEditorOpen) return;
+            bridge.playlists.beginPlaylistCreate();
+            bridge.playlists.setPlaylistEditorName("New playlist");
             stage = 11;
             break;
         case 11:
-            if (!bridge.playlistEditorOpen || bridge.playlistEditorId >= 0) return;
+            if (!bridge.playlists.playlistEditorOpen || bridge.playlists.playlistEditorId >= 0) return;
             check(save.text === "Create" && Math.abs(save.width - (editor.width - 32)) < 1, "Create fills editor content width");
             finish();
             break;
@@ -1283,11 +1296,11 @@ QtObject {
                 && contained(findChild(window.contentItem, "generalSettingsSection"), artists), "preferences belong to General");
             if (testCase === "names-read") {
                 check(titles.checked && artists.checked, "both preferences persist between processes");
-                bridge.setUseUnicodeTitles(false);
-                check(!bridge.useUnicodeTitles && bridge.useUnicodeArtists, "changing one key retains the other");
-                bridge.setUseUnicodeTitles(true);
+                bridge.settings.setUseUnicodeTitles(false);
+                check(!bridge.settings.useUnicodeTitles && bridge.settings.useUnicodeArtists, "changing one key retains the other");
+                bridge.settings.setUseUnicodeTitles(true);
                 bridge.connectSession();
-                check(bridge.useUnicodeTitles && bridge.useUnicodeArtists, "reconnect retains local choices");
+                check(bridge.settings.useUnicodeTitles && bridge.settings.useUnicodeArtists, "reconnect retains local choices");
                 finish(); return;
             }
             check(!titles.checked && !artists.checked, "default preferences are independent and off");
@@ -1301,20 +1314,20 @@ QtObject {
         }
         if (stage === 1) {
             input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
-            check(bridge.useUnicodeTitles && !bridge.useUnicodeArtists, "keyboard title toggle preserves artist preference");
-            bridge.setUseUnicodeArtists(true);
-            bridge.setUseUnicodeTitles(false);
-            bridge.setUseUnicodeArtists(false);
-            bridge.setUseUnicodeTitles(true);
-            bridge.setUseUnicodeArtists(true);
-            check(bridge.useUnicodeTitles && bridge.useUnicodeArtists, "rapid toggles merge synchronously");
+            check(bridge.settings.useUnicodeTitles && !bridge.settings.useUnicodeArtists, "keyboard title toggle preserves artist preference");
+            bridge.settings.setUseUnicodeArtists(true);
+            bridge.settings.setUseUnicodeTitles(false);
+            bridge.settings.setUseUnicodeArtists(false);
+            bridge.settings.setUseUnicodeTitles(true);
+            bridge.settings.setUseUnicodeArtists(true);
+            check(bridge.settings.useUnicodeTitles && bridge.settings.useUnicodeArtists, "rapid toggles merge synchronously");
             if (testCase === "names-write-error") {
                 check(message.text === "Could not save track name preferences. Your choice applies for this session.", "write failure retains choices and English message");
             } else {
                 check(message.text.length === 0, "successful persistence has no error");
             }
             bridge.connectSession();
-            check(bridge.useUnicodeTitles && bridge.useUnicodeArtists, "reconnect does not replace session choices");
+            check(bridge.settings.useUnicodeTitles && bridge.settings.useUnicodeArtists, "reconnect does not replace session choices");
             finish();
         }
     }
@@ -1327,7 +1340,7 @@ QtObject {
             findChild(window.contentItem, "settingsButton").clicked();
             check(toggle.enabled && toggle.text === "Discord Rich Presence", "RPC works offline with English label");
             check(toggle.checked === (testCase === "discord-read"), "RPC defaults off and restores persisted preference");
-            if (testCase === "discord-read") check(bridge.useUnicodeTitles && bridge.useUnicodeArtists, "RPC preference reads preserve Unicode choices");
+            if (testCase === "discord-read") check(bridge.settings.useUnicodeTitles && bridge.settings.useUnicodeArtists, "RPC preference reads preserve Unicode choices");
             if (testCase === "discord-read-error") {
                 check(message.text.length > 0, "RPC read error reported inline");
                 finish(); return;
@@ -1353,15 +1366,15 @@ QtObject {
         }
         if (stage === 4) {
             input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
-            check(bridge.discordRichPresence === (testCase !== "discord-read"), "RPC keyboard toggle changes live preference");
+            check(bridge.settings.discordRichPresence === (testCase !== "discord-read"), "RPC keyboard toggle changes live preference");
             if (testCase === "discord-write-error") check(message.text.length > 0, "RPC write failure remains usable");
             else check(message.text.length === 0, "RPC persistence succeeds quietly");
-            bridge.setDiscordRichPresence(false);
-            bridge.setDiscordRichPresence(true);
-            bridge.setDiscordRichPresence(false);
-            bridge.setDiscordRichPresence(true);
+            bridge.settings.setDiscordRichPresence(false);
+            bridge.settings.setDiscordRichPresence(true);
+            bridge.settings.setDiscordRichPresence(false);
+            bridge.settings.setDiscordRichPresence(true);
             bridge.connectSession();
-            check(bridge.discordRichPresence, "RPC rapid toggles and reconnect retain latest choice");
+            check(bridge.settings.discordRichPresence, "RPC rapid toggles and reconnect retain latest choice");
             finish();
         }
     }
@@ -1381,53 +1394,53 @@ QtObject {
         if (testCase === "playlist-cover-preview") { playlistCoverPreviewProbe(); return; }
         if (testCase === "sorting") { sortProbe(); return; }
         if (testCase === "requests") {
-            if (!bridge.connected || bridge.folders.length !== 2) return;
-            check(bridge.libraryLoading, "library HTTP request remains pending at close");
+            if (!bridge.connected || bridge.settings.folders.length !== 2) return;
+            check(bridge.library.libraryLoading, "library HTTP request remains pending at close");
             finish();
             return;
         }
         if (testCase === "empty") {
-            if (!bridge.connected || bridge.libraryLoading || bridge.foldersLoading) return;
-            check(bridge.trackCount === 0 && !bridge.hasSelection, "empty real library");
-            check(bridge.selectedAudioId === -1 && bridge.selectedArtworkUrl === "", "explicit empty selection");
-            check(bridge.folders.length === 0 && bridge.selectedFolderId === -1, "empty real folders");
-            check(bridge.libraryMessage.length > 0, "empty library explanation");
+            if (!bridge.connected || bridge.library.libraryLoading || bridge.settings.foldersLoading) return;
+            check((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) === 0 && !bridge.player.hasSelection, "empty real library");
+            check(bridge.player.selectedAudioId === -1 && bridge.player.selectedArtworkUrl === "", "explicit empty selection");
+            check(bridge.settings.folders.length === 0 && bridge.settings.selectedFolderId === -1, "empty real folders");
+            check(bridge.library.libraryMessage.length > 0, "empty library explanation");
             finish();
             return;
         }
         switch (stage) {
         case 0:
             if (bridge.connecting || bridge.connectionStatus.length === 0) return;
-            check(!bridge.connected && !bridge.folderBusy, "startup failure state");
+            check(!bridge.connected && !bridge.settings.folderBusy, "startup failure state");
             stage = 1;
             bridge.connectSession();
             break;
         case 1:
-            if (!bridge.connected || bridge.libraryLoading || bridge.foldersLoading) return;
-            if (bridge.folders.length !== 2 || !bridge.libraryMessage.includes("fixture library")) return;
-            check(bridge.trackCount === 0 && !bridge.hasSelection, "library failure independent from folders");
-            check(bridge.selectedFolderId === 31, "first folder by ID");
+            if (!bridge.connected || bridge.library.libraryLoading || bridge.settings.foldersLoading) return;
+            if (bridge.settings.folders.length !== 2 || !bridge.library.libraryMessage.includes("fixture library")) return;
+            check((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) === 0 && !bridge.player.hasSelection, "library failure independent from folders");
+            check(bridge.settings.selectedFolderId === 31, "first folder by ID");
             check(findChild(window.contentItem, "addFolder").enabled, "Add enabled after independent folder load");
-            check(bridge.folders[1].id === 52 && bridge.folders[1].label === "lazer - /fixtures/52", "typed folder entries");
+            check(bridge.settings.folders[1].id === 52 && bridge.settings.folders[1].label === "lazer - /fixtures/52", "typed folder entries");
             stage = 2;
-            bridge.refreshLibrary();
+            bridge.library.refreshLibrary();
             break;
         case 2:
-            if (bridge.libraryLoading || bridge.trackCount !== 3 || bridge.selectedDurationLabel !== "02:05" || bridge.selectedArtworkUrl === "") return;
+            if (bridge.library.libraryLoading || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 3 || bridge.player.selectedDurationLabel !== "02:05" || bridge.player.selectedArtworkUrl === "") return;
             const list = findChild(window.contentItem, "songList");
             const card = list.itemAtIndex(0);
             if (!card) return;
             check(card.audioId === 103 && card.title === "Track 103" && card.durationLabel === "02:05", "typed live model roles");
             check(card.subtitle === "Fixture artist | Hard", "shared subtitle role");
-            check(bridge.selectedAudioId === 103 && bridge.selectedTitle === "Track 103", "first sorted track uses database ID");
+            check(bridge.player.selectedAudioId === 103 && bridge.player.selectedTitle === "Track 103", "first sorted track uses database ID");
             check(rowChanges > 0, "media uses targeted row notifications");
             retainedResets = resets;
             stage = 3;
-            bridge.selectTrack(42);
+            bridge.library.selectTrack(42);
             break;
         case 3:
-            if (bridge.selectedAudioId !== 42 || bridge.selectedDurationLabel !== "02:05" || bridge.selectedArtworkUrl === "") return;
-            check(bridge.selectedTitle === "Track 42" && bridge.selectedSubtitle === "Fixture artist | Hard", "shared selection formatting");
+            if (bridge.player.selectedAudioId !== 42 || bridge.player.selectedDurationLabel !== "02:05" || bridge.player.selectedArtworkUrl === "") return;
+            check(bridge.player.selectedTitle === "Track 42" && bridge.player.selectedSubtitle === "Fixture artist | Hard", "shared selection formatting");
             check(resets === retainedResets, "selection and media must not replace the model");
             findChild(window.contentItem, "settingsSearch").text = "settings query";
             input.mouseClick(findChild(window.contentItem, "settingsButton"));
@@ -1442,22 +1455,22 @@ QtObject {
             check(findChild(window.contentItem, "selectedTitle").text === "Track 42", "persistent player follows selection");
             check(findChild(window.contentItem, "playerPane").visible, "player stays visible in Settings");
             check(findChild(window.contentItem, "songSearch").text === "", "search fields are independent");
-            check(bridge.selectedAudioId === 42, "settings preserves player selection");
+            check(bridge.player.selectedAudioId === 42, "settings preserves player selection");
             input.mouseClick(findChild(window.contentItem, "playlistsTabButton"));
             stage = 30;
             break;
         case 30:
-            if (bridge.playlistLoading) return;
+            if (bridge.playlists.playlistLoading) return;
             check(window.selectedTab === 1 && findChild(window.contentItem, "playlistsPane").visible
                 && !findChild(window.contentItem, "settingsPane").visible, "Settings returns to Playlists");
-            check(bridge.selectedAudioId === 42, "Playlists list retains the selected player track");
+            check(bridge.player.selectedAudioId === 42, "Playlists list retains the selected player track");
             input.mouseClick(findChild(window.contentItem, "settingsButton"));
             check(findChild(window.contentItem, "settingsSearch").text === "settings query", "Settings query survives Playlists navigation");
             input.mouseClick(findChild(window.contentItem, "songsTabButton"));
             stage = 31;
             break;
         case 31:
-            if (bridge.trackCount !== 3 || bridge.selectedAudioId !== 42) return;
+            if ((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 3 || bridge.player.selectedAudioId !== 42) return;
             check(window.selectedTab === 0 && findChild(window.contentItem, "songsPane").visible
                 && !findChild(window.contentItem, "settingsPane").visible, "Settings returns to Songs");
             check(findChild(window.contentItem, "selectedTitle").text === "Track 42"
@@ -1466,40 +1479,40 @@ QtObject {
             input.mouseClick(findChild(window.contentItem, "settingsButton"));
             findChild(window.contentItem, "settingsSearch").text = "";
             findChild(window.contentItem, "folderMenu").choose(1);
-            check(bridge.selectedAudioId === 42, "folder selection does not filter songs");
+            check(bridge.player.selectedAudioId === 42, "folder selection does not filter songs");
             stage = 4;
-            bridge.refreshFolders();
+            bridge.settings.refreshFolders();
             break;
         case 4:
-            if (bridge.foldersLoading || !bridge.folderMessage.includes("fixture folders")) return;
-            check(bridge.folders.length === 2 && bridge.selectedFolderId === 52, "failed folder refresh retains rows and ID");
-            check(bridge.folderCanRetry && !bridge.folderBusy, "folder failure offers retry");
+            if (bridge.settings.foldersLoading || !bridge.settings.folderMessage.includes("fixture folders")) return;
+            check(bridge.settings.folders.length === 2 && bridge.settings.selectedFolderId === 52, "failed folder refresh retains rows and ID");
+            check(bridge.settings.folderCanRetry && !bridge.settings.folderBusy, "folder failure offers retry");
             stage = 5;
-            bridge.retryFolders();
+            bridge.settings.retryFolders();
             break;
         case 5:
-            if (bridge.foldersLoading || bridge.folderCanRetry) return;
-            check(bridge.selectedFolderId === 52 && bridge.folders.length === 2, "folder retry retains selected ID");
+            if (bridge.settings.foldersLoading || bridge.settings.folderCanRetry) return;
+            check(bridge.settings.selectedFolderId === 52 && bridge.settings.folders.length === 2, "folder retry retains selected ID");
             stage = 6;
-            bridge.refreshLibrary();
+            bridge.library.refreshLibrary();
             break;
         case 6:
-            if (bridge.libraryLoading || !bridge.libraryMessage.includes("fixture library")) return;
-            check(bridge.trackCount === 3 && bridge.selectedAudioId === 42, "failed refresh retains rows and selection");
+            if (bridge.library.libraryLoading || !bridge.library.libraryMessage.includes("fixture library")) return;
+            check((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) === 3 && bridge.player.selectedAudioId === 42, "failed refresh retains rows and selection");
             check(resets === retainedResets, "failed refresh must not reset model");
             stage = 7;
-            bridge.refreshLibrary();
+            bridge.library.refreshLibrary();
             break;
         case 7:
-            if (bridge.libraryLoading || bridge.trackCount !== 1) return;
-            check(bridge.selectedAudioId === 103 && bridge.selectedTitle === "Track 103", "shrinking refresh selects first remaining ID");
+            if (bridge.library.libraryLoading || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 1) return;
+            check(bridge.player.selectedAudioId === 103 && bridge.player.selectedTitle === "Track 103", "shrinking refresh selects first remaining ID");
             stage = 8;
-            bridge.refreshLibrary();
+            bridge.library.refreshLibrary();
             break;
         case 8:
-            if (bridge.libraryLoading || bridge.trackCount !== 0) return;
-            check(!bridge.hasSelection && bridge.selectedAudioId === -1, "empty refresh clears selection");
-            check(bridge.selectedArtworkUrl === "" && bridge.selectedDurationLabel === "--:--", "empty player clears media");
+            if (bridge.library.libraryLoading || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 0) return;
+            check(!bridge.player.hasSelection && bridge.player.selectedAudioId === -1, "empty refresh clears selection");
+            check(bridge.player.selectedArtworkUrl === "" && bridge.player.selectedDurationLabel === "--:--", "empty player clears media");
             finish();
             break;
         }
