@@ -156,6 +156,82 @@ Shuffle, repeat and output-device selection remain deferred.
 Physical output, desktop slider interaction and Windows require separate manual
 checks.
 
+## Discord Rich Presence
+
+The shared client [Discord service](../../crates/osu-radio-client/src/discord.rs)
+uses `discord-rich-presence` 1.1.0 and public Application ID
+`1558624797142028359`. Qt exposes **Settings → Integrations → Discord Rich
+Presence**, searchable by section/name, default off. Its existing native
+`QSettings` store persists `integrations/discord_rich_presence`; read failures
+leave RPC off, write failures keep the session choice with an inline message.
+The offline component gallery does not read/write settings or start RPC.
+All local preferences load together so a malformed settings file resets both
+Unicode choices and RPC safely; each toggle still writes only its own key.
+Other desktop adapters can send `AppCommand::SetDiscordRichPresence(bool)`;
+no Discord logic, database settings or HTTP routes are duplicated in UI/server.
+
+Only accepted token-bound local worker updates publish presence. Loading,
+empty/ended/stopped sources and local playback errors clear it; library selection
+and server transport errors do not invent Playing or replace a locally playing
+track. Real decoder duration and successful local seek serials anchor timestamps.
+A coalesced watch snapshot deduplicates token/source/state/seek/display metadata/
+duration changes; ordinary 100 ms position ticks never send IPC updates.
+Those ticks refresh the local watch value without notifying the worker, so a
+later enable/reconnect starts from the newest measured position.
+Playing uses Listening (2), title/details and artist/state. Unicode preferences
+apply to current-track metadata. Text uses existing fallbacks and truncates safely
+to 128 UTF-8 bytes. Paused retains title plus a static `Paused • artist • mm:ss`
+label with no timestamps; resume/seek rebuild start/end timestamps. Discord
+controls progress rendering and the app name; unknown/zero duration omits timers,
+known duration uses second-resolution timestamps. No paths or database IDs are
+sent in Activity.
+
+The library's synchronous private socket has no I/O deadline and does not drain
+Activity responses. [The socket adapter](../../crates/osu-radio-client/src/discord/transport.rs)
+implements its `DiscordIpc` transport hooks using bounded Tokio I/O on one lazily
+started blocking worker, sharing the existing runtime. The crate still owns
+frame encode/decode, Activity and clear. READY validation, PING responses and
+unsolicited error/close detection reuse that protocol. Connected idle waits for
+socket readability or settings/state changes, without heartbeat polling. Retry
+starts at 1 second and doubles to 30 seconds while connection is unavailable;
+updates during retry replace one watch value. Reconnect reads the newest local
+snapshot and projects its position from the monotonic observation anchor.
+Disabled RPC drops IPC and parks the already-created worker for reuse; default
+startup creates no worker. Controller shutdown cancels in-flight I/O, attempts
+clear with a bounded write deadline, drops IPC and awaits the worker before the
+runtime. Music, GUI and server workflows never await Discord operations.
+
+The optional image key is `osu_radio`. Missing artwork does not prevent connection;
+if Discord rejects an Activity, the worker retries without artwork for the rest
+of that process. No track covers or external uploads are required. Linux scans
+`XDG_RUNTIME_DIR`/temporary directories, IPC indices 0–9, Discord/Vesktop Flatpak
+and Snap layouts, with Snap runtime-parent support. Windows uses Tokio named
+pipes, indices 0–9. Compatible clients must expose Discord RPC; sandbox permissions
+can still prevent access. Linux/Windows implementation and cross-compilation are
+separate from actual native Discord/Vesktop runtime acceptance.
+
+Manual setup and acceptance:
+
+1. Open Discord Developer Portal → application `1558624797142028359` → General
+   Information; verify its name is **osu! radio** and save if changed. RPC uses the portal name.
+2. Optionally open Rich Presence → Art Assets, upload your osu-radio logo, name
+   the asset **osu_radio**, save and allow Discord's asset propagation time.
+   The checkout only bundles stable/lazer source logos, so use your project logo
+   rather than treating either source logo as the osu-radio application logo.
+3. Enable activity sharing in Discord and RPC in osu-radio Settings. Play a track,
+   pause/resume, seek both directions, next/previous and stop; check profile details
+   against local audio. Change Unicode preferences while playing.
+4. Launch osu-radio before Discord; start/close/restart Discord during playback;
+   toggle RPC and exit during reconnect. Verify no stale activity or audio interruption.
+   Repeat with native Discord and an RPC-enabled Vesktop, including relevant
+   Flatpak/Snap permissions, on Linux; repeat with native Discord on Windows.
+
+Automated coverage: [Activity/lifecycle mock tests](../../crates/osu-radio-client/src/discord/tests.rs),
+transport timeout/cancellation tests, controller stale-token/selection tests,
+successful seek serial tests and the Qt `discord-*` persistence/search probes.
+Real Discord appearance, artwork propagation, sandbox permissions, physical
+sound and native Windows GUI/runtime remain manual checks.
+
 ## Individual track volume
 
 The shared [volume workflow](../../crates/osu-radio-client/src/controller/volume.rs)

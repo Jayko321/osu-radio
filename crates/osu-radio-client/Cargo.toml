@@ -11,6 +11,7 @@ workspace = true
 mock = []
 
 [dependencies]
+discord-rich-presence = "1.1.0"
 osu-radio-player = { path = "../osu-radio-player" }
 tempfile = "3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

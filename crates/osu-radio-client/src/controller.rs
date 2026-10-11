@@ -61,6 +61,7 @@ pub enum AppCommand {
     SearchLibrary(String),
     SetTrackSort(TrackSort),
     SetTrackNamePreferences(TrackNamePreferences),
+    SetDiscordRichPresence(bool),
     RefreshFolders,
     SelectTrack(Option<i32>),
     PlayTrack(i32),
@@ -222,6 +223,7 @@ struct MediaJob {
 }
 #[allow(clippy::struct_excessive_bools)] // Independent async workflows have separate pending flags.
 struct Controller {
+    discord: crate::discord::Service,
     upcoming: queue::QueueWork,
     volume: volume::VolumeWork,
     playlists: playlists::PlaylistWork,
@@ -282,6 +284,7 @@ impl Controller {
         let (assignment_sender, assignments) = mpsc::unbounded_channel();
         let (worker_sender, worker_updates) = mpsc::unbounded_channel();
         Self {
+            discord: crate::discord::Service::default(),
             upcoming: queue::QueueWork::default(),
             volume: volume::VolumeWork::default(),
             playlists: playlists::PlaylistWork::default(),
@@ -377,6 +380,7 @@ impl Controller {
             self.start_playlist_images();
             self.start_counts();
         }
+        self.discord.begin_shutdown();
         self.cancel_audio();
         self.flush_volume_saves().await;
         self.cancel_selection();
@@ -384,6 +388,7 @@ impl Controller {
         if let Some(mut playback) = self.playback.take() {
             let _ = tokio::task::spawn_blocking(move || playback.shutdown()).await;
         }
+        self.discord.shutdown().await;
         // Startup owns its child until it either installs a session or awaits cancellation cleanup.
         while let Some(result) = self.tasks.join_next().await {
             if let Ok(Completed::Connected(Ok(session))) = result {
@@ -406,6 +411,7 @@ impl Controller {
     #[allow(clippy::too_many_lines)] // Keep command-to-workflow routing in one place.
     fn command(&mut self, command: AppCommand) {
         match command {
+            AppCommand::SetDiscordRichPresence(enabled) => self.discord.enabled(enabled),
             AppCommand::SetQueueVisible(visible) => self.set_queue_visible(visible),
             AppCommand::Playlist(action) => self.playlist_action(action),
             AppCommand::OpenFolderSelection => self.open_selection(),

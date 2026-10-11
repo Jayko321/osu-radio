@@ -23,12 +23,15 @@ pub mod ffi {
         type QQmlApplicationEngine = cxx_qt_lib::QQmlApplicationEngine;
         include!("cxx-qt-lib/qstring.h");
         type QString = cxx_qt_lib::QString;
-        #[rust_name = "load_track_name_preferences"]
+        #[rust_name = "load_local_preferences"]
         #[must_use]
-        fn loadTrackNamePreferences(titles: &mut bool, artists: &mut bool) -> QString;
+        fn loadLocalPreferences(titles: &mut bool, artists: &mut bool, discord: &mut bool) -> bool;
         #[rust_name = "save_track_name_preference"]
         #[must_use]
         fn saveTrackNamePreference(title: bool, enabled: bool) -> QString;
+        #[rust_name = "save_discord_rich_presence"]
+        #[must_use]
+        fn saveDiscordRichPresence(enabled: bool) -> QString;
         include!("cxx-qt-lib/qbytearray.h");
         type QByteArray = cxx_qt_lib::QByteArray;
         include!("cxx-qt-lib/qvector.h");

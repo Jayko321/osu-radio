@@ -883,3 +883,39 @@ Independent source reviews found no actionable correctness issue. The refresh
 control was exercised through native Space activation; desktop pointer behavior,
 GPU rendering, Windows and real game installations were not exercised. Existing
 Qt native-header compiler warnings remain.
+
+## Discord RPC verification
+
+Use `cargo test -p osu-radio-client --lib --locked` and the same command with
+`--features mock`, `cargo test -p osu-radio-player --locked`, serial
+`cargo test -p osu-radio-qt --locked -- --test-threads=1`, generated-import
+`scripts/lint-qml.sh` under the Qt app, and scoped all-target Clippy for the
+client (mock off/on) and Qt, with `--locked -- -D warnings`. Run
+`cargo fmt --check`. None of the RPC mocks require Discord, a database or audio
+hardware. The Qt `discord_preference_persists_searches_and_toggles_without_discord_or_server`
+probe uses isolated native settings and an intentionally unavailable server.
+
+If a Windows GNU cross toolchain is installed, additionally run
+`cargo check -p osu-radio-client --features mock --target x86_64-pc-windows-gnu --locked`.
+This compiles Windows IPC code but does not execute it or validate the Windows Qt
+app. Native Discord/compatible-client, physical audio and sandbox acceptance
+are listed in [the frontend guide](frontend.md#discord-rich-presence).
+
+Executed on Linux on 2026-10-11 with Rust 1.98.0, Qt 6.8.3 and LLD:
+client mock off/on passed 107/116 tests (two existing benchmarks ignored in
+each), player passed six tests, and Qt passed five unit tests and seventeen
+ordinary serial offscreen integration probes (two real-backend probes ignored).
+The Discord settings probe covers default off, persistence, Unicode/unrelated
+key preservation, Settings Search, native Space activation, rapid toggles,
+reconnect and read/write failures without Discord or a server. A shared native
+preference load preserves FormatError handling for both Unicode choices and RPC.
+
+Scoped all-target Clippy for client mock off/on and Qt with Rust warnings denied,
+generated-import QML lint, formatting, whitespace and local guide links passed.
+Vizia release compatibility and the Windows GNU client cross-check passed.
+The native Qt build used `-j 1` and `CXXFLAGS=-g0`; tests used
+`CARGO_INCREMENTAL=0 CARGO_PROFILE_TEST_CODEGEN_UNITS=1` after recovering damaged
+local build artifacts. These are verification environment overrides, not changes
+to the repository's build configuration. Actual Discord/Vesktop, Flatpak/Snap
+permissions, physical output, desktop pointer/GPU behavior and native Windows
+execution (including Windows Qt) were not exercised.

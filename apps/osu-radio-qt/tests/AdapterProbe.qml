@@ -1318,9 +1318,57 @@ QtObject {
             finish();
         }
     }
+    function discordPreferenceProbe(): void {
+        const toggle = findChild(window.contentItem, "discordRichPresenceSwitch");
+        const section = findChild(window.contentItem, "discordSettingsSection");
+        const search = findChild(window.contentItem, "settingsSearch");
+        const message = findChild(window.contentItem, "discordPreferenceStatus");
+        if (stage === 0) {
+            findChild(window.contentItem, "settingsButton").clicked();
+            check(toggle.enabled && toggle.text === "Discord Rich Presence", "RPC works offline with English label");
+            check(toggle.checked === (testCase === "discord-read"), "RPC defaults off and restores persisted preference");
+            if (testCase === "discord-read") check(bridge.useUnicodeTitles && bridge.useUnicodeArtists, "RPC preference reads preserve Unicode choices");
+            if (testCase === "discord-read-error") {
+                check(message.text.length > 0, "RPC read error reported inline");
+                finish(); return;
+            }
+            search.text = "dIsCoRd";
+            stage = 1; return;
+        }
+        if (stage === 1) {
+            check(section.visible && !findChild(window.contentItem, "generalSettingsSection").visible
+                && !findChild(window.contentItem, "audioSettingsSection").visible, "RPC case insensitive Settings Search");
+            search.text = "no such integration";
+            stage = 2; return;
+        }
+        if (stage === 2) {
+            check(!section.visible && findChild(window.contentItem, "settingsSearchEmpty").visible, "RPC no-match empty state");
+            search.text = "Integrations";
+            stage = 3; return;
+        }
+        if (stage === 3) {
+            check(section.visible, "RPC searchable by section title");
+            toggle.forceActiveFocus();
+            stage = 4; return;
+        }
+        if (stage === 4) {
+            input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
+            check(bridge.discordRichPresence === (testCase !== "discord-read"), "RPC keyboard toggle changes live preference");
+            if (testCase === "discord-write-error") check(message.text.length > 0, "RPC write failure remains usable");
+            else check(message.text.length === 0, "RPC persistence succeeds quietly");
+            bridge.setDiscordRichPresence(false);
+            bridge.setDiscordRichPresence(true);
+            bridge.setDiscordRichPresence(false);
+            bridge.setDiscordRichPresence(true);
+            bridge.connectSession();
+            check(bridge.discordRichPresence, "RPC rapid toggles and reconnect retain latest choice");
+            finish();
+        }
+    }
     function step(): void {
         if (passed) return;
         if (gallery) { galleryModalProbe(); return; }
+        if (testCase.startsWith("discord-")) { discordPreferenceProbe(); return; }
         if (testCase.startsWith("names-")) { trackNamePreferencesProbe(); return; }
         if (testCase === "folders") { folderProbe(); return; }
         if (testCase === "search") { searchProbe(); return; }
