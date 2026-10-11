@@ -19,6 +19,8 @@ pub struct Playback {
     pub error: Option<String>,
     pub has_source: bool,
     pub playback_token: u64,
+    /// Advances only after a successful local seek, not on position ticks.
+    pub seek_serial: u64,
     pub can_next: bool,
     pub can_previous: bool,
 }
@@ -364,9 +366,14 @@ impl<E: Engine> Core<E> {
                 {
                     return None;
                 }
-                self.player
+                let result = self
+                    .player
                     .as_mut()
-                    .map_or(Ok(()), |player| player.seek(position))
+                    .map_or(Ok(()), |player| player.seek(position));
+                if result.is_ok() {
+                    self.state.seek_serial = self.state.seek_serial.wrapping_add(1);
+                }
+                result
             }
             Command::SetVolume(volume) => {
                 if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
@@ -470,6 +477,7 @@ mod tests {
         output_error: Option<String>,
         immediate_end: bool,
         play_error: bool,
+        seek_error: bool,
         play_volumes: Vec<f32>,
     }
     impl Engine for FakeEngine {
@@ -507,6 +515,9 @@ mod tests {
             Ok(())
         }
         fn seek(&mut self, position: Duration) -> Result<(), String> {
+            if self.seek_error {
+                return Err("seek failed".into());
+            }
             self.snapshot.position = position;
             Ok(())
         }
@@ -639,6 +650,10 @@ mod tests {
             },
             1,
         );
+        assert_eq!(
+            core.state.seek_serial, 1,
+            "successful seek advances revision"
+        );
         assert!(assign(&mut core, 1, 1, 10, PlaybackMode::Playing).is_none());
         assert_eq!(core.state.snapshot.position, Duration::from_secs(12));
         assert!(assign(&mut core, 2, 2, 10, PlaybackMode::Playing).is_none());
@@ -652,6 +667,23 @@ mod tests {
             2,
         );
         assert_eq!(core.state.snapshot.position, Duration::ZERO);
+        assert_eq!(
+            core.state.seek_serial, 1,
+            "stale seek cannot advance revision"
+        );
+        core.player.as_mut().unwrap().seek_error = true;
+        core.command(
+            Command::Seek {
+                expected_id: Some(10),
+                playback_token: 2,
+                position: Duration::from_secs(50),
+            },
+            2,
+        );
+        assert_eq!(
+            core.state.seek_serial, 1,
+            "failed local seek cannot advance revision"
+        );
     }
     #[test]
     fn started_waits_for_successful_play_and_never_repeats_on_pause_resume() {

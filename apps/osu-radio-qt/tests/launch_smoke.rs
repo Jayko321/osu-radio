@@ -686,3 +686,56 @@ fn local_track_name_preferences_persist_and_report_read_write_failures_offline()
         "offline preferences do not need a server"
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn discord_preference_persists_searches_and_toggles_without_discord_or_server() {
+    let directory = tempfile::tempdir().expect("isolated Discord preference");
+    let server = Path::new("/no/server/allowed");
+    assert_probe(&run(
+        &[],
+        "offscreen",
+        directory.path(),
+        server,
+        "discord-write",
+    ));
+    let path = directory.path().join("config/osu-radio/osu-radio-qt.conf");
+    let saved = std::fs::read_to_string(&path).expect("Discord settings");
+    assert!(saved.contains("discord_rich_presence=true"), "{saved}");
+    std::fs::write(
+        &path,
+        format!("{saved}\n[display]\nuse_unicode_titles=true\nuse_unicode_artists=true\n[unrelated]\nkeep=value\n"),
+    )
+        .expect("unrelated preference");
+    assert_probe(&run(
+        &[],
+        "offscreen",
+        directory.path(),
+        server,
+        "discord-read",
+    ));
+    assert!(
+        std::fs::read_to_string(&path)
+            .expect("preserved preference")
+            .contains("keep=value")
+    );
+    std::fs::write(&path, "[integrations\ndiscord_rich_presence=true\n")
+        .expect("corrupt preference");
+    assert_probe(&run(
+        &[],
+        "offscreen",
+        directory.path(),
+        server,
+        "discord-read-error",
+    ));
+    let blocked = tempfile::tempdir().expect("inaccessible preference");
+    std::fs::write(blocked.path().join("config"), "not a directory").expect("blocked config");
+    assert_probe(&run(
+        &[],
+        "offscreen",
+        blocked.path(),
+        server,
+        "discord-write-error",
+    ));
+    assert!(!directory.path().join("starts").exists());
+}

@@ -62,6 +62,20 @@ pub mod ffi {
         #[qobject]
         #[qml_element]
         #[base = QAbstractListModel]
+        #[qproperty(
+            bool,
+            discord_rich_presence,
+            cxx_name = "discordRichPresence",
+            READ,
+            NOTIFY
+        )]
+        #[qproperty(
+            QString,
+            discord_preference_message,
+            cxx_name = "discordPreferenceMessage",
+            READ,
+            NOTIFY
+        )]
         #[qproperty(bool, use_unicode_titles, cxx_name = "useUnicodeTitles", READ, NOTIFY)]
         #[qproperty(
             bool,
@@ -411,6 +425,9 @@ pub mod ffi {
         #[cxx_name = "setUseUnicodeTitles"]
         fn change_unicode_titles(self: Pin<&mut AppBridge>, enabled: bool);
         #[qinvokable]
+        #[cxx_name = "setDiscordRichPresence"]
+        fn change_discord_rich_presence(self: Pin<&mut AppBridge>, enabled: bool);
+        #[qinvokable]
         #[cxx_name = "setUseUnicodeArtists"]
         fn change_unicode_artists(self: Pin<&mut AppBridge>, enabled: bool);
         #[qinvokable]
@@ -611,10 +628,12 @@ pub struct AppBridgeRust {
     rows: Vec<Row>,
     cover_rows: HashMap<i32, Vec<usize>>,
     audio_rows: HashMap<i32, usize>,
+    discord_rich_presence: bool,
+    discord_preference_message: QString,
     use_unicode_titles: bool,
     use_unicode_artists: bool,
     track_name_preferences_message: QString,
-    track_name_preferences_loaded: bool,
+    local_preferences_loaded: bool,
     controller: Option<AppController>,
     generation: u64,
     cache_epoch: u64,
@@ -704,10 +723,12 @@ impl Default for AppBridgeRust {
             rows: Vec::new(),
             cover_rows: HashMap::new(),
             audio_rows: HashMap::new(),
+            discord_rich_presence: false,
+            discord_preference_message: QString::default(),
             use_unicode_titles: false,
             use_unicode_artists: false,
             track_name_preferences_message: QString::default(),
-            track_name_preferences_loaded: false,
+            local_preferences_loaded: false,
             controller: None,
             generation: 0,
             cache_epoch: 0,
@@ -743,6 +764,30 @@ macro_rules! property_setter {
 }
 impl ffi::AppBridge {
     property_setter!(
+        set_discord_rich_presence,
+        discord_rich_presence,
+        discord_rich_presence_changed,
+        bool
+    );
+    property_setter!(
+        set_discord_preference_message,
+        discord_preference_message,
+        discord_preference_message_changed,
+        QString
+    );
+    pub fn change_discord_rich_presence(mut self: Pin<&mut Self>, enabled: bool) {
+        self.as_mut().load_local_preferences();
+        if self.discord_rich_presence == enabled {
+            return;
+        }
+        self.as_mut().set_discord_rich_presence(enabled);
+        self.command(AppCommand::SetDiscordRichPresence(enabled));
+        if RuntimeContext::current().is_some() {
+            let message = native::save_discord_rich_presence(enabled);
+            self.set_discord_preference_message(message);
+        }
+    }
+    property_setter!(
         set_use_unicode_titles,
         use_unicode_titles,
         use_unicode_titles_changed,
@@ -767,24 +812,35 @@ impl ffi::AppBridge {
             use_unicode_artists: self.use_unicode_artists,
         }
     }
-    fn load_track_name_preferences(mut self: Pin<&mut Self>) {
-        if self.track_name_preferences_loaded {
+    fn load_local_preferences(mut self: Pin<&mut Self>) {
+        if self.local_preferences_loaded {
             return;
         }
-        self.as_mut().rust_mut().track_name_preferences_loaded = true;
+        self.as_mut().rust_mut().local_preferences_loaded = true;
         // The offline gallery has no live runtime and never touches local settings.
         if RuntimeContext::current().is_none() {
             return;
         }
         let mut titles = false;
         let mut artists = false;
-        let error = native::load_track_name_preferences(&mut titles, &mut artists);
+        let mut discord = false;
+        // One QSettings read shares any FormatError across all preferences.
+        let loaded = native::load_local_preferences(&mut titles, &mut artists, &mut discord);
         self.as_mut().set_use_unicode_titles(titles);
         self.as_mut().set_use_unicode_artists(artists);
-        self.set_track_name_preferences_message(error);
+        self.as_mut().set_discord_rich_presence(discord);
+        if !loaded {
+            self.as_mut()
+                .set_track_name_preferences_message(QString::from(
+                    "Could not read track name preferences. Using default names.",
+                ));
+            self.set_discord_preference_message(QString::from(
+                "Could not read Discord preference. Rich Presence is disabled.",
+            ));
+        }
     }
     fn change_track_name_preference(mut self: Pin<&mut Self>, title: bool, enabled: bool) {
-        self.as_mut().load_track_name_preferences();
+        self.as_mut().load_local_preferences();
         let current = if title {
             self.use_unicode_titles
         } else {
@@ -1219,7 +1275,7 @@ impl ffi::AppBridge {
         }
     }
     pub fn connect_session(mut self: Pin<&mut Self>) {
-        self.as_mut().load_track_name_preferences();
+        self.as_mut().load_local_preferences();
         if self.controller.is_none() {
             let Some(context) = RuntimeContext::current() else {
                 return;
@@ -1261,6 +1317,9 @@ impl ffi::AppBridge {
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(controller.clone());
             context.retain(controller.clone());
             self.as_mut().rust_mut().controller = Some(controller);
+            self.command(AppCommand::SetDiscordRichPresence(
+                self.discord_rich_presence,
+            ));
             self.command(AppCommand::SetTrackNamePreferences(
                 self.track_name_preferences(),
             ));

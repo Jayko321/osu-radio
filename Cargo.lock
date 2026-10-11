@@ -24,7 +24,7 @@ version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3b7f7f85a7e5f68090000ed7622545829afd484d210358702ae4cb97dd0c320"
 dependencies = [
- "uuid",
+ "uuid 1.24.0",
 ]
 
 [[package]]
@@ -1696,6 +1696,21 @@ dependencies = [
  "block-buffer 0.12.1",
  "crypto-common 0.2.2",
  "ctutils",
+]
+
+[[package]]
+name = "discord-rich-presence"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90c55d69cab17c19677ce3a5f8face993a9e6eaf847fecac3547f3a3ff4a2494"
+dependencies = [
+ "log",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "serde_repr",
+ "thiserror 2.0.18",
+ "uuid 0.8.2",
 ]
 
 [[package]]
@@ -3744,6 +3759,7 @@ dependencies = [
 name = "osu-radio-client"
 version = "0.1.0"
 dependencies = [
+ "discord-rich-presence",
  "osu-radio-player",
  "reqwest",
  "serde",
@@ -4766,7 +4782,7 @@ dependencies = [
  "time",
  "tracing",
  "url",
- "uuid",
+ "uuid 1.24.0",
  "web-time",
 ]
 
@@ -4841,7 +4857,7 @@ dependencies = [
  "sea-query-derive",
  "serde_json",
  "time",
- "uuid",
+ "uuid 1.24.0",
 ]
 
 [[package]]
@@ -5316,7 +5332,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
- "uuid",
+ "uuid 1.24.0",
  "webpki-roots",
 ]
 
@@ -5385,7 +5401,7 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tracing",
- "uuid",
+ "uuid 1.24.0",
 ]
 
 [[package]]
@@ -5423,7 +5439,7 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tracing",
- "uuid",
+ "uuid 1.24.0",
  "whoami",
 ]
 
@@ -5451,7 +5467,7 @@ dependencies = [
  "time",
  "tracing",
  "url",
- "uuid",
+ "uuid 1.24.0",
 ]
 
 [[package]]
@@ -6268,6 +6284,15 @@ dependencies = [
  "serde",
  "serde_json",
  "utoipa",
+]
+
+[[package]]
+name = "uuid"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc5cf98d8186244414c848017f0e2676b3fcb46807f6668a97dfe67359a3c4b7"
+dependencies = [
+ "getrandom 0.2.17",
 ]
 
 [[package]]
@@ -7210,7 +7235,7 @@ dependencies = [
  "serde_repr",
  "tracing",
  "uds_windows",
- "uuid",
+ "uuid 1.24.0",
  "windows-sys 0.61.2",
  "winnow",
  "zbus_macros",

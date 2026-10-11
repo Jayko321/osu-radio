@@ -268,6 +268,7 @@ impl Controller {
             Err(error) => self.playback_error(error),
         }
     }
+    #[allow(clippy::too_many_lines)] // Keep token transition and local assignment atomic.
     pub(super) fn apply_assignment(&mut self, assignment: PlaybackAssignment) {
         if self.volume.settings.is_none() {
             if self
@@ -341,6 +342,10 @@ impl Controller {
             );
         }
         self.assignment = Some(assignment);
+        // A new assignment cannot borrow the old local track's Playing state.
+        if restart {
+            self.discord.update(None, &self.worker_state);
+        }
         self.refresh_queue();
         if restart {
             self.finish_volume_editing();
@@ -369,6 +374,15 @@ impl Controller {
         }
         self.emit_selection();
     }
+    pub(super) fn update_discord(&mut self) {
+        let track = self.current_track.as_ref().filter(|_| {
+            self.assignment.as_ref().is_some_and(|assignment| {
+                assignment.playback_token == self.worker_state.playback_token
+                    && assignment.current_audio_source_id == self.worker_state.current_audio_id
+            })
+        });
+        self.discord.update(track, &self.worker_state);
+    }
     pub(super) fn worker_update(&mut self, mut playback: crate::playback::Playback) {
         if let Some(assignment) = &self.assignment {
             if playback.playback_token != assignment.playback_token {
@@ -378,6 +392,7 @@ impl Controller {
             playback.can_previous = assignment.can_previous;
         }
         self.worker_state = playback.clone();
+        self.update_discord();
         playback.current_playlist_item_id = self
             .assignment
             .as_ref()

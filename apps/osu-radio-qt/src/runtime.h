@@ -13,16 +13,17 @@
 #if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
 #error "osu-radio-qt requires Qt 6.8 or newer for native QML window interactions"
 #endif
-inline QString loadTrackNamePreferences(bool &titles, bool &artists) {
+inline bool loadLocalPreferences(bool &titles, bool &artists, bool &discord) {
     QSettings settings(QSettings::NativeFormat, QSettings::UserScope,
         QStringLiteral("osu-radio"), QStringLiteral("osu-radio-qt"));
     settings.setFallbacksEnabled(false);
     titles = settings.value(QStringLiteral("display/use_unicode_titles"), false).toBool();
     artists = settings.value(QStringLiteral("display/use_unicode_artists"), false).toBool();
+    discord = settings.value(QStringLiteral("integrations/discord_rich_presence"), false).toBool();
     settings.sync();
-    if (settings.status() == QSettings::NoError) return {};
-    titles = artists = false;
-    return QStringLiteral("Could not read track name preferences. Using default names.");
+    if (settings.status() == QSettings::NoError) return true;
+    titles = artists = discord = false;
+    return false;
 }
 inline QString saveTrackNamePreference(bool title, bool enabled) {
     QSettings settings(QSettings::NativeFormat, QSettings::UserScope,
@@ -33,6 +34,15 @@ inline QString saveTrackNamePreference(bool title, bool enabled) {
     settings.sync();
     return settings.status() == QSettings::NoError ? QString()
         : QStringLiteral("Could not save track name preferences. Your choice applies for this session.");
+}
+inline QString saveDiscordRichPresence(bool enabled) {
+    QSettings settings(QSettings::NativeFormat, QSettings::UserScope,
+        QStringLiteral("osu-radio"), QStringLiteral("osu-radio-qt"));
+    settings.setFallbacksEnabled(false);
+    settings.setValue(QStringLiteral("integrations/discord_rich_presence"), enabled);
+    settings.sync();
+    return settings.status() == QSettings::NoError ? QString()
+        : QStringLiteral("Could not save Discord preference. Your choice applies for this session.");
 }
 inline void configureEngine(QQmlApplicationEngine &engine, bool smoke) {
     // Dialog internals import unqualified Controls; match the app's Basic controls.

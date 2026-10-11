@@ -814,3 +814,62 @@ async fn late_queue_and_assignment_metadata_use_current_unicode_choices_without_
     );
     state.cancel_audio();
 }
+
+#[test]
+fn discord_uses_local_source_rejects_old_tokens_and_ignores_selection() {
+    let (mut state, _) = super::super::tests::controller();
+    let assigned = assignment(1, 9, 42, PlaybackMode::Playing);
+    state.current_track = assigned.track.clone().map(Track::from);
+    state.assignment = Some(assigned);
+    let mut playback = crate::playback::Playback {
+        current_audio_id: Some(42),
+        playback_token: 9,
+        has_source: true,
+        snapshot: crate::playback::Snapshot {
+            state: crate::playback::PlayerState::Playing,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    state.worker_update(playback.clone());
+    assert_eq!(state.discord.current_token(), Some(9));
+    state.selected = Some(777);
+    state.worker_update(playback.clone());
+    assert_eq!(state.discord.current_token(), Some(9));
+    playback.playback_token = 8;
+    playback.snapshot.state = crate::playback::PlayerState::Stopped;
+    state.worker_update(playback.clone());
+    assert_eq!(
+        state.discord.current_token(),
+        Some(9),
+        "stale local stop cannot clear current RPC"
+    );
+    playback.playback_token = 9;
+    state.worker_update(playback);
+    assert_eq!(state.discord.current_token(), None);
+}
+
+#[test]
+fn name_preference_change_cannot_republish_previous_token_for_the_same_audio() {
+    let (mut state, _) = super::super::tests::controller();
+    let assigned = assignment(1, 9, 42, PlaybackMode::Playing);
+    state.current_track = assigned.track.clone().map(Track::from);
+    state.assignment = Some(assigned);
+    state.worker_update(crate::playback::Playback {
+        current_audio_id: Some(42),
+        playback_token: 9,
+        has_source: true,
+        snapshot: crate::playback::Snapshot {
+            state: crate::playback::PlayerState::Playing,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    assert_eq!(state.discord.current_token(), Some(9));
+    state.assignment = Some(assignment(2, 10, 42, PlaybackMode::Playing));
+    state.set_name_preferences(crate::TrackNamePreferences {
+        use_unicode_titles: true,
+        ..Default::default()
+    });
+    assert_eq!(state.discord.current_token(), None);
+}

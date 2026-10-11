@@ -22,6 +22,7 @@ impl Controller {
         {
             track.apply_name_preferences(preferences);
         }
+        self.update_discord();
         self.reorder_tracks();
         self.emit_queue();
         if self.playlists.view.showing_detail() && self.playlists.view.active.is_none() {

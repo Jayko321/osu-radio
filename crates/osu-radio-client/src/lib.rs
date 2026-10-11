@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod controller;
+pub mod discord;
 #[cfg(feature = "mock")]
 pub mod mock;
 pub mod models;

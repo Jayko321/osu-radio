@@ -387,7 +387,8 @@ Basic.ApplicationWindow {
                     readonly property bool foldersMatch: matches(generalSettingsHeader.text, foldersLabel.text)
                     readonly property bool individualVolumeMatches: matches(audioSettingsHeader.text, individualVolumeSwitch.text)
                     readonly property bool globalVolumeMatches: bridge.individualVolumeEnabled && matches(audioSettingsHeader.text, globalVolumeLabel.settingName)
-                    readonly property bool hasMatches: foldersMatch || individualVolumeMatches || globalVolumeMatches
+                    readonly property bool discordMatches: matches("Integrations", "Discord Rich Presence")
+                    readonly property bool hasMatches: foldersMatch || individualVolumeMatches || globalVolumeMatches || discordMatches
                     function matches(section: string, setting: string): bool {
                         return query.length === 0 || section.toLowerCase().includes(query) || setting.toLowerCase().includes(query);
                     }
@@ -559,6 +560,46 @@ Basic.ApplicationWindow {
                                     objectName: "trackNamePreferencesStatus"
                                     width: parent.width
                                     text: bridge.trackNamePreferencesMessage
+                                    visible: text.length > 0
+                                    color: Theme.text
+                                    font.family: settingsPane.fontFamily
+                                    font.pixelSize: 14
+                                    wrapMode: Text.Wrap
+                                }
+                            }
+                            Column {
+                                objectName: "discordSettingsSection"
+                                visible: settingsPane.discordMatches
+                                width: parent.width
+                                spacing: 16
+                                Text {
+                                    text: "Integrations"
+                                    color: Theme.text
+                                    font.family: settingsPane.fontFamily
+                                    font.pixelSize: 20
+                                    font.bold: true
+                                }
+                                AppSwitch {
+                                    objectName: "discordRichPresenceSwitch"
+                                    width: parent.width
+                                    text: "Discord Rich Presence"
+                                    font.family: settingsPane.fontFamily
+                                    font.pixelSize: 16
+                                    checked: bridge.discordRichPresence
+                                    onToggled: bridge.setDiscordRichPresence(checked)
+                                }
+                                Text {
+                                    width: parent.width
+                                    text: "Show the currently playing track on your Discord profile."
+                                    color: Theme.muted
+                                    font.family: settingsPane.fontFamily
+                                    font.pixelSize: 14
+                                    wrapMode: Text.Wrap
+                                }
+                                Text {
+                                    objectName: "discordPreferenceStatus"
+                                    width: parent.width
+                                    text: bridge.discordPreferenceMessage
                                     visible: text.length > 0
                                     color: Theme.text
                                     font.family: settingsPane.fontFamily
