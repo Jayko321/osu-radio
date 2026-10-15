@@ -40,3 +40,105 @@ fn sqlite_options(database_url: &str) -> ConnectOptions {
     });
     options
 }
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use super::connect;
+    use sea_orm::{ConnectionTrait, Statement};
+
+    #[tokio::test]
+    async fn memory_url_variants_keep_data_and_do_not_create_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let named = format!(
+            "sqlite://{}?mode=memory&cache=shared",
+            directory.path().join("memory.sqlite").display()
+        );
+        for url in [":memory:", "sqlite::memory:", &named] {
+            let connection = connect(url).await.unwrap();
+            connection
+                .execute_unprepared("CREATE TABLE memory_probe (id INTEGER PRIMARY KEY)")
+                .await
+                .unwrap();
+            connection
+                .execute_unprepared("INSERT INTO memory_probe VALUES (42)")
+                .await
+                .unwrap();
+            let row = connection
+                .clone()
+                .query_one_raw(Statement::from_string(
+                    connection.get_database_backend(),
+                    "SELECT id FROM memory_probe",
+                ))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.try_get::<i32>("", "id").unwrap(), 42);
+        }
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn file_paths_and_urls_enable_wal_foreign_keys_and_the_busy_timeout() {
+        let directory = tempfile::tempdir().unwrap();
+        for (name, uri) in [("plain path.sqlite", false), ("url.sqlite", true)] {
+            let path = directory.path().join(name);
+            let url = if uri {
+                format!("sqlite://{}", path.display())
+            } else {
+                path.to_str().unwrap().to_owned()
+            };
+            let connection = connect(&url).await.unwrap();
+            let row = connection
+                .query_one_raw(Statement::from_string(
+                    connection.get_database_backend(),
+                    "PRAGMA journal_mode",
+                ))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.try_get::<String>("", "journal_mode").unwrap(), "wal");
+            let row = connection
+                .query_one_raw(Statement::from_string(
+                    connection.get_database_backend(),
+                    "PRAGMA busy_timeout",
+                ))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.try_get::<i32>("", "timeout").unwrap(), 5000);
+            connection
+                .execute_unprepared("CREATE TABLE parent (id INTEGER PRIMARY KEY)")
+                .await
+                .unwrap();
+            connection
+                .execute_unprepared("CREATE TABLE child (parent_id INTEGER REFERENCES parent(id))")
+                .await
+                .unwrap();
+            assert!(
+                connection
+                    .execute_unprepared("INSERT INTO child VALUES (42)")
+                    .await
+                    .is_err()
+            );
+            connection
+                .execute_unprepared("INSERT INTO parent VALUES (42)")
+                .await
+                .unwrap();
+            connection
+                .execute_unprepared("INSERT INTO child VALUES (42)")
+                .await
+                .unwrap();
+            drop(connection);
+            let reopened = connect(&url).await.unwrap();
+            let row = reopened
+                .query_one_raw(Statement::from_string(
+                    reopened.get_database_backend(),
+                    "SELECT parent_id FROM child",
+                ))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(row.try_get::<i32>("", "parent_id").unwrap(), 42);
+        }
+    }
+}

@@ -612,12 +612,14 @@ mod tests {
 
     #[test]
     fn native_model_cache_and_destroyed_object_contracts() {
-        assert!(native::check_playlist_cover_preparation().is_empty());
+        let cover_error = native::check_playlist_cover_preparation();
+        assert!(cover_error.is_empty(), "{cover_error}");
         independent_models_keep_item_identity_and_media();
         player_projection_does_not_reset_lists();
         warmed_rows_and_queue_keep_artwork_after_eviction();
         playlist_images_validate_revision_and_reuse_resident_keys();
-        assert!(native::check_artwork_cache().is_empty());
+        let cache_error = native::check_artwork_cache();
+        assert!(cache_error.is_empty(), "{cache_error}");
         let mut object = native::new_app_bridge();
         let bridge = object.pin_mut();
         let thread = bridge.qt_thread();

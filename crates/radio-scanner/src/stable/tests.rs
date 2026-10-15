@@ -767,6 +767,37 @@ async fn missing_database_errors_identify_the_marker() {
     );
 }
 
+#[tokio::test]
+async fn unreadable_collections_and_configuration_abort_without_changing_the_sources() {
+    for (filename, directory) in [
+        ("collection.db", true),
+        ("osu!.user.cfg", true),
+        ("osu!.user.cfg", false),
+    ] {
+        let temp = install(&[]);
+        let database_path = temp.path().join("osu!.db");
+        let before = fs::read(&database_path).unwrap();
+        let path = temp.path().join(filename);
+        if directory {
+            fs::create_dir(&path).unwrap();
+        } else {
+            fs::write(&path, [0xff]).unwrap();
+        }
+        let error = super::import_snapshot_from_stable_db(&database_path)
+            .await
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains(&path.display().to_string()), "{message}");
+        assert!(message.contains("failed to read"), "{message}");
+        assert_eq!(fs::read(&database_path).unwrap(), before);
+        if directory {
+            assert!(path.is_dir());
+        } else {
+            assert_eq!(fs::read(&path).unwrap(), [0xff]);
+        }
+    }
+}
+
 fn collection_database(collections: &[(&str, &[&str])]) -> Vec<u8> {
     let mut bytes = Vec::new();
     integer(&mut bytes, 2025_01_08);
@@ -779,6 +810,29 @@ fn collection_database(collections: &[(&str, &[&str])]) -> Vec<u8> {
         }
     }
     bytes
+}
+
+#[tokio::test]
+async fn explicit_helper_dispatch_keeps_stable_collections_without_launching_the_helper() {
+    let temp = install(&[]);
+    fs::write(
+        temp.path().join("collection.db"),
+        collection_database(&[("曲", &[])]),
+    )
+    .unwrap();
+    let snapshot = crate::import_snapshot_with_helper(
+        OsuMarker {
+            kind: OsuKind::Stable,
+            root_path: temp.path().to_path_buf(),
+            marker_path: temp.path().join("osu!.db"),
+        },
+        temp.path().join("nonexistent-lazer-helper"),
+    )
+    .await
+    .unwrap();
+    assert!(snapshot.beatmap_sets.is_empty());
+    assert_eq!(snapshot.collections.len(), 1);
+    assert_eq!(snapshot.collections[0].name, "曲");
 }
 
 #[tokio::test]

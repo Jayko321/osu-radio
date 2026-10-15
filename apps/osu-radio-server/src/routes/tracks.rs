@@ -82,6 +82,66 @@ mod tests {
     use crate::test_support::{beatmap_set, state_with};
     use osu_radio_client::{ApiClient, Track, view_models::library_tracks};
 
+    #[test]
+    fn response_fields_preserve_unicode_dates_volume_nulls_and_difficulty_identity() {
+        let populated = radio_services::LibraryTrack {
+            audio_source_id: 17,
+            last_played_at_ms: Some(1_700_000_000_123),
+            volume_percent: Some(0),
+            title: Some("Title".into()),
+            title_unicode: Some("題".into()),
+            artist: Some("Artist".into()),
+            artist_unicode: Some("演奏者".into()),
+            cover_beatmap_id: Some(71),
+            difficulties: vec![
+                radio_services::TrackDifficulty {
+                    beatmap_id: 71,
+                    beatmap_set_id: 31,
+                    difficulty_name: Some("Hard".into()),
+                    set_has_multiple_audio_sources: true,
+                },
+                radio_services::TrackDifficulty {
+                    beatmap_id: 72,
+                    beatmap_set_id: 32,
+                    difficulty_name: None,
+                    set_has_multiple_audio_sources: false,
+                },
+            ],
+        };
+        let actual = serde_json::to_value(TrackResponse::from(populated)).unwrap();
+        assert_eq!(
+            actual,
+            serde_json::json!({
+                "audio_source_id": 17, "last_played_at_ms": 1_700_000_000_123_i64, "volume_percent": 0,
+                "title": "Title", "title_unicode": "題", "artist": "Artist", "artist_unicode": "演奏者", "cover_beatmap_id": 71,
+                "difficulties": [
+                    {"beatmap_id": 71, "beatmap_set_id": 31, "difficulty_name": "Hard", "set_has_multiple_audio_sources": true},
+                    {"beatmap_id": 72, "beatmap_set_id": 32, "difficulty_name": null, "set_has_multiple_audio_sources": false},
+                ]
+            })
+        );
+        let wire: osu_radio_client::models::LibraryTrack = serde_json::from_value(actual).unwrap();
+        assert_eq!(wire.volume_percent, Some(0));
+        let empty = radio_services::LibraryTrack {
+            audio_source_id: 18,
+            last_played_at_ms: None,
+            volume_percent: None,
+            title: None,
+            title_unicode: None,
+            artist: None,
+            artist_unicode: None,
+            cover_beatmap_id: None,
+            difficulties: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(TrackResponse::from(empty)).unwrap(),
+            serde_json::json!({
+                "audio_source_id": 18, "last_played_at_ms": null, "volume_percent": null, "title": null, "title_unicode": null,
+                "artist": null, "artist_unicode": null, "cover_beatmap_id": null, "difficulties": []
+            })
+        );
+    }
+
     #[tokio::test]
     async fn compact_http_preserves_legacy_tracks_and_every_difficulty() {
         let mut first = beatmap_set(1, "/shared.mp3");

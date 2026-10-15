@@ -582,6 +582,10 @@ impl ApiClient {
 }
 
 #[cfg(test)]
+#[path = "api/contract_tests.rs"]
+mod contract_tests;
+
+#[cfg(test)]
 #[path = "api/folder_tests.rs"]
 mod folder_tests;
 

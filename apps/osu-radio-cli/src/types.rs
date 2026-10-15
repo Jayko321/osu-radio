@@ -171,8 +171,10 @@ impl From<SourceArg> for OsuKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Command};
+    use super::{Cli, Command, DepthArg, SourceArg};
     use clap::Parser;
+    use radio_core::OsuKind;
+    use radio_scanner::discovery::DiscoveryDepth;
 
     #[test]
     fn store_rejects_count_and_retains_explicit_clear() {
@@ -180,5 +182,49 @@ mod tests {
         let cli = Cli::try_parse_from(["osu-radio-cli", "store", "--clear"])
             .expect("explicit reset should remain available");
         assert!(matches!(cli.command, Some(Command::Store(args)) if args.clear));
+    }
+
+    #[test]
+    fn defaults_do_not_reset_storage_and_import_limits_only_preview_output() {
+        assert!(
+            Cli::try_parse_from(["osu-radio-cli"])
+                .unwrap()
+                .command
+                .is_none()
+        );
+        let cli = Cli::try_parse_from(["osu-radio-cli", "store"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Store(args)) if !args.clear));
+        let cli = Cli::try_parse_from(["osu-radio-cli", "import"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Import(args)) if args.limit == 20));
+        let cli = Cli::try_parse_from(["osu-radio-cli", "import", "--limit", "0"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Import(args)) if args.limit == 0));
+        let cli = Cli::try_parse_from(["osu-radio-cli", "scan"]).unwrap();
+        assert!(matches!(cli.command, Some(Command::Scan(args)) if
+            !args.first && args.limit.is_none() && matches!(args.depth, DepthArg::Full)));
+    }
+
+    #[test]
+    fn scan_rejects_conflicting_limits_unknown_sources_and_depths() {
+        for args in [
+            vec!["scan", "--first", "--limit", "2"],
+            vec!["scan", "-1", "--limit", "2"],
+            vec!["scan", "--depth", "recursive"],
+            vec!["scan", "--source", "unknown"],
+            vec!["scan", "--limit", "-1"],
+        ] {
+            assert!(Cli::try_parse_from(std::iter::once("osu-radio-cli").chain(args)).is_err());
+        }
+    }
+
+    #[test]
+    fn cli_enums_map_to_the_scanner_domain() {
+        assert_eq!(OsuKind::from(SourceArg::Stable), OsuKind::Stable);
+        assert_eq!(OsuKind::from(SourceArg::Lazer), OsuKind::Lazer);
+        assert_eq!(DiscoveryDepth::from(DepthArg::Known), DiscoveryDepth::Known);
+        assert_eq!(
+            DiscoveryDepth::from(DepthArg::Shallow),
+            DiscoveryDepth::Shallow
+        );
+        assert_eq!(DiscoveryDepth::from(DepthArg::Full), DiscoveryDepth::Full);
     }
 }

@@ -34,6 +34,135 @@ fn assignment(revision: u64, token: u64, id: i32, mode: PlaybackMode) -> Playbac
 }
 
 #[tokio::test]
+async fn offline_queue_open_reports_connection_requirement_and_close_aborts_pending_work() {
+    let (mut state, updates) = crate::controller::tests::controller();
+    state
+        .upcoming
+        .view
+        .tracks
+        .push(crate::controller::tests::track(42));
+    state.upcoming.view.message = "old error".into();
+    state.upcoming.request = u64::MAX;
+    state.refresh_queue();
+    assert_eq!(
+        state.upcoming.request,
+        u64::MAX,
+        "closed queue performs no refresh"
+    );
+    state.set_queue_visible(true);
+    assert_eq!(state.upcoming.request, 0);
+    assert!(state.upcoming.state().tracks.is_empty());
+    assert!(!state.upcoming.state().loading);
+    assert_eq!(
+        state.upcoming.state().message,
+        "Connect to the server to view the queue."
+    );
+    assert!(
+        matches!(updates.lock().unwrap().last(), Some(AppUpdate::Queue(view))
+        if view.message == "Connect to the server to view the queue.")
+    );
+    let pending = tokio::spawn(std::future::pending::<()>());
+    state.upcoming.task = Some(pending.abort_handle());
+    state.set_queue_visible(false);
+    assert!(pending.await.unwrap_err().is_cancelled());
+    assert!(state.upcoming.task.is_none());
+    assert_eq!(state.upcoming.request, 1);
+    let count = updates.lock().unwrap().len();
+    state.queue_loaded(1, Err("late failure".into()));
+    assert_eq!(updates.lock().unwrap().len(), count);
+    assert_eq!(
+        state.upcoming.state().message,
+        "Connect to the server to view the queue."
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn queue_snapshot_older_than_assignment_is_refetched_before_replacing_rows() {
+    use tokio::io::AsyncWriteExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (_directory, session) =
+        session_at(&format!("http://{}", listener.local_addr().unwrap())).await;
+    let (mut state, updates) = crate::controller::tests::controller();
+    state.session = Some(session);
+    state.player.assignment = Some(assignment(5, 9, 7, PlaybackMode::Paused));
+    state.upcoming.open = true;
+    state.upcoming.view.tracks = vec![crate::controller::tests::track(42)];
+    let old_queue = crate::models::QueueState {
+        upcoming_tracks: vec![assignment(4, 8, 99, PlaybackMode::Paused).track.unwrap()],
+        audio_source_ids: vec![99],
+        playlist_item_ids: vec![None],
+        current_index: Some(0),
+        mode: PlaybackMode::Paused,
+        revision: 4,
+        playback_token: 8,
+    };
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        assert!(
+            read_request(&mut stream)
+                .await
+                .starts_with("GET /api/queue HTTP/1.1")
+        );
+        let body = r#"{"upcoming_tracks":[{"audio_source_id":103,"title":"Fresh","difficulties":[]}],"audio_source_ids":[7,103],"playlist_item_ids":[null,null],"current_index":0,"mode":"paused","revision":5,"playback_token":9}"#;
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    });
+    state.queue_loaded(0, Ok(old_queue));
+    assert_eq!(state.upcoming.request, 1);
+    assert!(state.upcoming.state().loading);
+    assert_eq!(
+        state
+            .upcoming
+            .state()
+            .tracks
+            .first()
+            .unwrap()
+            .audio_source_id,
+        42
+    );
+    assert!(
+        updates
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|update| !matches!(update,
+        AppUpdate::Queue(view) if view.tracks.iter().any(|track| track.audio_source_id == 99)))
+    );
+    let completed = tokio::time::timeout(Duration::from_secs(3), state.tasks.join_next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    state.complete(completed);
+    assert!(!state.upcoming.state().loading);
+    assert_eq!(
+        state
+            .upcoming
+            .state()
+            .tracks
+            .first()
+            .unwrap()
+            .audio_source_id,
+        103
+    );
+    assert!(state.upcoming.state().message.is_empty());
+    assert!(state.upcoming.task.is_none());
+    assert_eq!(state.player.assignment.as_ref().unwrap().revision, 5);
+    server.await.unwrap();
+    state.session.take().unwrap().shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn queue_view_preserves_order_duplicates_and_media_outside_search() {
     let (mut state, updates) = crate::controller::tests::controller();
     state.player.assignment = Some(assignment(5, 9, 7, PlaybackMode::Paused));

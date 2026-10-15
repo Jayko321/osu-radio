@@ -151,3 +151,189 @@ pub(crate) fn router(state: AppState) -> Router {
             radio_services::MAX_PLAYLIST_COVER_BYTES,
         ))
 }
+
+#[cfg(all(test, feature = "sqlite"))]
+mod tests {
+    use super::*;
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+
+    const API_ROUTES: &[(&str, &[&str])] = &[
+        ("/api/beatmap-sets", &["get"]),
+        ("/api/tracks", &["get"]),
+        ("/api/beatmaps/{id}/cover", &["get"]),
+        ("/api/audio-sources/{id}/duration", &["get"]),
+        ("/api/audio-sources/{id}/audio", &["get"]),
+        ("/api/audio-sources/{id}/volume", &["put", "delete"]),
+        ("/api/playlists", &["get", "post"]),
+        ("/api/playlists/{id}", &["get", "patch", "delete"]),
+        ("/api/playlists/{id}/items", &["post"]),
+        ("/api/playlists/{id}/items/{item_id}", &["delete"]),
+        ("/api/playlists/{id}/play", &["post"]),
+        ("/api/playlists/{id}/cover", &["get", "put", "delete"]),
+        ("/api/queue", &["get", "delete"]),
+        ("/api/queue/items", &["post"]),
+        ("/api/playback", &["get"]),
+        ("/api/playback/events", &["get"]),
+        ("/api/playback/commands", &["post"]),
+        ("/api/user-data", &["get"]),
+        ("/api/user-data/audio-settings", &["get", "patch"]),
+        ("/api/user-data/osu-folders", &["get", "post"]),
+        ("/api/user-data/osu-folders/{id}", &["patch", "delete"]),
+        ("/api/user-data/osu-folders/discover", &["post"]),
+        ("/api/user-data/osu-folders/metadata", &["post"]),
+        ("/api/user-data/osu-folders/import", &["post"]),
+        ("/api/user-data/osu-folders/{id}/import", &["post"]),
+    ];
+
+    #[tokio::test]
+    async fn every_api_path_and_method_is_routed_with_docs_enabled_or_disabled() {
+        let state = crate::test_support::empty_state().await;
+        let app = router(state.clone());
+        for (path, methods) in API_ROUTES {
+            let uri = path.replace("{id}", "7").replace("{item_id}", "8");
+            for method in ["get", "post", "put", "patch", "delete", "options", "trace"] {
+                // Malformed JSON rejects filesystem/discovery actions before their handlers run.
+                let response = app
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method.to_ascii_uppercase().as_str())
+                            .uri(&uri)
+                            .header("content-type", "application/json")
+                            .body(Body::from("{"))
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                if methods.contains(&method) {
+                    assert_ne!(
+                        response.status(),
+                        StatusCode::METHOD_NOT_ALLOWED,
+                        "{method} {path}"
+                    );
+                    assert!(
+                        !response.status().is_server_error(),
+                        "{method} {path}: {}",
+                        response.status()
+                    );
+                } else {
+                    assert_eq!(
+                        response.status(),
+                        StatusCode::METHOD_NOT_ALLOWED,
+                        "unregistered path or unexpected method: {method} {path}"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            state.playback_subscriber_count(),
+            0,
+            "dropping the event response releases its receiver"
+        );
+        let response = app
+            .oneshot(Request::get("/docs").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            if cfg!(feature = "docs") {
+                StatusCode::OK
+            } else {
+                StatusCode::NOT_FOUND
+            }
+        );
+    }
+
+    #[cfg(feature = "docs")]
+    #[tokio::test]
+    async fn served_openapi_has_exact_api_methods_metadata_and_resolvable_schema_references() {
+        use serde_json::Value;
+        use std::collections::BTreeSet;
+
+        fn check_references(value: &Value, root: &Value) {
+            match value {
+                Value::Object(object) => {
+                    for (key, value) in object {
+                        if key == "$ref" {
+                            let reference = value.as_str().unwrap();
+                            assert!(
+                                root.pointer(reference.strip_prefix('#').unwrap()).is_some(),
+                                "unresolved schema: {reference}"
+                            );
+                        } else {
+                            check_references(value, root);
+                        }
+                    }
+                }
+                Value::Array(values) => {
+                    for value in values {
+                        check_references(value, root);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let response = router(crate::test_support::empty_state().await)
+            .oneshot(
+                Request::get(crate::docs::SCALAR_PATH)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let html = std::str::from_utf8(&body).unwrap();
+        let json = html
+            .split_once("type=\"application/json\">")
+            .unwrap()
+            .1
+            .split_once("</script>")
+            .unwrap()
+            .0;
+        let document: Value = serde_json::from_str(json).unwrap();
+        assert_eq!(document["info"]["title"], "osu-radio");
+        assert_eq!(document["info"]["version"], env!("CARGO_PKG_VERSION"));
+        assert!(!document["info"]["description"].as_str().unwrap().is_empty());
+        let expected: BTreeSet<_> = API_ROUTES.iter().map(|(path, _)| *path).collect();
+        let actual: BTreeSet<_> = document["paths"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(actual, expected);
+        for (path, methods) in API_ROUTES {
+            let actual: BTreeSet<_> = document["paths"][path]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(actual, methods.iter().copied().collect(), "{path}");
+        }
+        let tags: BTreeSet<_> = document["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|tag| tag["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            tags,
+            BTreeSet::from([
+                "tracks",
+                "playback",
+                "playlists",
+                "beatmap-sets",
+                "user-data"
+            ])
+        );
+        check_references(&document, &document);
+    }
+}

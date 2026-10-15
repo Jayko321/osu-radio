@@ -281,6 +281,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn registration_errors_keep_expected_statuses_and_hide_unexpected_causes() {
+        for (error, status, expected) in [
+            (
+                RegisterFolderError::RelativePath("relative".into()),
+                StatusCode::BAD_REQUEST,
+                "`relative` is not an absolute path. Register an osu! folder by its full path.",
+            ),
+            (
+                RegisterFolderError::NotAnOsuFolder("fixture".into()),
+                StatusCode::BAD_REQUEST,
+                "No osu! installation was found in `fixture`. Expected a client.realm or osu!.db there.",
+            ),
+            (
+                RegisterFolderError::Ambiguous {
+                    path: "fixture".into(),
+                    found: vec!["first".into(), "second".into()],
+                },
+                StatusCode::BAD_REQUEST,
+                "`fixture` holds 2 osu! installations. Register each one by its own folder.",
+            ),
+            (
+                RegisterFolderError::Failed(anyhow::anyhow!("private fixture failure")),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "The server failed to handle the request.",
+            ),
+        ] {
+            let response = registration_error(error).into_response();
+            assert_eq!(response.status(), status);
+            let body = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                serde_json::json!({"error": expected})
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn registering_a_folder_answers_201_and_listing_returns_it() {
         let state = empty_state().await;
         let folder = lazer_folder();

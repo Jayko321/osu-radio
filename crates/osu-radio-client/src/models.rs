@@ -190,6 +190,243 @@ mod tests {
 
         assert_eq!(untouched, r#"{"enabled":false}"#);
         assert_eq!(cleared, r#"{"label":null}"#);
+        assert_eq!(
+            serde_json::to_value(OsuFolderChanges::default()).unwrap(),
+            serde_json::json!({})
+        );
+        assert_eq!(
+            serde_json::to_value(OsuFolderChanges {
+                label: Some(Some("曲".into())),
+                enabled: Some(true),
+            })
+            .unwrap(),
+            serde_json::json!({"label": "曲", "enabled": true})
+        );
+    }
+
+    #[test]
+    fn every_volume_dto_accepts_only_integer_percentages_including_both_endpoints() {
+        use serde_json::{Value, json};
+
+        let fixtures = [
+            (
+                "global_volume_percent",
+                json!({"individual_volume_enabled": true}),
+                false,
+            ),
+            (
+                "volume_percent",
+                json!({"audio_source_id": 1, "difficulties": []}),
+                true,
+            ),
+            (
+                "volume_percent",
+                json!({"mode": "paused", "revision": 1,
+                "playback_token": 2, "can_next": false, "can_previous": false}),
+                true,
+            ),
+            (
+                "volume_percent",
+                json!({"id": 3, "playlist_id": 4,
+                "source_kind": "stable", "beatmap_hash": "hash"}),
+                true,
+            ),
+        ];
+        for (index, (field, base, optional)) in fixtures.into_iter().enumerate() {
+            let decode = |value: Value| -> Result<Option<u8>, serde_json::Error> {
+                match index {
+                    0 => serde_json::from_value::<AudioSettings>(value)
+                        .map(|s| Some(s.global_volume_percent)),
+                    1 => serde_json::from_value::<LibraryTrack>(value).map(|s| s.volume_percent),
+                    2 => serde_json::from_value::<PlaybackAssignment>(value)
+                        .map(|s| s.volume_percent),
+                    _ => serde_json::from_value::<PlaylistItem>(value).map(|s| s.volume_percent),
+                }
+            };
+            for percent in [0, 1, 99, 100] {
+                let mut value = base.clone();
+                value
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(field.into(), json!(percent));
+                assert_eq!(decode(value).unwrap(), Some(percent), "DTO {index}");
+            }
+            for invalid in [
+                json!(-1),
+                json!(101),
+                json!(255),
+                json!(256),
+                json!(0.5),
+                json!("50"),
+                json!(true),
+            ] {
+                let mut value = base.clone();
+                value
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(field.into(), invalid.clone());
+                assert!(decode(value).is_err(), "DTO {index} accepted {invalid}");
+            }
+            let mut null = base.clone();
+            null.as_object_mut()
+                .unwrap()
+                .insert(field.into(), Value::Null);
+            if optional {
+                assert_eq!(decode(base).unwrap(), None);
+                assert_eq!(decode(null).unwrap(), None);
+            } else {
+                assert!(decode(base).is_err());
+                assert!(decode(null).is_err());
+            }
+        }
+        assert_eq!(
+            AudioSettings::default(),
+            AudioSettings {
+                individual_volume_enabled: false,
+                global_volume_percent: 100,
+            }
+        );
+    }
+
+    #[test]
+    fn playback_modes_and_boundary_tokens_keep_the_wire_contract() {
+        use serde_json::json;
+        for (command, expected) in [
+            (
+                PlaybackCommand::PauseIfCurrent { playback_token: 0 },
+                json!({"command": "pause", "playback_token": 0}),
+            ),
+            (
+                PlaybackCommand::PauseIfCurrent {
+                    playback_token: u64::MAX,
+                },
+                json!({"command": "pause", "playback_token": u64::MAX}),
+            ),
+            (
+                PlaybackCommand::Started {
+                    playback_token: u64::MAX,
+                },
+                json!({"command": "started", "playback_token": u64::MAX}),
+            ),
+            (
+                PlaybackCommand::Finished {
+                    playback_token: u64::MAX,
+                },
+                json!({"command": "finished", "playback_token": u64::MAX}),
+            ),
+            (
+                PlaybackCommand::Failed {
+                    playback_token: u64::MAX,
+                },
+                json!({"command": "failed", "playback_token": u64::MAX}),
+            ),
+        ] {
+            assert_eq!(serde_json::to_value(command).unwrap(), expected);
+        }
+        for (mode, expected) in [
+            (PlaybackMode::Stopped, "stopped"),
+            (PlaybackMode::Paused, "paused"),
+            (PlaybackMode::Playing, "playing"),
+        ] {
+            assert_eq!(serde_json::to_value(mode).unwrap(), json!(expected));
+            assert_eq!(
+                serde_json::from_value::<PlaybackMode>(json!(expected)).unwrap(),
+                mode
+            );
+        }
+        assert!(serde_json::from_str::<PlaybackMode>("\"buffering\"").is_err());
+        assert_eq!(PlaybackMode::default(), PlaybackMode::Stopped);
+    }
+
+    #[test]
+    fn folder_requests_and_registration_outcomes_retain_paths_labels_and_identity() {
+        use serde_json::json;
+        let path = PathBuf::from("fixture root/曲/client.realm");
+        assert_eq!(
+            serde_json::to_value(RegisterOsuFolder::new(&path)).unwrap(),
+            json!({"path": path, "label": null})
+        );
+        assert_eq!(
+            serde_json::to_value(RegisterOsuFolder::labelled(&path, "曲")).unwrap(),
+            json!({"path": path, "label": "曲"})
+        );
+        for (depth, expected) in [
+            (DiscoveryDepth::Known, "known"),
+            (DiscoveryDepth::Shallow, "shallow"),
+            (DiscoveryDepth::Full, "full"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(DiscoverFolders {
+                    roots: vec![path.clone()],
+                    depth
+                })
+                .unwrap(),
+                json!({"roots": [path], "depth": expected})
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(DiscoverFolders::default()).unwrap(),
+            json!({"roots": [], "depth": "full"})
+        );
+        assert_eq!(
+            serde_json::to_value(FolderMarker {
+                marker_path: "曲/client.realm".into()
+            })
+            .unwrap(),
+            json!({"marker_path": "曲/client.realm"})
+        );
+        let folder: OsuFolder = serde_json::from_value(json!({"id": 8, "kind": "lazer", "root_path": "fixture root/曲",
+            "marker_path": "fixture root/曲/client.realm", "label": "曲", "enabled": false, "last_scanned_at": "2026-10-15T00:00:00Z"})).unwrap();
+        for (result, created) in [
+            (RegisteredFolder::Created(folder.clone()), true),
+            (RegisteredFolder::AlreadyRegistered(folder.clone()), false),
+        ] {
+            assert_eq!(result.was_created(), created);
+            assert_eq!(result.folder(), &folder);
+            assert_eq!(result.into_folder(), folder);
+        }
+    }
+
+    #[test]
+    fn older_response_shapes_default_only_the_optional_extension_fields() {
+        use serde_json::json;
+        let set: BeatmapSet =
+            serde_json::from_value(json!({"id": 2, "audio_sources": []})).unwrap();
+        assert!(!set.has_multiple_audio_sources);
+        assert!(set.beatmaps.is_empty());
+        assert_eq!((set.online_id, set.hash), (None, None));
+        let queue: QueueState =
+            serde_json::from_value(json!({"audio_source_ids": [7, 7], "current_index": 0,
+            "mode": "paused", "revision": 3, "playback_token": 4}))
+            .unwrap();
+        assert!(queue.upcoming_tracks.is_empty() && queue.playlist_item_ids.is_empty());
+        assert_eq!(queue.audio_source_ids, [7, 7]);
+        let summary: PlaylistSummary =
+            serde_json::from_value(json!({"id": 5, "name": "曲"})).unwrap();
+        assert_eq!(
+            summary,
+            PlaylistSummary {
+                id: 5,
+                name: "曲".into(),
+                item_count: 0,
+                cover_beatmap_id: None,
+                custom_cover_revision: None
+            }
+        );
+        let item: PlaylistItem = serde_json::from_value(json!({"id": 6, "playlist_id": 5,
+            "source_kind": "stable", "beatmap_hash": "hash"}))
+        .unwrap();
+        assert_eq!(
+            (
+                item.last_played_at_ms,
+                item.volume_percent,
+                item.title_unicode,
+                item.artist_unicode
+            ),
+            (None, None, None, None)
+        );
+        assert!(serde_json::from_value::<QueueState>(json!({"audio_source_ids": []})).is_err());
+        assert!(serde_json::from_value::<BeatmapSet>(json!({"id": 2})).is_err());
     }
 }
 

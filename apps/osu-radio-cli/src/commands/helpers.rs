@@ -285,3 +285,135 @@ fn truncate(value: &str, width: usize) -> String {
     truncated.push('.');
     truncated
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovery_options_preserve_explicit_scope_and_resolve_relative_roots() {
+        let filters = MarkerFilters {
+            source: Some(SourceArg::Stable),
+            root: Some(PathBuf::from("fixture/osu")),
+        };
+        let options = discovery_options(&filters, DiscoveryDepth::Shallow, Some(3)).unwrap();
+        assert_eq!(
+            options.roots,
+            vec![std::env::current_dir().unwrap().join("fixture/osu")]
+        );
+        assert_eq!(options.kind, Some(OsuKind::Stable));
+        assert_eq!(options.depth, DiscoveryDepth::Shallow);
+        assert_eq!(options.limit.map(NonZeroUsize::get), Some(3));
+
+        let absolute = std::env::temp_dir().join("osu-cli-options");
+        let options = discovery_options(
+            &MarkerFilters {
+                source: None,
+                root: Some(absolute.clone()),
+            },
+            DiscoveryDepth::Known,
+            None,
+        )
+        .unwrap();
+        assert_eq!(options.roots, vec![absolute]);
+        assert_eq!(options.kind, None);
+        assert_eq!(options.limit, None);
+    }
+
+    #[test]
+    fn zero_discovery_limit_is_rejected_before_discovery() {
+        let error = discovery_options(
+            &MarkerFilters {
+                source: None,
+                root: None,
+            },
+            DiscoveryDepth::Full,
+            Some(0),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("`--limit` must be at least 1"));
+    }
+
+    #[test]
+    fn marker_inference_is_exact_and_source_override_is_explicit() {
+        for (filename, kind) in [
+            ("osu!.db", OsuKind::Stable),
+            ("client.realm", OsuKind::Lazer),
+        ] {
+            let path = Path::new("fixture").join(filename);
+            let marker = marker_from_path(&path, None).unwrap();
+            assert_eq!(marker.kind, kind);
+            assert_eq!(marker.marker_path, path);
+            assert_eq!(marker.root_path, Path::new("fixture"));
+        }
+        for filename in ["CLIENT.REALM", "osu!.db.bak", "unknown"] {
+            assert!(marker_from_path(Path::new(filename), None).is_err());
+        }
+        let marker =
+            marker_from_path(Path::new("fixture/custom.db"), Some(SourceArg::Lazer)).unwrap();
+        assert_eq!(marker.kind, OsuKind::Lazer);
+        assert!(marker_from_path(Path::new(""), Some(SourceArg::Stable)).is_err());
+    }
+
+    #[test]
+    fn marker_output_uses_one_based_indexes_and_display_paths() {
+        let markers = [
+            marker_from_path(Path::new("fixture/曲/osu!.db"), None).unwrap(),
+            marker_from_path(Path::new("fixture/lazer/client.realm"), None).unwrap(),
+        ];
+        let values = markers_to_json(&markers);
+        assert_eq!(
+            values[0],
+            json!({
+                "index": 1, "source": "stable",
+                "root_path": Path::new("fixture/曲").display().to_string(),
+                "marker_path": markers[0].marker_path.display().to_string(),
+            })
+        );
+        assert_eq!(values[1]["index"], 2);
+        assert_eq!(values[1]["source"], "lazer");
+        assert_eq!(
+            marker_row(2, &markers[1]),
+            vec![
+                "2".to_string(),
+                "lazer".to_string(),
+                markers[1].root_path.display().to_string(),
+                markers[1].marker_path.display().to_string(),
+            ]
+        );
+        assert!(markers_to_json(&[]).is_empty());
+    }
+
+    #[test]
+    fn import_errors_preserve_the_cause_and_identify_the_source() {
+        let marker = marker_from_path(Path::new("fixture/osu!.db"), None).unwrap();
+        let error = import_error(&marker, anyhow::anyhow!("broken fixture"));
+        let message = format!("{error:#}");
+        assert!(message.contains("stable marker"));
+        assert!(message.contains(&marker.marker_path.display().to_string()));
+        assert!(message.contains("broken fixture"));
+        let error = import_error(
+            &marker,
+            UnsupportedSourceError {
+                kind: OsuKind::Lazer,
+            }
+            .into(),
+        );
+        assert!(error.to_string().contains("not supported yet: Lazer"));
+    }
+
+    #[test]
+    fn truncation_counts_characters_instead_of_utf8_bytes() {
+        for (value, width, expected) in [
+            ("", 4, ""),
+            ("abc", 3, "abc"),
+            ("abc", 2, "a."),
+            ("abc", 1, "."),
+            ("abc", 0, "."),
+            ("曲目🎵", 3, "曲目🎵"),
+            ("曲目🎵", 2, "曲."),
+        ] {
+            assert_eq!(truncate(value, width), expected);
+        }
+    }
+}

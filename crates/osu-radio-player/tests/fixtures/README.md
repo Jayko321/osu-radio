@@ -13,3 +13,6 @@ ffmpeg -f lavfi -i 'sine=frequency=880:sample_rate=44100:duration=1.5' -ac 2 -co
 Tests cover MP3, Ogg/Vorbis and PCM WAV, including extensionless copies, seek,
 EOF/replay and replacement across formats. Tests decode the committed fixtures
 and consume the actual Rodio mixer without opening a physical audio output. FFmpeg is not required to run tests.
+The decoder contract also checks stereo/44.1 kHz metadata and a 1.4–1.7 second
+duration window for encoder padding. Repository metadata tests keep the documented
+fixture names synchronized with the committed tone files.

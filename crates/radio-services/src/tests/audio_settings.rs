@@ -174,8 +174,21 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
             .set_volume(returned.audio_source_id, Some(percent))
             .await
             .unwrap();
+        assert_eq!(
+            database
+                .beatmap_sets()
+                .search_tracks("Volume song")
+                .await
+                .unwrap()[0]
+                .volume_percent,
+            Some(percent)
+        );
     }
     let before = database.audio_settings().get().await.unwrap();
+    assert_eq!(
+        database.audio_settings().update(None, None).await.unwrap(),
+        before
+    );
     let error = database
         .audio_settings()
         .update(Some(false), Some(101))
@@ -186,12 +199,23 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
         Some(&AudioSettingsError::InvalidPercent)
     );
     assert_eq!(database.audio_settings().get().await.unwrap(), before);
-    assert!(
+    let error = database
+        .audio_settings()
+        .set_volume(returned.audio_source_id, Some(101))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<AudioSettingsError>(),
+        Some(&AudioSettingsError::InvalidPercent)
+    );
+    assert_eq!(
         database
-            .audio_settings()
-            .set_volume(returned.audio_source_id, Some(101))
+            .beatmap_sets()
+            .search_tracks("Volume song")
             .await
-            .is_err()
+            .unwrap()[0]
+            .volume_percent,
+        Some(100)
     );
     let error = database
         .audio_settings()

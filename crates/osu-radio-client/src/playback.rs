@@ -964,4 +964,179 @@ mod tests {
         drop(core);
         assert!(!path.exists());
     }
+
+    #[test]
+    fn invalid_assignment_volume_cannot_replace_a_playing_source() {
+        let mut core = Core::<FakeEngine>::default();
+        load(&mut core, 1, 10);
+        let path = core.file.as_ref().unwrap().path().to_owned();
+        let original = core.state.clone();
+        for volume in [f32::NAN, f32::INFINITY, -0.01, 1.01] {
+            assert!(
+                core.command(
+                    Command::Assign {
+                        generation: 2,
+                        id: Some(20),
+                        playback_token: 2,
+                        mode: PlaybackMode::Stopped,
+                        volume,
+                    },
+                    2
+                )
+                .is_none()
+            );
+            assert_eq!(
+                core.state.error.as_deref(),
+                Some("volume must be a finite value between 0 and 1")
+            );
+            let mut expected = original.clone();
+            expected.error = core.state.error.clone();
+            assert_eq!(core.state, expected);
+            assert_eq!(core.mode, PlaybackMode::Playing);
+            assert_eq!(core.file_id, Some(10));
+            assert!(path.exists());
+            assert_eq!(core.player.as_ref().unwrap().loads, 1);
+            assert!(core.feedback.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn worker_delivers_feedback_ticks_and_cleans_stale_and_current_files() {
+        async fn message(receiver: &mut tokio::sync::mpsc::UnboundedReceiver<Message>) -> Message {
+            tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+                .await
+                .unwrap()
+                .unwrap()
+        }
+        fn snapshot(
+            receiver: &mpsc::Receiver<Playback>,
+            matches: impl Fn(&Playback) -> bool,
+        ) -> Playback {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let state = receiver
+                    .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+                    .unwrap();
+                if matches(&state) {
+                    return state;
+                }
+            }
+        }
+        let (snapshots, receiver) = mpsc::channel();
+        let (mut worker, mut feedback) = Worker::spawn_fake(Arc::new(move |state| {
+            let _ = snapshots.send(state);
+        }))
+        .unwrap();
+        assert_eq!(worker.generation(), 0);
+        let first = worker.invalidate();
+        assert!(worker.is_current(first));
+        worker.send(Command::Assign {
+            generation: first,
+            id: Some(10),
+            playback_token: 100,
+            mode: PlaybackMode::Playing,
+            volume: 0.4,
+        });
+        assert_eq!(
+            message(&mut feedback).await,
+            Message::Download(Download {
+                generation: first,
+                id: 10
+            })
+        );
+        let current = worker.invalidate();
+        assert!(!worker.is_current(first));
+        let stale = file(b"mp3");
+        let stale_path = stale.path().to_owned();
+        worker.send(Command::Loaded {
+            generation: first,
+            id: 10,
+            result: Ok(stale),
+        });
+        worker.send(Command::SetVolume(0.7));
+        snapshot(&receiver, |state| {
+            state.snapshot.volume.to_bits() == 0.7_f32.to_bits()
+        });
+        assert!(!stale_path.exists());
+        assert!(feedback.try_recv().is_err());
+        worker.send(Command::Assign {
+            generation: current,
+            id: Some(20),
+            playback_token: 200,
+            mode: PlaybackMode::Playing,
+            volume: 0.2,
+        });
+        assert_eq!(
+            message(&mut feedback).await,
+            Message::Download(Download {
+                generation: current,
+                id: 20
+            })
+        );
+        let loaded = file(b"mp3");
+        let loaded_path = loaded.path().to_owned();
+        worker.send(Command::Loaded {
+            generation: current,
+            id: 20,
+            result: Ok(loaded),
+        });
+        assert_eq!(message(&mut feedback).await, Message::Started(200));
+        let playing = snapshot(&receiver, |state| {
+            state.has_source && state.snapshot.state == PlayerState::Playing
+        });
+        assert_eq!(playing.current_audio_id, Some(20));
+        assert_eq!(playing.playback_token, 200);
+        assert_eq!(playing.snapshot.volume.to_bits(), 0.2_f32.to_bits());
+        assert_eq!(
+            snapshot(&receiver, |state| state.has_source),
+            playing,
+            "playing snapshots tick even without a command"
+        );
+        assert!(loaded_path.exists());
+        let next = worker.invalidate();
+        worker.send(Command::Assign {
+            generation: next,
+            id: Some(30),
+            playback_token: 300,
+            mode: PlaybackMode::Playing,
+            volume: 0.5,
+        });
+        assert_eq!(
+            message(&mut feedback).await,
+            Message::Download(Download {
+                generation: next,
+                id: 30
+            })
+        );
+        assert!(!loaded_path.exists());
+        let short = file(b"short");
+        let short_path = short.path().to_owned();
+        worker.send(Command::Loaded {
+            generation: next,
+            id: 30,
+            result: Ok(short),
+        });
+        for expected in [Message::Started(300), Message::Finished(300)] {
+            assert_eq!(message(&mut feedback).await, expected);
+        }
+        let ended = snapshot(&receiver, |state| {
+            state.snapshot.state == PlayerState::Ended
+        });
+        assert_eq!(ended.current_audio_id, Some(30));
+        assert!(short_path.exists());
+        worker.shutdown();
+        assert!(!short_path.exists());
+        assert!(feedback.is_closed());
+        assert!(feedback.try_recv().is_err());
+        assert!(!worker.is_current(next));
+        worker.shutdown();
+        worker.send(Command::SetVolume(1.0));
+        drop(worker);
+        assert!(receiver.try_iter().all(|state| state.playback_token != 0));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Disconnected)
+        ));
+    }
 }

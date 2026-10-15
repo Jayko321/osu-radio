@@ -74,3 +74,45 @@ impl IntoResponse for ApiError {
             .into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn intentional_errors_keep_their_message_and_internal_causes_stay_out_of_json() {
+        for (error, status, message) in [
+            (
+                ApiError::bad_request("invalid fixture input"),
+                StatusCode::BAD_REQUEST,
+                "invalid fixture input",
+            ),
+            (
+                ApiError::not_found(String::from("曲 was not found")),
+                StatusCode::NOT_FOUND,
+                "曲 was not found",
+            ),
+            (
+                ApiError::from(
+                    anyhow::anyhow!("private fixture path").context("private storage failure"),
+                ),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "The server failed to handle the request.",
+            ),
+        ] {
+            let response = error.into_response();
+            assert_eq!(response.status(), status);
+            assert_eq!(
+                response.headers()[axum::http::header::CONTENT_TYPE],
+                "application/json"
+            );
+            let body = axum::body::to_bytes(response.into_body(), 1024)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+                serde_json::json!({"error": message})
+            );
+        }
+    }
+}

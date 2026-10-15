@@ -319,7 +319,14 @@ mod tests {
         assert_eq!(tracks[0].artist, "Unknown artist");
         assert_eq!(tracks[1].title, "Unknown title");
         assert_eq!(tracks[0].duration_label(), "--:--");
+        assert_eq!(
+            tracks[0].meta(),
+            "Unknown artist | Unknown difficulty // --:--"
+        );
         let track = Track::new("Title", "Artist", Duration::from_secs(3607));
         assert_eq!(track.duration_label(), "60:07");
+        assert_eq!(track.meta(), "Artist // 60:07");
+        assert_eq!(selection_after_refresh(&tracks, None), Some(7));
+        assert_eq!(selection_after_refresh(&[], None), None);
     }
 }

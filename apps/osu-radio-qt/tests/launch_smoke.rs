@@ -95,6 +95,107 @@ fn gallery_is_offline_and_its_adapter_notifies_only_on_changes() {
     assert!(!directory.path().join("starts").exists());
 }
 
+#[test]
+fn offline_controls_handle_keyboard_disabled_states_and_presentation_bindings() {
+    let directory = tempfile::tempdir().expect("isolated controls probe");
+    let output = run(
+        &["--component-gallery"],
+        "offscreen",
+        directory.path(),
+        Path::new("/no/server/allowed"),
+        "controls",
+    );
+    assert_probe(&output);
+    assert!(
+        output.contains("Adapter probe passed: controls"),
+        "{output}"
+    );
+    assert!(!directory.path().join("starts").exists());
+}
+
+#[test]
+fn offline_menus_and_modals_preserve_value_roles_focus_and_dismissal_rules() {
+    let directory = tempfile::tempdir().expect("isolated popup probe");
+    let output = run(
+        &["--component-gallery"],
+        "offscreen",
+        directory.path(),
+        Path::new("/no/server/allowed"),
+        "controls-popups",
+    );
+    assert_probe(&output);
+    assert!(
+        output.contains("Adapter probe passed: controls-popups"),
+        "{output}"
+    );
+    assert!(!directory.path().join("starts").exists());
+}
+
+#[test]
+fn offline_window_bar_routes_controls_and_resize_edges_without_a_window_manager() {
+    let directory = tempfile::tempdir().expect("isolated window-controls probe");
+    let output = run(
+        &["--component-gallery"],
+        "offscreen",
+        directory.path(),
+        Path::new("/no/server/allowed"),
+        "controls-window",
+    );
+    assert_probe(&output);
+    assert!(
+        output.contains("Adapter probe passed: controls-window"),
+        "{output}"
+    );
+}
+
+#[test]
+fn offline_composed_panels_gate_mutations_and_preserve_ids_and_delegate_lifetimes() {
+    let directory = tempfile::tempdir().expect("isolated composed-panel probe");
+    let output = run(
+        &["--component-gallery"],
+        "offscreen",
+        directory.path(),
+        Path::new("/no/server/allowed"),
+        "controls-panels",
+    );
+    assert_probe(&output);
+    assert!(
+        output.contains("Adapter probe passed: controls-panels"),
+        "{output}"
+    );
+}
+
+#[test]
+fn every_embedded_image_and_font_decodes_in_the_offline_gallery() {
+    let directory = tempfile::tempdir().expect("isolated asset probe");
+    let output = run(
+        &["--component-gallery"],
+        "offscreen",
+        directory.path(),
+        Path::new("/no/server/allowed"),
+        "native-assets",
+    );
+    assert!(
+        output.contains("Embedded asset probe checked 36 resources"),
+        "{output}"
+    );
+    assert!(
+        output.contains("Visual probe finished: 0 issues"),
+        "{output}"
+    );
+    for error in [
+        "VISUAL ISSUE",
+        "ReferenceError",
+        "TypeError",
+        "Binding loop",
+        "Cannot",
+        "failed to load",
+    ] {
+        assert!(!output.contains(error), "{output}");
+    }
+    assert!(!directory.path().join("starts").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn cover_picker_uses_basic_controls_even_with_a_desktop_style_override() {

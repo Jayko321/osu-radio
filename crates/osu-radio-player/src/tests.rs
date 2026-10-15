@@ -38,6 +38,9 @@ fn osu_formats_and_extensionless_files_decode_real_audio() {
     for name in AUDIO_FIXTURES {
         let mut decoder = Player::decode(&fixture(name)).unwrap();
         assert!(decoder.total_duration().unwrap() >= Duration::from_millis(1400));
+        assert!(decoder.total_duration().unwrap() <= Duration::from_millis(1700));
+        assert_eq!(decoder.channels(), 2.try_into().unwrap());
+        assert_eq!(decoder.sample_rate(), 44_100.try_into().unwrap());
         let samples: Vec<_> = decoder.by_ref().collect();
         assert!(samples.len() > 100_000);
         assert!(samples.iter().any(|sample| sample.abs() > 0.01));

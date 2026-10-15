@@ -297,7 +297,68 @@ impl Error for ServerError {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_ready_line;
+    use super::*;
+
+    #[test]
+    fn binary_selection_uses_explicit_override_environment_sibling_then_path() {
+        const EXPECTED: &str = "OSU_RADIO_TEST_RESOLVED_BINARY";
+        const EXPLICIT: &str = "OSU_RADIO_TEST_EXPLICIT_BINARY";
+        if let Some(expected) = env::var_os(EXPECTED) {
+            let explicit = env::var_os(EXPLICIT).map(PathBuf::from);
+            assert_eq!(
+                resolve_binary(explicit.as_deref()).unwrap(),
+                PathBuf::from(expected)
+            );
+            return;
+        }
+        let executable = env::current_exe().unwrap();
+        let directory = tempfile::tempdir_in(executable.parent().unwrap()).unwrap();
+        let probe = directory
+            .path()
+            .join(format!("probe{}", env::consts::EXE_SUFFIX));
+        // A private hard link changes current_exe's directory without copying or editing the test binary.
+        std::fs::hard_link(&executable, &probe).unwrap();
+        let file_name = format!("osu-radio-server{}", env::consts::EXE_SUFFIX);
+        let sibling = directory.path().join(&file_name);
+        std::fs::write(&sibling, b"resolution fixture, never executed").unwrap();
+        for (explicit, environment, expected) in [
+            (
+                Some(PathBuf::from("explicit/server")),
+                Some("environment/server"),
+                PathBuf::from("explicit/server"),
+            ),
+            (
+                None,
+                Some("environment/server"),
+                PathBuf::from("environment/server"),
+            ),
+            (None, None, sibling.clone()),
+            (None, None, PathBuf::from(file_name)),
+        ] {
+            if expected.file_name() == sibling.file_name() && expected.is_relative() {
+                std::fs::remove_file(&sibling).unwrap();
+            }
+            let mut command = std::process::Command::new(&probe);
+            command.args(["--exact", "server::tests::binary_selection_uses_explicit_override_environment_sibling_then_path", "--nocapture"])
+                .env_clear().env(EXPECTED, &expected);
+            if let Some(explicit) = explicit {
+                command.env(EXPLICIT, explicit);
+            }
+            if let Some(environment) = environment {
+                command.env(BINARY_ENV, environment);
+            }
+            if let Some(profile) = env::var_os("LLVM_PROFILE_FILE") {
+                command.env("LLVM_PROFILE_FILE", profile);
+            }
+            let output = command.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
 
     #[test]
     fn the_bound_address_is_read_back_from_the_startup_line() {
@@ -319,6 +380,77 @@ mod tests {
             parse_ready_line("Scalar API reference: http://x/docs"),
             None
         );
+        assert_eq!(parse_ready_line("listening on ftp://fixture"), None);
+        assert_eq!(parse_ready_line("listening on    "), None);
+        assert_eq!(
+            parse_ready_line("listening on  https://fixture:443  ").as_deref(),
+            Some("https://fixture:443")
+        );
+    }
+
+    #[test]
+    fn errors_keep_actionable_context_and_only_io_variants_have_a_source() {
+        for (error, expected, has_source) in [
+            (
+                ServerError::BinaryNotFound("fixture-binary".into()),
+                "`fixture-binary` was not found. Build it with `cargo build -p osu-radio-server`, or point OSU_RADIO_SERVER_BIN at it.",
+                false,
+            ),
+            (
+                ServerError::LocateSelf(io::Error::other("fixture io")),
+                "the running executable could not be located: fixture io",
+                true,
+            ),
+            (
+                ServerError::Spawn {
+                    binary: "fixture-binary".into(),
+                    error: io::Error::other("fixture io"),
+                },
+                "`fixture-binary` could not be started: fixture io",
+                true,
+            ),
+            (
+                ServerError::MissingPipe("stdout"),
+                "the server was started without a stdout pipe",
+                false,
+            ),
+            (
+                ServerError::ReadOutput(io::Error::other("fixture io")),
+                "the server output could not be read: fixture io",
+                true,
+            ),
+            (
+                ServerError::StartupTimedOut(Duration::from_secs(2)),
+                "the server did not report an address within 2s",
+                false,
+            ),
+            (
+                ServerError::Exited(Some("fixture exit".into())),
+                "the server stopped before it reported an address (fixture exit). SQLITE_DATABASE_URL must be set in the .env it loads.",
+                false,
+            ),
+            (
+                ServerError::Exited(None),
+                "the server stopped before it reported an address. SQLITE_DATABASE_URL must be set in the .env it loads.",
+                false,
+            ),
+            (
+                ServerError::Shutdown(io::Error::other("fixture io")),
+                "the server could not be stopped: fixture io",
+                true,
+            ),
+            (
+                ServerError::Cancelled,
+                "server startup was cancelled",
+                false,
+            ),
+        ] {
+            assert_eq!(error.to_string(), expected);
+            assert_eq!(error.source().is_some(), has_source);
+            if let Some(source) = error.source() {
+                assert_eq!(source.to_string(), "fixture io");
+            }
+        }
     }
 }
 
@@ -400,6 +532,81 @@ mod lifecycle_tests {
         let server = EmbeddedServer::start(options).await.unwrap();
         server.shutdown().await.unwrap();
         server.shutdown().await.unwrap();
+        assert_reaped(directory.path());
+    }
+
+    #[tokio::test]
+    async fn missing_and_nonexecutable_binaries_have_distinct_spawn_errors() {
+        let (directory, mut options) = fixture("exit 0");
+        let binary = options.binary.clone().unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let error = EmbeddedServer::start(options.clone()).await.unwrap_err();
+        assert!(
+            matches!(error, ServerError::Spawn { binary: ref actual, ref error }
+            if actual == &binary && error.kind() == io::ErrorKind::PermissionDenied)
+        );
+        options.binary = Some(directory.path().join("missing"));
+        let error = EmbeddedServer::start(options).await.unwrap_err();
+        assert!(
+            matches!(error, ServerError::BinaryNotFound(ref actual) if actual == &directory.path().join("missing"))
+        );
+        assert!(!directory.path().join("pid").exists());
+    }
+
+    #[tokio::test]
+    async fn early_exit_and_invalid_utf8_output_are_reported_after_reaping() {
+        for invalid_output in [false, true] {
+            let body = if invalid_output {
+                "printf '\\377\\n'\nexec sleep 30"
+            } else {
+                "exit 7"
+            };
+            let (directory, options) = fixture(body);
+            let error = time::timeout(Duration::from_secs(3), EmbeddedServer::start(options))
+                .await
+                .unwrap()
+                .unwrap_err();
+            if invalid_output {
+                assert!(
+                    matches!(error, ServerError::ReadOutput(ref error) if error.kind() == io::ErrorKind::InvalidData)
+                );
+            } else {
+                assert!(
+                    matches!(error, ServerError::Exited(Some(ref status)) if status == "exit status: 7")
+                );
+            }
+            assert_reaped(directory.path());
+        }
+    }
+
+    #[tokio::test]
+    async fn session_uses_reported_address_and_acknowledges_repeated_shutdown() {
+        let (directory, options) =
+            fixture("echo 'listening on http://127.0.0.1:54321'\nexec sleep 30");
+        let session = crate::Session::start(options).await.unwrap();
+        assert_eq!(session.base_url(), "http://127.0.0.1:54321");
+        assert_eq!(session.api().base_url(), session.base_url());
+        session.shutdown().await.unwrap();
+        session.shutdown().await.unwrap();
+        assert_reaped(directory.path());
+    }
+
+    #[tokio::test]
+    async fn dropping_ready_server_kills_its_child_without_explicit_shutdown() {
+        let (directory, options) =
+            fixture("echo 'listening on http://127.0.0.1:54321'\nexec sleep 30");
+        let server = EmbeddedServer::start(options).await.unwrap();
+        let pid = std::fs::read_to_string(directory.path().join("pid")).unwrap();
+        let process = PathBuf::from(format!("/proc/{}", pid.trim()));
+        assert!(process.exists());
+        drop(server);
+        time::timeout(Duration::from_secs(3), async {
+            while process.exists() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         assert_reaped(directory.path());
     }
 }

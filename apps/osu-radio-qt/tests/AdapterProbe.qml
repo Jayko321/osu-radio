@@ -1,6 +1,7 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtTest
+import OsuRadio 1.0 as Radio
 
 QtObject {
     id: probe
@@ -20,6 +21,154 @@ QtObject {
     property int resets: 0
     property int retainedResets: 0
     property bool passed: false
+    property var controls: null
+    readonly property Component windowFixture: Component {
+        Item {
+            id: fixture
+            x: 10; y: 70; width: 1000; height: 700
+            property int tabs: -1
+            property int queues: 0
+            property alias bar: bar
+            property alias surface: surface
+            property alias windowDouble: windowDouble
+            QtObject {
+                id: windowDouble
+                property int visibility: Window.Windowed
+                property alias contentItem: surface
+                property int moves: 0
+                property int closes: 0
+                property var edges: []
+                function startSystemMove(): bool { moves++; return true; }
+                function startSystemResize(edge: int): bool { edges.push(edge); return true; }
+                function showMinimized(): void { visibility = Window.Minimized; }
+                function showMaximized(): void { visibility = Window.Maximized; }
+                function showNormal(): void { visibility = Window.Windowed; }
+                function close(): void { closes++; }
+            }
+            Item {
+                id: surface
+                width: 1000; height: 600
+                Radio.WindowBar {
+                    id: bar
+                    width: parent.width
+                    window: windowDouble
+                    onTabSelected: index => { fixture.tabs = index; selectedTab = index; }
+                    onQueueRequested: { fixture.queues++; queueVisible = !queueVisible; }
+                }
+            }
+        }
+    }
+    readonly property Component panelFixture: Component {
+        Item {
+            id: fixture
+            x: 10; y: 60; width: 1000; height: 780
+            property var actions: []
+            property int delegatesAdded: 0
+            property int delegatesRemoved: 0
+            property int viewportChanges: 0
+            property alias pane: pane
+            property alias folders: folders
+            property alias playlists: playlists
+            property alias queue: queue
+            Radio.PlaylistPane {
+                id: pane
+                width: 480; height: 740
+                tracksModel: []
+                onNameEdited: name => { editorName = name; fixture.actions.push("name"); }
+                onCoverRequested: fixture.actions.push("cover")
+                onCoverResetRequested: fixture.actions.push("reset")
+                onSaveRequested: fixture.actions.push("save")
+                onCancelRequested: fixture.actions.push("cancel")
+                onCreateRequested: fixture.actions.push("create")
+                onEditRequested: id => fixture.actions.push("edit:" + id)
+                onSelectRequested: id => fixture.actions.push("select:" + id)
+                onQueueRequested: id => fixture.actions.push("queue:" + id)
+                onDeleteRequested: id => fixture.actions.push("delete:" + id)
+                onRefreshRequested: fixture.actions.push("refresh")
+            }
+            Radio.FolderSelectionModal {
+                id: folders
+                scene: fixture
+                onToggleRequested: path => fixture.actions.push("toggle:" + path)
+                onRefreshRequested: path => fixture.actions.push("folder-refresh:" + path)
+                onRetryCountRequested: path => fixture.actions.push("count:" + path)
+                onBrowseRequested: fixture.actions.push("browse")
+                onApplyRequested: fixture.actions.push("apply")
+            }
+            Radio.PlaylistsModal {
+                id: playlists
+                scene: fixture
+                onTargetRequested: id => { targetId = id; fixture.actions.push("target:" + id); }
+                onDifficultyRequested: id => fixture.actions.push("difficulty:" + id)
+                onAddRequested: fixture.actions.push("add")
+                onRefreshRequested: fixture.actions.push("list-refresh")
+            }
+            Radio.QueuePanel {
+                id: queue
+                host: fixture
+                onRetryRequested: fixture.actions.push("queue-retry")
+                onMediaDelegateAdded: row => fixture.delegatesAdded++
+                onMediaDelegateRemoved: row => fixture.delegatesRemoved++
+                onVisibleMediaChanged: fixture.viewportChanges++
+            }
+        }
+    }
+    readonly property Component controlFixture: Component {
+        Column {
+            id: fixture
+            x: 20; y: 80; spacing: 8
+            property int presses: 0
+            property int toggles: 0
+            property int edits: 0
+            property int chosen: -1
+            property int menuValue: -1
+            property int menuEdits: 0
+            property alias button: button
+            property alias icon: icon
+            property alias field: field
+            property alias toggle: toggle
+            property alias tabs: tabs
+            property alias tag: tag
+            property alias artwork: artwork
+            property alias material: material
+            property alias menu: menu
+            property alias modal: modal
+            property alias modalField: modalField
+            Radio.AppButton { id: button; text: "Activate"; onClicked: fixture.presses++ }
+            Radio.IconButton { id: icon; iconName: "play"; accessibleName: "Play fixture"; onClicked: fixture.presses++ }
+            Radio.AppField { id: field; onTextEdited: fixture.edits++ }
+            Radio.AppSwitch { id: toggle; text: "Enable"; onToggled: fixture.toggles++ }
+            Radio.AppTabs {
+                id: tabs
+                labels: ["First", "Second"]
+                onSelected: index => { fixture.chosen = index; currentIndex = index; }
+            }
+            Radio.AppTag { id: tag; text: "Genre"; onClicked: selected = !selected }
+            Radio.AppIcon { name: "search"; size: 32; color: Radio.Theme.accent }
+            Radio.Artwork { id: artwork; width: 80; height: 60; source: "qrc:/assets/logos/stable.png" }
+            Radio.MaterialSurface {
+                id: material
+                width: 100; height: 80
+                sourceItem: fixture
+                Rectangle { objectName: "materialForeground"; anchors.fill: parent; color: "red" }
+            }
+            Radio.AppMenu {
+                id: menu
+                valueRole: "id"
+                searchable: true
+                onChosen: value => { fixture.menuValue = value; currentIndex = entries.findIndex(entry => entry.id === value); }
+                onQueryEdited: value => { query = value; fixture.menuEdits++; }
+            }
+            Radio.AppModal {
+                id: modal
+                scene: probe.window.contentItem
+                panelWidth: 400; panelHeight: 300
+                title: "Fixture dialog"
+                initialFocus: modalField
+                Radio.AppField { id: modalField; width: parent.width }
+            }
+        }
+    }
     property var sortMedia: ({})
     property int settingsScenario: 0
     readonly property var settingsQueries: [
@@ -74,6 +223,20 @@ QtObject {
         }
         return null;
     }
+    function textChild(item: var, text: string): var {
+        if (!item) return null;
+        if (item.text === text) return item;
+        if (item.contentItem && item.contentItem !== item) {
+            const found = textChild(item.contentItem, text);
+            if (found) return found;
+        }
+        const children = item.data && typeof item.data !== "function" ? item.data : (item.children || []);
+        for (const child of children) {
+            const found = textChild(child, text);
+            if (found) return found;
+        }
+        return null;
+    }
     function galleryProbe(): void {
         const original = JSON.parse(mock.stateJson);
         mock.dispatch("galleryDisabled", "true");
@@ -107,10 +270,436 @@ QtObject {
         sortMenu.choose(0);
         sorted = JSON.parse(mock.stateJson);
         check(sorted.tracks[0].title === "Alice" && sorted.tracks[sorted.selected].id === selectedId, "gallery default title sort restored");
+        const field = findChild(window.contentItem, "galleryField");
+        field.forceActiveFocus();
+        input.keyClick(Qt.Key_A, Qt.ControlModifier, 0);
+        input.keyClick(Qt.Key_Backspace, Qt.NoModifier, 0);
+        input.keyClick(Qt.Key_A, Qt.NoModifier, 0);
+        check(JSON.parse(mock.stateJson).gallery.field === "a", "gallery field edits reach the store");
+        const tag = textChild(window.contentItem, "Electronic");
+        const oldTag = JSON.parse(mock.stateJson).gallery.tag;
+        tag.forceActiveFocus(); input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
+        check(JSON.parse(mock.stateJson).gallery.tag !== oldTag, "gallery tag activates the shared action");
+        const button = textChild(window.contentItem, "Accent");
+        const oldPresses = JSON.parse(mock.stateJson).gallery.presses;
+        button.forceActiveFocus(); input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
+        check(JSON.parse(mock.stateJson).gallery.presses === oldPresses + 1, "gallery button reaches the shared action");
+        const toggle = findChild(window.contentItem, "globalDisable");
+        toggle.forceActiveFocus(); input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
+        check(!field.enabled && !button.enabled && JSON.parse(mock.stateJson).gallery.disabled, "gallery switch disables its real control subtree");
+        toggle.forceActiveFocus(); input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
+        check(field.enabled && button.enabled && !JSON.parse(mock.stateJson).gallery.disabled, "gallery controls reenable through the UI");
         const opener = findChild(window.contentItem, "openModal");
         opener.forceActiveFocus();
         opener.clicked();
         stage = 10;
+    }
+    function controlsProbe(): void {
+        if (stage === 0) {
+            controls = controlFixture.createObject(window.contentItem);
+            check(controls !== null, "create production controls in the offline root");
+            stage = 1;
+            return;
+        }
+        const c = controls;
+        if (stage === 1) {
+            const artImage = c.artwork.children.find(child => child.fillMode !== undefined);
+            if (artImage.status === Image.Loading) return;
+            check(artImage.status === Image.Ready, "artwork fixture decodes");
+            c.button.forceActiveFocus();
+            input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
+            check(c.presses === 1, "Space activates the button once");
+            c.button.enabled = false;
+            input.mouseClick(c.button);
+            input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
+            check(c.presses === 1 && c.button.opacity === 0.4, "disabled button suppresses input");
+            c.button.enabled = true;
+            for (const variant of ["light", "alternate", "accent", "link"]) {
+                c.button.variant = variant;
+                const expected = variant === "light" ? Radio.Theme.text : variant === "accent" ? Radio.Theme.accent
+                    : variant === "link" ? Qt.rgba(0, 0, 0, 0) : Radio.Theme.surface;
+                check(c.button.background.color.toString() === expected.toString(), "button variant " + variant);
+            }
+            c.icon.forceActiveFocus();
+            input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
+            check(c.presses === 2 && c.icon.icon.source.toString().endsWith("/play.svg"), "icon button activates through keyboard");
+            c.icon.enabled = false;
+            input.mouseClick(c.icon);
+            check(c.presses === 2, "disabled icon suppresses input");
+            c.field.forceActiveFocus();
+            input.keyClick(Qt.Key_A, Qt.NoModifier, 0);
+            check(c.field.text === "a" && c.edits === 1, "field edits emit through native keyboard handling");
+            c.field.enabled = false;
+            input.keyClick(Qt.Key_B, Qt.NoModifier, 0);
+            check(c.field.text === "a" && c.edits === 1 && c.field.opacity === 0.4, "disabled field cannot edit");
+            c.field.enabled = true;
+            c.field.text = "日本語 / Поле";
+            c.field.forceActiveFocus();
+            input.keyClick(Qt.Key_A, Qt.ControlModifier, 0);
+            input.keyClick(Qt.Key_Backspace, Qt.NoModifier, 0);
+            check(c.field.text === "" && c.edits === 2, "native selection clears Unicode content");
+            c.toggle.forceActiveFocus();
+            input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
+            check(c.toggle.checked && c.toggles === 1, "switch toggles once with Space");
+            c.toggle.enabled = false;
+            input.mouseClick(c.toggle);
+            check(c.toggle.checked && c.toggles === 1, "disabled switch retains its state");
+            c.toggle.enabled = true;
+            input.mouseClick(c.toggle);
+            check(!c.toggle.checked && c.toggles === 2, "switch toggles with the pointer");
+            const row = c.tabs.children.find(child => child.children.length > 1);
+            check(row !== undefined, "tabs have rendered choices");
+            const second = row.children.find(child => child.text === "Second");
+            second.forceActiveFocus();
+            input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
+            check(c.chosen === 1 && c.tabs.currentIndex === 1 && second.variant === "light", "tab signal selects its original index");
+            c.tabs.enabled = false;
+            input.mouseClick(row.children.find(child => child.text === "First"));
+            check(c.chosen === 1, "disabled tabs do not dispatch selection");
+            input.mouseClick(c.tag);
+            check(c.tag.selected && c.tag.included, "tag fallback follows selection");
+            for (const state of [0, 1, 2]) {
+                c.tag.filterState = state;
+                check(c.tag.included === (state === 1), "explicit tag filter overrides selection");
+                check(c.tag.background.border.color.toString() === (state === 2 ? Radio.Theme.red : state === 1 ? Radio.Theme.accent : Radio.Theme.border).toString(), "tag filter border");
+            }
+            c.tag.enabled = false;
+            input.mouseClick(c.tag);
+            check(c.tag.selected && c.tag.foreground.toString() === Radio.Theme.text.toString(), "disabled excluded tag retains state with readable foreground");
+            check(!artImage.cache && artImage.fillMode === Image.PreserveAspectCrop, "artwork decodes without a second image cache");
+            c.artwork.source = "";
+            check(artImage.status === Image.Null, "empty artwork clears the decoded source");
+            const foreground = findChild(c.material, "materialForeground");
+            check(foreground && foreground.width === c.material.width && foreground.height === c.material.height, "material default content fills the foreground");
+            check(c.material.sourceOrigin.x === 0 && c.material.sourceOrigin.y === c.material.y, "material capture maps to its source");
+            c.material.sourceItem = null;
+            check(c.material.sourceOrigin.x === 0 && c.material.sourceOrigin.y === 0, "material without a source has a neutral origin");
+            c.material.sourceItem = window.contentItem;
+            stage = 2;
+            return;
+        }
+        if (stage === 2) {
+            check(c.material.sourceOrigin.x === c.x && c.material.sourceOrigin.y === c.y + c.material.y, "material capture follows ancestor coordinates");
+            c.material.x = 12;
+            c.material.width = 140;
+            stage = 3;
+            return;
+        }
+        check(c.material.sourceOrigin.x === c.x + 12 && findChild(c.material, "materialForeground").width === 140, "material capture and foreground update after layout changes");
+        const tint = c.material.children.find(child => child.border !== undefined
+            && child.border.color.toString() === Radio.Theme.border.toString());
+        check(tint !== undefined, "material has its tinted border layer");
+        for (const kind of ["thin", "regular", "thick"]) {
+            c.material.kind = kind;
+            check(tint.color.toString() === (kind === "thin" ? "#80000000" : kind === "regular" ? "#cc121212" : "#f20d0d0d"), "material tint " + kind);
+        }
+        for (const loader of [Radio.Theme.regularFont, Radio.Theme.mediumFont, Radio.Theme.semiboldFont, Radio.Theme.boldFont, Radio.Theme.fallbackFont]) {
+            if (loader.status === FontLoader.Loading) return;
+            check(loader.status === FontLoader.Ready, "Theme singleton loads every font");
+        }
+        check(Radio.Theme.fontFamily === "Poppins", "Theme font family comes from its loaded face");
+        const icon = c.children.find(child => child.name === "search");
+        check(icon.implicitWidth === 32 && icon.implicitHeight === 32 && !icon.children[0].enabled
+            && icon.children[0].icon.source.toString().endsWith("/search.svg"), "decorative icon preserves size and native source");
+        window.galleryStore.send("field", 0);
+        check(window.galleryStore.state.gallery.field === "0", "Store stringifies numeric zero");
+        window.galleryStore.send("field", false);
+        check(window.galleryStore.state.gallery.field === "false", "Store stringifies false");
+        window.galleryStore.send("field", "日本語 / Поле");
+        check(window.galleryStore.state.gallery.field === "日本語 / Поле", "Store retains Unicode");
+        window.galleryStore.send("field");
+        check(window.galleryStore.state.gallery.field === "", "Store omitted value maps to an empty payload");
+        finish();
+    }
+    function menuModalProbe(): void {
+        if (stage === 0) {
+            controls = controlFixture.createObject(window.contentItem);
+            check(controls !== null, "create menu/modal fixture");
+            const menu = controls.menu;
+            menu.entries = [{ id: 7, label: "First" }, { id: 42, label: "Second" }, { id: 100, label: "Third" }];
+            menu.choose(-1); menu.choose(3);
+            check(controls.menuValue === -1, "out-of-range menu choices do not dispatch");
+            menu.move(-1);
+            check(menu.focusedRow === 2, "menu wraps backward");
+            menu.move(1);
+            check(menu.focusedRow === 0, "menu wraps forward");
+            menu.entries = [];
+            menu.move(1); menu.choose(0);
+            check(controls.menuValue === -1 && menu.focusedRow === 0, "empty menu has no selectable result");
+            menu.entries = [{ id: 7, label: "First" }, { id: 42, label: "Second" }, { id: 100, label: "Third" }];
+            menu.forceActiveFocus(); menu.popup.open(); stage = 1;
+            return;
+        }
+        const c = controls;
+        const menu = c.menu;
+        switch (stage) {
+        case 1:
+            if (!menu.popup.opened) return;
+            check(window.activeFocusItem.placeholderText === "Search...", "searchable menu initially focuses its field");
+            input.keyClick(Qt.Key_A, Qt.NoModifier, 0);
+            check(menu.query === "a" && c.menuEdits === 1, "menu search emits its edited query");
+            input.keyClick(Qt.Key_Down, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_End, Qt.NoModifier, 0);
+            check(menu.focusedRow === 2, "End reaches the final menu row");
+            input.keyClick(Qt.Key_Home, Qt.NoModifier, 0);
+            check(menu.focusedRow === 0, "Home reaches the first menu row");
+            input.keyClick(Qt.Key_Up, Qt.NoModifier, 0);
+            check(menu.focusedRow === 2, "keyboard Up wraps");
+            input.keyClick(Qt.Key_Down, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
+            stage = 2; break;
+        case 2:
+            if (menu.popup.visible) return;
+            check(c.menuValue === 7 && menu.activeFocus, "Return selects the value role and restores focus");
+            menu.searchable = false; menu.currentIndex = 1;
+            menu.popup.open(); stage = 3; break;
+        case 3:
+            if (!menu.popup.opened) return;
+            check(menu.focusedRow === 1, "menu starts at its selected row");
+            input.keyClick(Qt.Key_Space, Qt.NoModifier, 0); stage = 4; break;
+        case 4:
+            if (menu.popup.visible) return;
+            check(c.menuValue === 42, "Space chooses the original ID");
+            menu.popup.open(); stage = 5; break;
+        case 5:
+            if (!menu.popup.opened) return;
+            menu.enabled = false; menu.choose(0); stage = 6; break;
+        case 6:
+            if (menu.popup.visible) return;
+            check(c.menuValue === 42, "disabling the menu closes it and suppresses choices");
+            c.button.forceActiveFocus();
+            c.modal.dismissible = false;
+            c.modal.open(); stage = 7; break;
+        case 7:
+            if (!c.modal.opened) return;
+            check(c.modalField.activeFocus && !findChild(c.modal.contentItem, "modalClose").enabled, "nondismissible modal focuses its field and disables close");
+            input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0);
+            input.mouseClick(window.contentItem, 10, 120, Qt.LeftButton, Qt.NoModifier, 0);
+            stage = 8; break;
+        case 8:
+            check(c.modal.opened, "nondismissible modal ignores Escape and backdrop");
+            for (let i = 0; i < 4; ++i) {
+                input.keyClick(Qt.Key_Tab, Qt.NoModifier, 0);
+                check(contained(c.modal.contentItem, window.activeFocusItem), "modal retains keyboard traversal");
+            }
+            c.modal.dismissible = true;
+            input.mouseClick(findChild(c.modal.contentItem, "modalClose"));
+            stage = 9; break;
+        case 9:
+            if (c.modal.visible) return;
+            check(c.button.activeFocus, "closing the modal restores the recorded opener");
+            finish(); break;
+        }
+    }
+    function windowProbe(): void {
+        if (stage === 0) {
+            controls = windowFixture.createObject(window.contentItem);
+            check(controls !== null, "create title-bar fixture");
+            stage = 1; return;
+        }
+        const c = controls;
+        const bar = c.bar;
+        const fake = c.windowDouble;
+        const resize = c.surface.children.find(child => child.z === 1000);
+        check(resize !== undefined, "resize handles belong to the complete window");
+        const right = bar.children.find(child => child.children.some(button => button.objectName === "queueButton"));
+        const maximize = right.children.find(button => button.contentItem && button.contentItem.name === "square");
+        const minimize = right.children.find(button => button.contentItem && button.contentItem.name === "minus");
+        const close = right.children.find(button => button.contentItem && button.contentItem.name === "x");
+        input.mouseClick(findChild(bar, "playlistsTabButton"));
+        check(c.tabs === 1 && bar.selectedTab === 1 && fake.moves === 0, "tab hit target dispatches without starting a window move");
+        input.mouseClick(findChild(bar, "settingsButton"));
+        check(c.tabs === 2 && findChild(bar, "settingsButton").variant === "light", "Settings tab selects its own index");
+        const queue = findChild(bar, "queueButton");
+        input.mouseClick(queue);
+        check(c.queues === 0, "disconnected queue control suppresses activation");
+        bar.queueEnabled = true;
+        input.mouseClick(queue);
+        check(c.queues === 1 && queue.accessibleName === "Hide queue", "queue action projects its open state");
+        input.mouseClick(queue);
+        check(c.queues === 2 && queue.accessibleName === "Show queue", "queue action projects its closed state");
+        const previousMoves = fake.moves;
+        input.mouseClick(bar, 650, 25, Qt.LeftButton, Qt.NoModifier, 0);
+        check(fake.moves === previousMoves + 1, "unoccupied title-bar space requests a system move");
+        const handles = resize.children.filter(child => child.modelData !== undefined);
+        check(handles.length === 8, "eight edge/corner resize handles");
+        for (const handle of handles) {
+            check(handle.width > 0 && handle.height > 0 && handle.x >= 0 && handle.y >= 0
+                && handle.x + handle.width <= c.surface.width && handle.y + handle.height <= c.surface.height, "resize target stays inside window bounds");
+            input.mouseClick(handle, handle.width / 2, handle.height / 2, Qt.LeftButton, Qt.NoModifier, 0);
+        }
+        const expected = [Qt.TopEdge, Qt.BottomEdge, Qt.LeftEdge, Qt.RightEdge,
+            Qt.TopEdge | Qt.LeftEdge, Qt.TopEdge | Qt.RightEdge,
+            Qt.BottomEdge | Qt.LeftEdge, Qt.BottomEdge | Qt.RightEdge];
+        check(JSON.stringify(fake.edges) === JSON.stringify(expected), "resize handlers forward the exact edge/corner flags");
+        input.mouseClick(maximize);
+        check(fake.visibility === Window.Maximized && bar.maximized && !resize.visible && maximize.contentItem.name === "copy", "maximize updates observed state and hides resize handles");
+        input.mouseClick(maximize);
+        check(fake.visibility === Window.Windowed && !bar.maximized && resize.visible, "Restore returns to windowed state");
+        fake.visibility = Window.FullScreen;
+        check(!resize.visible, "fullscreen suppresses resize handles");
+        fake.showNormal();
+        input.mouseClick(minimize);
+        check(fake.visibility === Window.Minimized, "minimize routes to the window");
+        fake.showNormal();
+        bar.gallery = true;
+        check(!queue.visible && !findChild(bar, "settingsButton").enabled
+            && findChild(bar, "songsTabButton").text === "Components", "gallery removes live-only window controls");
+        input.mouseClick(findChild(bar, "settingsButton"));
+        check(c.tabs === 2, "gallery Settings remains unavailable");
+        input.mouseClick(findChild(bar, "songsTabButton"));
+        check(c.tabs === 0, "Components navigation retains the Songs index");
+        input.mouseClick(close);
+        check(fake.closes === 1, "close routes to the window");
+        finish();
+    }
+    function panelProbe(): void {
+        if (stage === 0) {
+            controls = panelFixture.createObject(window.contentItem);
+            check(controls !== null, "create composed panels");
+            controls.pane.editorOpen = true;
+            stage = 1; return;
+        }
+        const c = controls;
+        const pane = c.pane;
+        const editor = findChild(pane, "playlistEditor");
+        const name = findChild(editor, "playlistEditorName");
+        const save = findChild(editor, "savePlaylistEditor");
+        const folders = c.folders;
+        const lists = c.playlists;
+        switch (stage) {
+        case 1:
+            check(textChild(pane, "Create your first playlist with +").visible && name.activeFocus, "empty pane and editor initial focus");
+            pane.editorName = "  ";
+            check(!save.enabled, "blank playlist name cannot save");
+            name.forceActiveFocus(); input.keyClick(Qt.Key_A, Qt.NoModifier, 0);
+            check(pane.editorName.trim() === "a" && c.actions.includes("name") && save.enabled, "name edits reach the composed owner");
+            pane.coverPreparing = true;
+            input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
+            check(!save.enabled && findChild(editor, "playlistCoverPreparationStatus").visible && !c.actions.includes("save"), "preparation gates keyboard save");
+            pane.coverPreparing = false;
+            input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
+            check(c.actions.filter(action => action === "save").length === 1, "Return saves once when ready");
+            input.mouseClick(findChild(editor, "choosePlaylistCover"));
+            input.mouseClick(findChild(editor, "resetPlaylistCover"));
+            check(c.actions.includes("cover") && c.actions.includes("reset"), "editor forwards cover actions");
+            pane.busy = true;
+            check(!name.enabled && !save.enabled && !findChild(editor, "closePlaylistEditor").enabled
+                && !findChild(editor, "choosePlaylistCover").enabled && !findChild(editor, "resetPlaylistCover").enabled, "busy editor suppresses every mutation control");
+            pane.busy = false;
+            input.mouseClick(findChild(editor, "closePlaylistEditor"));
+            check(c.actions.includes("cancel"), "editor close forwards cancellation");
+            pane.editorOpen = false;
+            pane.query = "missing";
+            pane.connected = false;
+            stage = 2; break;
+        case 2:
+            check(textChild(pane, "No matching playlists").visible && !findChild(pane, "createPlaylistButton").enabled
+                && !findChild(pane, "refreshPlaylists").enabled, "empty search and offline controls");
+            pane.connected = true;
+            pane.playlists = [{ id: 7, name: "Empty", itemCount: 0, artworkUrl: "" }, { id: 42, name: "Songs", itemCount: 2, artworkUrl: "" }];
+            stage = 3; break;
+        case 3: {
+            const cards = findChild(pane, "playlistList");
+            const card = cards.itemAtIndex(0);
+            if (!card || !cards.itemAtIndex(1)) return;
+            input.mouseClick(card);
+            check(c.actions.includes("select:7"), "playlist card forwards the actual playlist ID");
+            findChild(card, "playlistActionsButton").clicked();
+            stage = 4; break;
+        }
+        case 4: {
+            const card = findChild(pane, "playlistList").itemAtIndex(0);
+            const menu = findChild(card, "playlistActionsMenu");
+            if (!menu.opened) return;
+            check(!menu.itemAt(0).enabled && menu.itemAt(1).activeFocus, "empty playlist disables queue and focuses Edit");
+            input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
+            stage = 5; break;
+        }
+        case 5:
+            check(c.actions.includes("edit:7"), "playlist menu preserves the selected ID");
+            pane.activeId = 42; pane.activeName = "Songs";
+            stage = 6; break;
+        case 6:
+            check(findChild(pane, "activePlaylistTitle").text === "Songs" && pane.tracksList.visible
+                && textChild(pane, "This playlist is empty").visible, "detail header and empty track list");
+            input.mouseClick(findChild(pane, "playlistBackButton"));
+            check(c.actions.includes("select:-1"), "back forwards the sentinel list selection");
+            folders.rows = [
+                { kind: "stable", path: "/fixture/stable", markerPath: "/fixture/osu!.db", registered: true, action: "remove", countPending: true, countError: "", count: 0, error: "" },
+                { kind: "lazer", path: "/fixture/lazer", markerPath: "/fixture/client.realm", registered: false, action: "add", countPending: false, countError: "retry count", count: 0, error: "import failed" }
+            ];
+            folders.open(); stage = 7; break;
+        case 7:
+            if (!folders.opened) return;
+            check(folders.hasPending && findChild(folders.contentItem, "folderSelectionRow0").border.color.toString() === Radio.Theme.red.toString()
+                && textChild(folders.contentItem, "Count unavailable").visible, "folder actions and count failure project independently");
+            input.mouseClick(findChild(folders.contentItem, "folderRefresh0"));
+            input.mouseClick(findChild(folders.contentItem, "folderToggle1"));
+            check(c.actions.includes("folder-refresh:/fixture/osu!.db") && c.actions.includes("toggle:/fixture/client.realm"), "folder controls retain marker identities");
+            input.mouseClick(findChild(folders.contentItem, "browseFolders"));
+            input.mouseClick(findChild(folders.contentItem, "applyFolders"));
+            check(c.actions.includes("browse") && c.actions.includes("apply"), "folder footer actions dispatch");
+            folders.applying = true;
+            check(!folders.dismissible && !findChild(folders.contentItem, "browseFolders").enabled
+                && !findChild(folders.contentItem, "applyFolders").enabled && !findChild(folders.contentItem, "folderToggle0").enabled, "applying locks folder mutation and dismissal");
+            folders.applying = false; folders.picking = true;
+            check(!findChild(folders.contentItem, "browseFolders").enabled && !findChild(folders.contentItem, "applyFolders").enabled, "picker gates browse/apply");
+            folders.picking = false;
+            folders.close(); stage = 8; break;
+        case 8:
+            if (folders.visible) return;
+            lists.playlists = [{ id: 42, name: "Target" }];
+            lists.candidates = [{ id: 701, name: "Hard", checked: false }];
+            lists.open(); stage = 9; break;
+        case 9:
+            if (!lists.opened) return;
+            check(!findChild(lists.contentItem, "confirmPlaylistAdd").enabled, "playlist add needs target and checked difficulty");
+            findChild(lists.contentItem, "playlistTargetMenu").choose(0);
+            const candidate = textChild(lists.contentItem, "Hard");
+            input.mouseClick(candidate);
+            check(c.actions.includes("target:42") && c.actions.includes("difficulty:701"), "add modal forwards target/difficulty IDs");
+            lists.candidates = [{ id: 701, name: "Hard", checked: true }];
+            stage = 10; break;
+        case 10:
+            input.mouseClick(findChild(lists.contentItem, "confirmPlaylistAdd"));
+            check(c.actions.includes("add"), "ready modal dispatches addition");
+            lists.busy = true;
+            check(!lists.dismissible && !findChild(lists.contentItem, "confirmPlaylistAdd").enabled
+                && !findChild(lists.contentItem, "playlistTargetMenu").enabled, "busy add modal locks controls");
+            lists.busy = false; lists.close(); stage = 11; break;
+        case 11:
+            if (lists.visible) return;
+            c.queue.loading = true; c.queue.open(); stage = 12; break;
+        case 12:
+            if (!c.queue.opened) return;
+            check(findChild(c.queue.contentItem, "queueStatus").text === "Loading queue…", "empty queue loading state");
+            c.queue.message = "Retry queue";
+            check(!findChild(c.queue.contentItem, "queueRetryButton").enabled, "loading queue suppresses retry");
+            stage = 120; break;
+        case 120:
+            c.queue.loading = false;
+            check(input.waitForRendering(c.queue.contentItem, 1000), "queue retry layout renders before pointer activation");
+            input.mouseClick(findChild(c.queue.contentItem, "queueRetryButton"));
+            check(c.actions.includes("queue-retry"), "queue retry forwards to the owner");
+            c.queue.message = "";
+            c.queue.tracks = [{ audioId: 42, title: "First", artist: "Artist", durationLabel: "01:02", artworkUrl: "" },
+                { audioId: 42, title: "Duplicate", artist: "Artist", durationLabel: "01:02", artworkUrl: "" }];
+            stage = 13; break;
+        case 13:
+            if (c.delegatesAdded !== 2) return;
+            check(c.viewportChanges > 0 && textChild(c.queue.contentItem, "First").visible
+                && textChild(c.queue.contentItem, "Duplicate").visible, "queue retains duplicate rows and registers visible demand");
+            c.queue.tracks = []; stage = 14; break;
+        case 14:
+            if (c.delegatesRemoved !== 2) return;
+            check(findChild(c.queue.contentItem, "queueStatus").text === "No upcoming songs", "queue shrink releases delegates and restores its empty state");
+            input.mouseClick(findChild(c.queue.contentItem, "queueCloseButton"));
+            stage = 15; break;
+        case 15:
+            if (c.queue.visible) return;
+            finish(); break;
+        }
     }
     function contained(content: var, item: var): bool {
         while (item) { if (item === content) return true; item = item.parent; }
@@ -606,9 +1195,20 @@ QtObject {
             check(bridge.player.currentAudioId === -1 && bridge.player.loadingAudioId === -1, "selection alone does not start audio");
             check(play.enabled && play.accessibleName === "Play", "selected track can play");
             check(!progress.enabled && bridge.player.playbackPositionLabel === "00:00", "noncurrent selection has no seeking");
+            check(!findChild(window.contentItem, "shuffleButton").enabled && !findChild(window.contentItem, "repeatButton").enabled,
+                "unavailable transport modes stay disabled");
+            window.width = 1024; window.height = 640;
+            stage = 10;
+            break;
+        case 10: {
+            const panel = findChild(window.contentItem, "playerPane");
+            check(panel.width === window.width - 480 && panel.contentWidth <= panel.width * 0.85
+                && panel.contentLeft >= 0 && panel.coverSize <= Math.max(panel.height - 225, 0), "player geometry stays inside the minimum window");
+            check(progress.from === 0 && progress.to >= 1 && progress.value === 0, "empty playback keeps a valid progress range");
             bridge.library.selectTrack(42);
             stage = 1;
             break;
+        }
         case 1:
             if (bridge.player.selectedAudioId !== 42) return;
             findChild(window.contentItem, "volumeButton").clicked();
@@ -1380,6 +1980,10 @@ QtObject {
     }
     function step(): void {
         if (passed) return;
+        if (testCase === "controls") { controlsProbe(); return; }
+        if (testCase === "controls-popups") { menuModalProbe(); return; }
+        if (testCase === "controls-window") { windowProbe(); return; }
+        if (testCase === "controls-panels") { panelProbe(); return; }
         if (gallery) { galleryModalProbe(); return; }
         if (testCase.startsWith("discord-")) { discordPreferenceProbe(); return; }
         if (testCase.startsWith("names-")) { trackNamePreferencesProbe(); return; }
@@ -1434,6 +2038,13 @@ QtObject {
             check(card.subtitle === "Fixture artist | Hard", "shared subtitle role");
             check(bridge.player.selectedAudioId === 103 && bridge.player.selectedTitle === "Track 103", "first sorted track uses database ID");
             check(rowChanges > 0, "media uses targeted row notifications");
+            const retained = window.mediaDelegates.slice();
+            const hidden = { audioId: 999, inViewport: false, available: true };
+            window.addMediaDelegate(hidden);
+            window.removeMediaDelegate(hidden);
+            window.removeMediaDelegate(hidden);
+            check(window.mediaDelegates.length === retained.length
+                && window.mediaDelegates.every((row, index) => row === retained[index]), "removing an absent media delegate preserves every retained row");
             retainedResets = resets;
             stage = 3;
             bridge.library.selectTrack(42);
@@ -1493,21 +2104,22 @@ QtObject {
         case 5:
             if (bridge.settings.foldersLoading || bridge.settings.folderCanRetry) return;
             check(bridge.settings.selectedFolderId === 52 && bridge.settings.folders.length === 2, "folder retry retains selected ID");
+            input.mouseClick(findChild(window.contentItem, "songsTabButton"));
             stage = 6;
-            bridge.library.refreshLibrary();
+            findChild(window.contentItem, "refreshLibrary").clicked();
             break;
         case 6:
             if (bridge.library.libraryLoading || !bridge.library.libraryMessage.includes("fixture library")) return;
             check((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) === 3 && bridge.player.selectedAudioId === 42, "failed refresh retains rows and selection");
             check(resets === retainedResets, "failed refresh must not reset model");
             stage = 7;
-            bridge.library.refreshLibrary();
+            findChild(window.contentItem, "refreshLibrary").clicked();
             break;
         case 7:
             if (bridge.library.libraryLoading || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 1) return;
             check(bridge.player.selectedAudioId === 103 && bridge.player.selectedTitle === "Track 103", "shrinking refresh selects first remaining ID");
             stage = 8;
-            bridge.library.refreshLibrary();
+            findChild(window.contentItem, "refreshLibrary").clicked();
             break;
         case 8:
             if (bridge.library.libraryLoading || (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 0) return;
@@ -1525,6 +2137,6 @@ QtObject {
         onTriggered: { probe.step(); if (!probe.passed) restart(); }
     }
     Component.onCompleted: {
-        if (gallery) galleryProbe();
+        if (gallery && !testCase.startsWith("controls")) galleryProbe();
     }
 }

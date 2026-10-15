@@ -8,6 +8,113 @@ fn controller() -> Controller {
 fn candidate(state: &mut Controller, path: &str, id: Option<i32>) {
     state.merge_candidate("stable".into(), path.into(), format!("{path}/osu!.db"), id);
 }
+
+#[tokio::test]
+async fn canonical_alias_replaces_preview_work_and_cancellation_acknowledges_every_task() {
+    let mut state = controller();
+    state.settings.selection.state.open = true;
+    candidate(&mut state, "/old", Some(7));
+    state.settings.selection.state.rows[0].pending = Some(FolderAction::Add);
+    state.settings.selection.state.rows[0].count = Loading::Ready(99);
+    let old_count = tokio::spawn(std::future::pending::<()>());
+    state
+        .settings
+        .selection
+        .counts
+        .insert("/old/osu!.db".into(), old_count.abort_handle());
+    candidate(&mut state, "/canonical", Some(7));
+    assert!(old_count.await.unwrap_err().is_cancelled());
+    assert_eq!(state.settings.selection.state.rows.len(), 1);
+    let row = &state.settings.selection.state.rows[0];
+    assert_eq!(
+        (&*row.root_path, &*row.marker_path),
+        ("/canonical", "/canonical/osu!.db")
+    );
+    assert_eq!((row.registered_id, row.pending), (Some(7), None));
+    assert_eq!(row.count, Loading::Pending);
+    assert_eq!(
+        state.settings.selection.queue.pop_front().as_deref(),
+        Some("/canonical/osu!.db")
+    );
+    assert!(
+        state.settings.selection.queue.is_empty() && state.settings.selection.counts.is_empty()
+    );
+    state.selection_event(FolderEvent::Count {
+        epoch: 0,
+        path: "/old/osu!.db".into(),
+        result: Ok(100),
+    });
+    assert_eq!(
+        state.settings.selection.state.rows[0].count,
+        Loading::Pending
+    );
+    state.selection_event(FolderEvent::Count {
+        epoch: 0,
+        path: "/canonical/osu!.db".into(),
+        result: Ok(7),
+    });
+    assert_eq!(
+        state.settings.selection.state.rows[0].count,
+        Loading::Ready(7)
+    );
+    let scan = tokio::spawn(std::future::pending::<()>());
+    let count = tokio::spawn(std::future::pending::<()>());
+    state.settings.selection.scans.insert(
+        1,
+        Scan {
+            task: scan.abort_handle(),
+            scoped: true,
+            markers: Vec::new(),
+        },
+    );
+    state
+        .settings
+        .selection
+        .counts
+        .insert("/canonical/osu!.db".into(), count.abort_handle());
+    state.settings.selection.queue.push_back("queued".into());
+    state.settings.selection.epoch = u64::MAX;
+    state.settings.cancel_selection();
+    assert!(scan.await.unwrap_err().is_cancelled());
+    assert!(count.await.unwrap_err().is_cancelled());
+    assert_eq!(state.settings.selection.epoch, 0);
+    assert!(
+        state.settings.selection.scans.is_empty()
+            && state.settings.selection.counts.is_empty()
+            && state.settings.selection.queue.is_empty()
+    );
+}
+
+#[test]
+fn chooser_requests_are_single_and_stale_or_closed_replies_do_not_start_discovery() {
+    let (mut state, updates) = crate::controller::tests::controller();
+    state.settings.selection.state.open = true;
+    state.settings.selection.epoch = 7;
+    state.browse_selection();
+    assert!(state.settings.selection.state.picking);
+    assert!(matches!(
+        updates.lock().unwrap().last(),
+        Some(crate::controller::AppUpdate::FolderSelectionPickerRequested(7))
+    ));
+    let count = updates.lock().unwrap().len();
+    state.browse_selection();
+    assert_eq!(updates.lock().unwrap().len(), count);
+    state.selection_picked(6, None);
+    assert!(state.settings.selection.state.picking);
+    state.selection_picked(7, None);
+    assert!(!state.settings.selection.state.picking);
+    state.selection_picked(7, Some("ignored".into()));
+    assert!(state.settings.selection.scans.is_empty() && state.tasks.is_empty());
+    state.settings.selection.state.applying = true;
+    let count = updates.lock().unwrap().len();
+    state.browse_selection();
+    assert_eq!(updates.lock().unwrap().len(), count);
+    state.settings.selection.state.applying = false;
+    state.close_selection();
+    let count = updates.lock().unwrap().len();
+    state.browse_selection();
+    assert_eq!(updates.lock().unwrap().len(), count);
+}
 #[test]
 fn staging_counts_and_late_results_are_isolated_per_opening() {
     let mut state = controller();

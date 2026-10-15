@@ -77,3 +77,62 @@ impl Workflow<'_> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    #[tokio::test]
+    async fn cancellation_drops_inflight_resources_and_ready_work_keeps_its_result() {
+        struct Resource(Arc<AtomicBool>);
+        impl Drop for Resource {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        let mut tasks = JoinSet::new();
+        let (cancel, _receiver) = watch::channel(false);
+        let dropped = Arc::new(AtomicBool::new(false));
+        let resource = Resource(dropped.clone());
+        let (entered, ready) = tokio::sync::oneshot::channel();
+        let mut work = Workflow {
+            api: None,
+            tasks: &mut tasks,
+            cancel: &cancel,
+            effects: Vec::new(),
+        };
+        let handle = work.task(async move {
+            let _resource = resource;
+            entered.send(()).unwrap();
+            std::future::pending().await
+        });
+        ready.await.unwrap();
+        cancel.send(true).unwrap();
+        assert!(matches!(
+            tasks.join_next().await.unwrap().unwrap(),
+            Completed::Cancelled
+        ));
+        assert!(handle.is_finished());
+        assert!(dropped.load(Ordering::SeqCst));
+        cancel.send(false).unwrap();
+        let mut work = Workflow {
+            api: None,
+            tasks: &mut tasks,
+            cancel: &cancel,
+            effects: Vec::new(),
+        };
+        work.task(async {
+            Completed::Queue {
+                request: 17,
+                result: Err("observed result".into()),
+            }
+        });
+        assert!(
+            matches!(tasks.join_next().await.unwrap().unwrap(), Completed::Queue { request: 17, result: Err(error) } if error == "observed result")
+        );
+    }
+}

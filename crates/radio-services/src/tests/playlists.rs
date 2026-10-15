@@ -36,12 +36,19 @@ pub(super) async fn cover_contracts(database: &TestDatabase, other: &TestDatabas
         Some(saved)
     );
     let queue = database.queue().get().await.unwrap();
+    let mut damaged_pixels = png.clone();
+    let idat = damaged_pixels
+        .windows(4)
+        .position(|part| part == b"IDAT")
+        .unwrap();
+    damaged_pixels[idat.checked_add(4).unwrap()] ^= 0xff;
     for invalid in [
         b"broken PNG".to_vec(),
         png[..png.len() / 2].to_vec(),
         cover_png(511, 512),
         cover_png(513, 512),
         vec![0; crate::MAX_PLAYLIST_COVER_BYTES + 1],
+        damaged_pixels,
     ] {
         assert!(
             database
@@ -79,14 +86,41 @@ pub(super) async fn cover_contracts(database: &TestDatabase, other: &TestDatabas
     );
     database.playlists().delete(playlist.id).await.unwrap();
     assert_eq!(database.playlists().cover(playlist.id).await.unwrap(), None);
-    assert!(
+    missing_playlist_errors(database, playlist.id, &png).await;
+}
+
+async fn missing_playlist_errors(database: &TestDatabase, missing: i32, png: &[u8]) {
+    for error in [
         database
             .playlists()
-            .set_cover(playlist.id, &png)
+            .set_cover(missing, png)
             .await
-            .is_err()
-    );
-    assert!(database.playlists().clear_cover(playlist.id).await.is_err());
+            .unwrap_err(),
+        database.playlists().clear_cover(missing).await.unwrap_err(),
+        database
+            .playlists()
+            .rename(missing, "Missing")
+            .await
+            .unwrap_err(),
+        database
+            .playlists()
+            .add_items(missing, &[i32::MAX])
+            .await
+            .unwrap_err(),
+        database
+            .playlists()
+            .remove_item(missing, i32::MAX)
+            .await
+            .unwrap_err(),
+        database.playlists().play(missing, None).await.unwrap_err(),
+        database.playlists().delete(missing).await.unwrap_err(),
+    ] {
+        assert_eq!(
+            error.downcast_ref::<PlaylistError>(),
+            Some(&PlaylistError::NotFound(missing))
+        );
+    }
+    assert!(database.playlists().get(missing).await.unwrap().is_none());
 }
 
 pub(super) fn cover_png(width: u32, height: u32) -> Vec<u8> {

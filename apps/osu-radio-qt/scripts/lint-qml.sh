@@ -21,5 +21,6 @@ cp "$qml_import/OsuRadio/qmldir" "$qml_import/OsuRadio/plugin.qmltypes" "$lint_r
 # Lint the copied files at their registered module paths. A symlink back to the
 # source tree makes direct singleton checks lose the generated module context.
 cp -R "$project_root/apps/osu-radio-qt/qml" "$lint_root/OsuRadio/qml"
-mapfile -t qml_files < <(rg --files "$lint_root/OsuRadio/qml" apps/osu-radio-qt/tests -g '*.qml' | sort)
+qml_file_list=$(rg --files "$lint_root/OsuRadio/qml" apps/osu-radio-qt/tests -g '*.qml' | sort)
+mapfile -t qml_files <<< "$qml_file_list"
 "$qml_lint" -I "$lint_root" -W 0 "${qml_files[@]}"

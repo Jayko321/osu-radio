@@ -79,3 +79,38 @@ impl Error for StartError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn session_start_wraps_server_failure_and_client_errors_keep_their_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("missing");
+        let error = Session::start(ServerOptions {
+            binary: Some(binary.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(error, StartError::Server(ServerError::BinaryNotFound(ref actual)) if actual == &binary)
+        );
+        assert!(
+            error
+                .to_string()
+                .starts_with("the embedded server failed to start: ")
+        );
+        assert_eq!(
+            error.source().unwrap().to_string(),
+            ServerError::BinaryNotFound(binary).to_string()
+        );
+        let error = StartError::Client(ApiError::Protocol("fixture client error".into()));
+        assert_eq!(
+            error.to_string(),
+            "the api client could not be built: fixture client error"
+        );
+        assert_eq!(error.source().unwrap().to_string(), "fixture client error");
+    }
+}

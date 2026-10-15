@@ -146,6 +146,69 @@ mod tests {
             serde_json::from_slice(&bytes).unwrap_or(Value::Null),
         )
     }
+
+    #[tokio::test]
+    async fn invalid_or_unknown_patch_fields_preserve_both_settings_and_the_track_override() {
+        let state = state_with(&[beatmap_set(1, "/fixture/volume.mp3")]).await;
+        let path = "/api/user-data/audio-settings";
+        let expected = json!({"individual_volume_enabled": true, "global_volume_percent": 37});
+        assert_eq!(
+            request(&state, "PATCH", path, expected.clone()).await,
+            (StatusCode::OK, expected.clone())
+        );
+        assert_eq!(
+            request(&state, "PATCH", path, json!({})).await,
+            (StatusCode::OK, expected.clone())
+        );
+        let id = state
+            .services()
+            .beatmap_sets()
+            .search_tracks("")
+            .await
+            .unwrap()[0]
+            .audio_source_id;
+        let volume_path = format!("/api/audio-sources/{id}/volume");
+        assert_eq!(
+            request(&state, "PUT", &volume_path, json!({"volume_percent": 23}))
+                .await
+                .0,
+            StatusCode::NO_CONTENT
+        );
+        for patch in [
+            json!({"individual_volume_enabled": null, "global_volume_percent": 10}),
+            json!({"individual_volume_enabled": "false"}),
+            json!({"global_volume_percent": null, "individual_volume_enabled": false}),
+            json!({"global_volume_percent": 20, "unknown": true}),
+            json!({"global_volume_percent": -1, "individual_volume_enabled": false}),
+            json!({"global_volume_percent": 101, "individual_volume_enabled": false}),
+        ] {
+            assert!(
+                request(&state, "PATCH", path, patch)
+                    .await
+                    .0
+                    .is_client_error()
+            );
+            assert_eq!(
+                request(&state, "GET", path, Value::Null).await,
+                (StatusCode::OK, expected.clone())
+            );
+        }
+        for body in [
+            json!({}),
+            json!({"volume_percent": null}),
+            json!({"volume_percent": 0, "unknown": false}),
+        ] {
+            assert!(
+                request(&state, "PUT", &volume_path, body)
+                    .await
+                    .0
+                    .is_client_error()
+            );
+            let (status, rows) = request(&state, "GET", "/api/tracks", Value::Null).await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(rows[0]["volume_percent"], 23);
+        }
+    }
     #[cfg(feature = "docs")]
     #[tokio::test]
     async fn served_document_contains_volume_routes_bounds_and_optional_fields() {

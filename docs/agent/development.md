@@ -62,6 +62,36 @@ The locked checks cover core/scanner, SQLite repositories/services, CLI, server
 with API docs on/off, player, and client library tests/Clippy with `mock` off/on.
 Tests run with `--test-threads=1` to avoid the documented process-fixture races.
 Ignored benchmarks and opt-in integration probes remain skipped.
+The test job also runs `python3 -B -m unittest discover -s tools/search-benchmark -v`:
+the benchmark script's HTTP and child-process orchestration are exercised with
+mock responses/processes and temporary paths, without launching a real server.
+It also runs `python3 -B -m unittest discover -s apps/osu-radio-qt/tests -p 'test_*.py' -v`
+for asset-manifest consistency, visual/QML-lint tool orchestration and private
+Python HTTP fixture contracts. The HTTP cases bind ephemeral loopback ports,
+clear child application configuration and reap every child; other tool cases use
+mock processes/executable stubs. None requires Qt. The retained Python 3.14
+bytecode artifact is exercised separately when its magic matches the interpreter;
+other Python versions skip that execution case. It is not treated as identical
+to the current source fixture and is never rewritten by the check.
+Repository metadata checks use Python 3.11+ (`tomllib`):
+`python3 -B -m unittest discover -s tests -v` checks local Markdown targets/anchors,
+workspace/path/lockfile consistency, declared entry points, ignore rules and the
+coverage inventory. It also checks nonempty UTF-8 Markdown/closed example fences,
+player fixture names and full bundled attribution texts (normalizing line endings).
+It does not verify prose claims or external links.
+The same suite now checks the pinned toolchain's required components, the scoped
+CI command matrix and Bash syntax, root-anchored nested ignore rules, empty legacy
+metadata/no gitlinks and selected CR/Serena metadata fields. These tooling metadata
+guards deliberately handle the committed simple scalar/list forms; they are not
+a general YAML/schema validator and do not launch Serena. The workflow was also
+validated locally with actionlint 1.7.12 (`-shellcheck= -pyflakes=`); its external
+ShellCheck/Pyflakes integrations and hosted GitHub Actions were not run. The
+validator lives only under ignored `target/test-tools/bin/` in this environment.
+`python3 -B -m unittest discover -s crates/radio-scanner/tests -p 'test_*.py' -v`
+compiles the actual std-only build script with `rustc` and tests its protocol using
+a fake `dotnet` on POSIX. These checks cover helper overrides, build arguments,
+private/default .NET homes and build failures; they do not replace the Rust
+scanner's real synthetic-Realm integration test. Both commands are in Linux CI.
 
 Qt/QML builds are outside this minimal workflow. Qt requires
 6.8+ and additional QML modules/plugins; add those checks only after validating
@@ -133,6 +163,11 @@ stable-library or Windows compatibility.
 
 ## Verification matrix
 
+The [per-file coverage worklist](test-coverage.md) records the completed repository-wide
+file audit, focused assertions, scoped line-coverage snapshots and verification limits.
+Its measurement notes describe raw artifacts and feature/platform limits; observed
+line execution alone does not establish complete behavioral coverage.
+
 Choose the smallest row that covers the changed behavior. These are recommended
 commands; record exit status, failures, and skipped coverage in the task report.
 Do not treat a build as proof of window interactions, a real Realm import, or
@@ -146,8 +181,8 @@ playback.
 | Lazer mapping or process handling | `cargo test -p radio-scanner --locked lazer::` | [Parser and fake-helper tests](../../crates/radio-scanner/src/lazer/tests.rs); helper-process tests are Unix-only and do not validate real Realm data. |
 | Stable binary layouts, mapping, dispatch and media | `cargo test -p radio-scanner --locked stable::` | [Stable fixtures](../../crates/radio-scanner/src/stable/tests.rs): legacy/current boundaries, malformed input, grouping/IDs, BPM, custom paths and artwork. Wine mapping tests are Linux-only; real-library and Windows validation remain separate. |
 | Scanner change spanning these paths | `cargo test -p radio-scanner --locked` | Combines the preceding scanner checks; helper build prerequisites still apply. |
-| C# helper source | `dotnet build tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj --configuration Release --nologo` | Compiles the producer; no automated C# test project currently exists. Follow the [scanner skill](../../.agents/skills/osu-radio-scanner/SKILL.md) for contract checks. |
-| CLI wiring | `cargo test -p osu-radio-cli --locked` and `cargo clippy -p osu-radio-cli --all-targets --locked` | Argument tests reject removed `store --count` and retain `--clear`; memory SQLite connection check. No real source import. |
+| C# helper source | `dotnet build tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj --configuration Release --nologo`; `cargo test -p radio-scanner --locked -- real_ --test-threads=1` | Rust drives the real helper against temporary minimal/rich Realm fixtures: metadata/media references, collection validation, read-only bytes, CLI errors and schema output. No separate C# test project or C# line instrumentation exists; see [fixture details](../../tools/osu-lazer-realm-parser/README.md). |
+| CLI wiring | `cargo test -p osu-radio-cli --locked` and `cargo clippy -p osu-radio-cli --all-targets --locked` | Unit checks plus [actual-CLI subprocess tests](../../apps/osu-radio-cli/tests/commands.rs): scoped discovery, text/JSON previews, marker selection, exit codes, isolated dotenv, SQLite replacement/reset and source preservation. Synthetic stable sources and private databases; no real-library or PostgreSQL runtime acceptance. |
 | Local audio engine | `cargo test -p osu-radio-player --locked` | MP3 CBR/VBR, Ogg/Vorbis and WAV decoding/seek with controlled mixer consumption; no physical device. |
 | Persisted individual/global volume | Repository/service checks on SQLite/PostgreSQL, both server router variants, client mock off/on and Qt offscreen/lint | Verify defaults, upgrade/reimport, shared audio, A/B selection, debounce/retry/stale replies, volume before play and shutdown flush. Physical output and Linux/Windows slider checks remain manual. |
 | Persisted playback queue and assignment protocol | Repository/service tests on each backend, server tests with and without `docs`, client tests with and without `mock`, Qt tests and QML lint below | Use disposable databases; verify recovery, duplicates, stale callbacks/downloads, reconnect and current metadata outside search. Physical output and Windows remain separate. |
@@ -177,7 +212,9 @@ cargo clippy -p osu-radio-server --no-default-features --features postgres,docs 
 
 The server commands also run isolated
 [configuration regressions](../../apps/osu-radio-server/src/config/tests.rs) and
-an actual [environment-only startup test](../../apps/osu-radio-server/tests/startup.rs).
+actual [startup tests](../../apps/osu-radio-server/tests/startup.rs): environment-only
+readiness, missing/malformed configuration, failed database connection and invalid/
+occupied addresses, including exit status and no readiness output on failure.
 They use child-only environment variables, temporary directories, in-memory SQLite
 and an ephemeral loopback port; no configured application database is opened.
 Configuration probes run through an ignored helper test invoked explicitly by
@@ -218,6 +255,12 @@ PostgreSQL caller builds compile both router variants; route/service runtime tes
 use isolated SQLite. Memory tests, generated keys and independent-pool concurrency
 are covered by [service contracts](../../crates/radio-services/src/tests.rs) and
 [repository contracts](../../crates/radio-db/src/tests.rs).
+The repository suite also includes shared
+[migration lifecycle checks](../../crates/radio-db/src/tests/migration_lifecycle.rs):
+SQLite runs them as a separate test; PostgreSQL invokes the same contract inside
+its single disposable-database test, so parallel tests cannot share/reset that
+database accidentally. These checks step through supported downgrade/upgrades and
+verify the guards on irreversible native-path/tag migrations.
 
 Both commands below **must fail** with the explicit exactly-one-backend error:
 
@@ -434,6 +477,7 @@ Recommended automated checks:
 cargo test -p osu-radio-client --lib --locked
 cargo test -p osu-radio-client --features mock --lib --locked
 cargo test -p osu-radio-qt --locked -- --test-threads=1
+python3 -B -m unittest discover -s apps/osu-radio-qt/tests -p 'test_*.py' -v
 cargo build -p osu-radio-qt --locked
 cargo clippy -p osu-radio-client --all-targets --locked -- -D warnings
 cargo clippy -p osu-radio-client --features mock -p osu-radio-qt --all-targets --locked -- -D warnings
@@ -450,6 +494,17 @@ explicit assertions complete, with a native watchdog and outer process timeout.
 Settings checks activate its navigation tab, return through Songs and Playlists,
 retain the selected track and independent queries, and exercise the existing audio
 and folder retry controls. The gallery checks that Settings remains disabled.
+The `offline_controls`, `offline_menus`, `offline_window_bar` and
+`offline_composed_panels` integration tests use the same
+gallery root with an unavailable server path and private settings directory.
+They exercise the real component types with QtTest keyboard/pointer input,
+including disabled/busy/preparing controls, menu navigation/value roles, modal
+close policies, focus restoration, queue delegate registration/removal and
+marker/item identities. A window double checks all eight resize flags and
+window-control routing without invoking the desktop window manager. Run them with
+`cargo test -p osu-radio-qt --test launch_smoke --locked -- offline_ --test-threads=1`.
+These property/input assertions do not establish GPU blur/masking or desktop
+window-manager behavior.
 The `settings_search_filters_visible_labels_and_preserves_layout_and_state`
 smoke test uses the `settings-search` probe case: real keyboard edits/clearing,
 case-insensitive title/name filtering, whitespace, no-match recovery, conditional
@@ -497,6 +552,8 @@ Run [`scripts/lint-qml.sh`](../../apps/osu-radio-qt/scripts/lint-qml.sh) after
 building. Set `QMLLINT=/path/to/qmllint` if needed (default `/usr/lib/qt6/bin/qmllint`).
 The script stages generated `OsuRadio/qmldir` and `plugin.qmltypes` with the QML
 source tree in a temporary import directory, then lints every app/probe QML file.
+File-discovery or linter errors fail the script; discovery failure cannot produce
+a successful lint of an empty file list. Temporary imports are cleaned on failure.
 It requires Bash, Python 3 and ripgrep. Generated QObject type information is
 necessary for `Store.qml`; linting only source paths cannot resolve `MockBridge`.
 
@@ -554,7 +611,8 @@ python3 apps/osu-radio-qt/scripts/visual-audit.py /tmp/osu-radio-flicker --case 
 
 The default runs four logical sizes (1024x640, 1440x952, 1920x1080, 2560x1440)
 at 100/150/200%, with isolated fixture processes, temporary working directories
-and no workspace database. The fixture returns an audio error before decoding
+and a private `XDG_CONFIG_HOME` for native preferences, with no workspace database.
+The fixture returns an audio error before decoding
 or opening an output device. Screenshots and `results.json` accompany each log.
 The script injects input only into its Qt windows and does not move the desktop
 cursor. GPU runs remain necessary to inspect blur, shadows and rounded masks;

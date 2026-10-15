@@ -802,6 +802,9 @@ pub(crate) mod tests {
         state.command(AppCommand::SelectFolder(Some(2)));
         state.replace_folders(vec![folder(2), folder(1)]);
         assert_eq!(state.settings.selected_folder, Some(2));
+        assert_eq!(state.settings.folders(), &[folder(2), folder(1)]);
+        state.command(AppCommand::SelectFolder(Some(99)));
+        assert_eq!(state.settings.selected_folder_id(), Some(2));
         state.settings.picking = true;
         state.settings.status.busy = true;
         state.complete_pick(None);
@@ -816,6 +819,13 @@ pub(crate) mod tests {
         );
         state.complete(Completed::Registered(Err("registration failed".into())));
         assert_eq!(state.settings.status.retry, Some(SettingsRetry::Browse));
+        state.replace_folders(vec![folder(2)]);
+        assert_eq!(state.settings.selected_folder_id(), Some(2));
+        state.command(AppCommand::SelectFolder(None));
+        assert_eq!(state.settings.selected_folder_id(), None);
+        state.replace_folders(Vec::new());
+        assert!(state.settings.folders().is_empty());
+        assert_eq!(state.settings.selected_folder_id(), None);
     }
     #[test]
     fn selected_media_has_priority_and_duplicate_requests_merge() {
@@ -986,6 +996,102 @@ pub(crate) mod tests {
         controller.shutdown().await;
         controller.shutdown().await;
     }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn connection_is_single_flight_and_preserves_search_deadline_on_install() {
+        let (directory, session) = test_session().await;
+        let (mut state, updates) = controller();
+        state.options.binary = Some(directory.path().join("missing-server"));
+        tokio::time::pause();
+        state.command(AppCommand::SearchLibrary("pending query".into()));
+        let deadline = state.library.deadline.unwrap();
+        let request = state.library.request;
+        state.command(AppCommand::Connect);
+        assert!(state.connecting);
+        assert_eq!(state.tasks.len(), 1);
+        assert_eq!(
+            updates
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|update| matches!(
+                    update,
+                    AppUpdate::Connection(ConnectionStatus::Connecting)
+                ))
+                .count(),
+            1
+        );
+        state.tasks.abort_all();
+        while state.tasks.join_next().await.is_some() {}
+        tokio::time::advance(Duration::from_millis(50)).await;
+        state.complete(Completed::Connected(Ok(session)));
+        assert!(!state.connecting);
+        assert_eq!(state.library.query, "pending query");
+        assert_eq!(state.library.deadline, Some(deadline));
+        assert_eq!(state.library.request, request.wrapping_add(1));
+        assert!(state.library.status.loading && state.library.task.is_some());
+        let pending = state.tasks.len();
+        state.command(AppCommand::Connect);
+        assert_eq!(state.tasks.len(), pending);
+        assert!(
+            updates
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|update| matches!(update, AppUpdate::Connection(ConnectionStatus::Connected)))
+        );
+        tokio::time::advance(Duration::from_millis(149)).await;
+        tokio::task::yield_now().await;
+        assert!(!state.library.task.as_ref().unwrap().is_finished());
+        state.tasks.abort_all();
+        while state.tasks.join_next().await.is_some() {}
+        tokio::time::resume();
+        state.session.take().unwrap().shutdown().await.unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn shutdown_reaps_a_session_that_finishes_starting_during_cancellation() {
+        use std::os::unix::fs::PermissionsExt;
+        let directory = tempfile::tempdir().unwrap();
+        let binary = directory.path().join("server");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\necho $$ > pid\necho 'listening on http://127.0.0.1:9'\nexec sleep 30\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let session = Session::start(ServerOptions {
+            binary: Some(binary),
+            working_directory: Some(directory.path().to_owned()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+        let pid: u32 = std::fs::read_to_string(directory.path().join("pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let process = PathBuf::from(format!("/proc/{pid}"));
+        assert!(process.exists());
+        let (mut state, _) = controller();
+        let mut cancelled = state.cancel.subscribe();
+        state.tasks.spawn(async move {
+            cancelled.wait_for(|cancelled| *cancelled).await.unwrap();
+            Completed::Connected(Ok(session))
+        });
+        let (sender, receiver) = mpsc::unbounded_channel();
+        sender.send(AppCommand::Shutdown).unwrap();
+        tokio::time::timeout(Duration::from_secs(3), state.run(receiver))
+            .await
+            .unwrap();
+        assert!(
+            !process.exists(),
+            "late startup must be reaped before shutdown returns"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1104,7 +1210,13 @@ mod media_tests {
         state.replace_tracks((1..=100).map(track).collect(), true);
         state.command(AppCommand::SelectTrack(None));
         state.set_visible_media((1..=30).map(|id| (id, true)).collect());
-        state.set_visible_media(vec![(90, false), (91, true), (90, true)]);
+        state.set_visible_media(vec![
+            (-1, true),
+            (999, true),
+            (90, false),
+            (91, true),
+            (90, true),
+        ]);
         assert_eq!(state.media.visible, Some(vec![(90, true), (91, true)]));
         assert_eq!(state.media.queue, VecDeque::from([(90, true), (91, true)]));
         state.request_media(2, true);
@@ -1346,6 +1458,107 @@ mod media_tests {
             .await
             .unwrap();
         assert!(task.is_finished());
+    }
+
+    #[tokio::test]
+    async fn generation_wrap_aborts_http_retains_decode_and_invalidates_all_demands() {
+        let (mut state, updates) = controller();
+        state.replace_tracks(vec![track(1), track(2)], true);
+        state.media.generation = u64::MAX;
+        state.set_visible_media(vec![(1, false), (2, true)]);
+        state.media.queue_media.insert(1, false);
+        state.media.queue_media.insert(2, false);
+        state.media.selected_artwork_missing = Some(false);
+        state
+            .media
+            .remember_duration(1, Some(Duration::from_secs(42)));
+        state.media.unavailable.insert(101);
+        let network = pipeline(&mut state, 1, 1);
+        let decode = pipeline(&mut state, 2, 2);
+        let mut handles = Vec::new();
+        for ticket in [network, decode] {
+            let task = state.task(std::future::pending());
+            state
+                .media
+                .jobs
+                .get_mut(&ticket.serial)
+                .unwrap()
+                .tasks
+                .push(task.clone());
+            handles.push(task);
+        }
+        state.artwork_completed(decode, Some(vec![2]));
+        updates.lock().unwrap().clear();
+        state.advance_media(true);
+        while let Some(result) = state.tasks.join_next().await {
+            assert!(matches!(result, Err(ref error) if error.is_cancelled()));
+        }
+        assert!(handles.iter().all(tokio::task::AbortHandle::is_finished));
+        assert_eq!(state.media.generation, 0);
+        assert!(state.media.queue.is_empty());
+        assert_eq!(state.media.visible, Some(Vec::new()));
+        assert!(state.media.durations.is_empty() && state.media.unavailable.is_empty());
+        assert_eq!(state.media.selected_artwork_missing, Some(true));
+        assert!(state.media.queue_media.values().all(|missing| *missing));
+        assert!(!state.media.jobs.contains_key(&network.serial));
+        let job = state.media.jobs.get(&decode.serial).unwrap();
+        assert!(job.decoding && job.tasks.is_empty());
+        assert!(!job.artwork_pending && !job.duration_pending);
+        assert!(matches!(
+            updates.lock().unwrap().as_slice(),
+            [AppUpdate::MediaGeneration {
+                generation: 0,
+                invalidate_artwork: true
+            }]
+        ));
+        state.command(AppCommand::MediaInstalled {
+            ticket: decode,
+            available: true,
+        });
+        assert!(state.media.jobs.is_empty());
+        assert_eq!(state.media.queue_media.get(&2), Some(&true));
+        assert!(state.media.unavailable.is_empty());
+    }
+
+    #[test]
+    fn missing_http_and_failed_decode_cache_unavailability_until_explicit_invalidation() {
+        for decode_failure in [false, true] {
+            let (mut state, updates) = controller();
+            state.replace_tracks(vec![track(1)], true);
+            state.request_media(1, true);
+            let ticket = pipeline(&mut state, 1, 1);
+            updates.lock().unwrap().clear();
+            state.artwork_completed(ticket, decode_failure.then(|| vec![1, 2]));
+            assert_eq!(state.media.jobs.get(&1).unwrap().decoding, decode_failure);
+            state.duration_completed(ticket, None);
+            if decode_failure {
+                state.command(AppCommand::MediaInstalled {
+                    ticket,
+                    available: false,
+                });
+            }
+            assert!(state.media.jobs.is_empty());
+            assert_eq!(state.media.durations.get(&1), Some(&None));
+            assert!(state.media.unavailable.contains(&101));
+            state.media.queue.clear();
+            state.request_media(1, true);
+            assert!(state.media.queue.is_empty());
+            assert_eq!(
+                updates
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|update| matches!(update, AppUpdate::Artwork { .. }))
+                    .count(),
+                usize::from(decode_failure)
+            );
+            state.advance_media(false);
+            assert!(state.media.unavailable.contains(&101));
+            assert_eq!(state.media.durations.get(&1), Some(&None));
+            state.advance_media(true);
+            state.request_media(1, true);
+            assert_eq!(state.media.queue, VecDeque::from([(1, true)]));
+        }
     }
 }
 

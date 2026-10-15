@@ -64,9 +64,13 @@ mod tests {
 
     #[test]
     fn unknown_osu_kind_is_rejected() {
-        assert_eq!(
-            "tachyon".parse::<OsuKind>(),
-            Err(UnknownOsuKind("tachyon".to_owned()))
-        );
+        for value in ["tachyon", "", "Stable", "LAZER", "stable ", " lazer"] {
+            let error = UnknownOsuKind(value.to_owned());
+            assert_eq!(value.parse::<OsuKind>(), Err(error.clone()));
+            assert_eq!(
+                error.to_string(),
+                format!("unknown osu! source kind `{value}`")
+            );
+        }
     }
 }

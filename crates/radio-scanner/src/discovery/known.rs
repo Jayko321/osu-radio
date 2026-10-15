@@ -193,7 +193,154 @@ mod tests {
     use radio_core::OsuKind;
     use tempfile::TempDir;
 
-    use super::{known_candidates, parse_storage_ini_full_path};
+    use super::{
+        STORAGE_INI_MAX_BYTES, known_candidates, parse_storage_ini_full_path,
+        read_storage_ini_full_path,
+    };
+
+    #[test]
+    fn storage_ini_requires_a_small_utf8_regular_file() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("storage.ini");
+        assert_eq!(read_storage_ini_full_path(&path), None);
+        assert_eq!(read_storage_ini_full_path(temp.path()), None);
+        fs::write(&path, b"FullPath=\xff").unwrap();
+        assert_eq!(read_storage_ini_full_path(&path), None);
+
+        let mut contents = "FullPath=relative=folder\n".to_owned();
+        contents.extend(std::iter::repeat_n(
+            ' ',
+            usize::try_from(STORAGE_INI_MAX_BYTES).unwrap() - contents.len(),
+        ));
+        fs::write(&path, &contents).unwrap();
+        assert_eq!(
+            read_storage_ini_full_path(&path),
+            Some(PathBuf::from("relative=folder"))
+        );
+        contents.push(' ');
+        fs::write(&path, contents).unwrap();
+        assert_eq!(read_storage_ini_full_path(&path), None);
+    }
+
+    #[test]
+    fn repeated_roots_and_relocation_keep_each_marker_once() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().to_path_buf();
+        let nested = root.join("osu");
+        fs::create_dir(&nested).unwrap();
+        for dir in [&root, &nested] {
+            fs::write(dir.join("client.realm"), "").unwrap();
+            fs::write(
+                dir.join("storage.ini"),
+                format!("FullPath={}\n", nested.display()),
+            )
+            .unwrap();
+        }
+        fs::write(root.join("osu!.db"), "").unwrap();
+        // A directory with a marker's name must never become an installation.
+        fs::create_dir(nested.join("osu!.db")).unwrap();
+        assert_eq!(
+            known_candidates(&[root.clone(), root.clone(), nested.clone()]),
+            vec![
+                (OsuKind::Lazer, root.join("client.realm")),
+                (OsuKind::Lazer, nested.join("client.realm")),
+                (OsuKind::Stable, root.join("osu!.db")),
+            ]
+        );
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn linux_defaults_use_only_the_isolated_home_and_xdg_locations() {
+        use std::process::Command;
+
+        const FIXTURE: &str = "OSU_RADIO_TEST_KNOWN_PATHS";
+        if let Some(root) = std::env::var_os(FIXTURE) {
+            let root = PathBuf::from(root);
+            let home_present = std::env::var_os("HOME").is_some();
+            assert_eq!(super::home_dir(), home_present.then(|| root.join("home")));
+            let mut actual = known_candidates(&[]);
+            actual.sort_by(|left, right| left.1.cmp(&right.1));
+            let mut expected = Vec::new();
+            if home_present {
+                expected.extend([
+                    (
+                        OsuKind::Lazer,
+                        root.join("home/.var/app/sh.ppy.osu/data/osu/client.realm"),
+                    ),
+                    (
+                        OsuKind::Stable,
+                        root.join("home/.local/share/osu-wine/osu!/osu!.db"),
+                    ),
+                    (
+                        OsuKind::Stable,
+                        root.join("home/.wine/drive_c/users/player/AppData/Local/osu!/osu!.db"),
+                    ),
+                ]);
+            }
+            if std::env::var_os("XDG_DATA_HOME").is_some_and(|value| !value.is_empty()) {
+                expected.push((OsuKind::Lazer, root.join("data/osu/client.realm")));
+            } else if home_present {
+                expected.push((
+                    OsuKind::Lazer,
+                    root.join("home/.local/share/osu/client.realm"),
+                ));
+            }
+            expected.sort_by(|left, right| left.1.cmp(&right.1));
+            assert_eq!(actual, expected);
+            return;
+        }
+
+        let temp = TempDir::new().unwrap();
+        for marker in [
+            "data/osu/client.realm",
+            "home/.local/share/osu/client.realm",
+            "home/.var/app/sh.ppy.osu/data/osu/client.realm",
+            "home/.local/share/osu-wine/osu!/osu!.db",
+            "home/.wine/drive_c/users/player/AppData/Local/osu!/osu!.db",
+        ] {
+            let path = temp.path().join(marker);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, "").unwrap();
+        }
+        for (home, xdg) in [
+            (true, Some("data")),
+            (true, None),
+            (true, Some("")),
+            (false, None),
+            (false, Some("data")),
+        ] {
+            let mut child = Command::new(std::env::current_exe().unwrap());
+            child.env_clear().args([
+                "--exact",
+                "discovery::known::tests::linux_defaults_use_only_the_isolated_home_and_xdg_locations",
+                "--nocapture",
+            ]).env(FIXTURE, temp.path()).current_dir(temp.path());
+            if home {
+                child.env("HOME", temp.path().join("home"));
+            }
+            if let Some(xdg) = xdg {
+                child.env(
+                    "XDG_DATA_HOME",
+                    if xdg.is_empty() {
+                        PathBuf::new()
+                    } else {
+                        temp.path().join(xdg)
+                    },
+                );
+            }
+            if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+                child.env("LLVM_PROFILE_FILE", profile);
+            }
+            let output = child.output().unwrap();
+            assert!(
+                output.status.success(),
+                "home={home} xdg={xdg:?}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
 
     #[test]
     fn parses_the_full_path_key() {

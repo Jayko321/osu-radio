@@ -93,6 +93,28 @@ fn empty_unicode_and_long_metadata_never_leak_paths_or_ids() {
     let presence = Presence::from_playback(Some(&track), &playback).unwrap();
     assert!(presence.key.title.len() <= 128 && presence.key.title.starts_with('曲'));
     assert_eq!(presence.key.artist, "かめりあ");
+    assert_eq!(presence.key.title, "曲".repeat(42));
+    assert_eq!(field(&"a".repeat(129), "unused"), "a".repeat(128));
+    assert_eq!(field("  曲  ", "unused"), "曲");
+}
+
+#[test]
+fn eof_and_extreme_decoder_times_never_publish_invalid_timestamps() {
+    let (track, mut playback) = sample(PlayerState::Playing);
+    for (position, duration) in [
+        (Duration::from_secs(252), Duration::from_secs(252)),
+        (Duration::from_secs(253), Duration::from_secs(252)),
+        (Duration::MAX, Duration::from_secs(252)),
+        (Duration::from_secs(1), Duration::MAX),
+    ] {
+        playback.snapshot.position = position;
+        playback.snapshot.duration = Some(duration);
+        let presence = Presence::from_playback(Some(&track), &playback).unwrap();
+        let json = serde_json::to_value(presence.activity()).unwrap();
+        assert!(json.get("timestamps").is_none());
+        assert_eq!(json["details"], "crystallized");
+        assert_eq!(json["state"], "Camellia");
+    }
 }
 #[test]
 fn source_loading_errors_stop_end_and_wrong_id_clear_presence() {
@@ -121,7 +143,7 @@ fn position_ticks_coalesce_but_seek_token_state_and_metadata_changes_publish() {
     let (mut track, mut playback) = sample(PlayerState::Playing);
     let mut service = Service::default();
     service.update(Some(&track), &playback);
-    let (sender, receiver) = watch::channel(service.desired.clone());
+    let (sender, mut receiver) = watch::channel(service.desired.clone());
     service.sender = Some(sender);
     playback.snapshot.position = Duration::from_secs(90);
     service.update(Some(&track), &playback);
@@ -135,25 +157,88 @@ fn position_ticks_coalesce_but_seek_token_state_and_metadata_changes_publish() {
     );
     playback.seek_serial = 1;
     service.update(Some(&track), &playback);
+    assert!(receiver.has_changed().unwrap());
+    assert_eq!(
+        receiver
+            .borrow_and_update()
+            .presence
+            .as_ref()
+            .unwrap()
+            .key
+            .seek,
+        1
+    );
     assert_eq!(
         service.desired.presence.as_ref().unwrap().position,
         playback.snapshot.position
     );
     playback.playback_token = 8;
     service.update(Some(&track), &playback);
+    assert!(receiver.has_changed().unwrap());
+    assert_eq!(
+        receiver
+            .borrow_and_update()
+            .presence
+            .as_ref()
+            .unwrap()
+            .key
+            .token,
+        8
+    );
     assert_eq!(service.desired.presence.as_ref().unwrap().key.token, 8);
     track.title = "次の曲".into();
     service.update(Some(&track), &playback);
+    assert!(receiver.has_changed().unwrap());
+    assert_eq!(
+        receiver
+            .borrow_and_update()
+            .presence
+            .as_ref()
+            .unwrap()
+            .key
+            .title,
+        "次の曲"
+    );
     assert_eq!(
         service.desired.presence.as_ref().unwrap().key.title,
         "次の曲"
     );
     playback.snapshot.state = PlayerState::Paused;
     service.update(Some(&track), &playback);
+    assert!(receiver.has_changed().unwrap());
+    assert_eq!(
+        receiver
+            .borrow_and_update()
+            .presence
+            .as_ref()
+            .unwrap()
+            .key
+            .state,
+        PlayerState::Paused
+    );
     assert_eq!(
         service.desired.presence.as_ref().unwrap().key.state,
         PlayerState::Paused
     );
+    playback.snapshot.duration = Some(Duration::from_secs(300));
+    service.update(Some(&track), &playback);
+    assert!(receiver.has_changed().unwrap());
+    assert_eq!(
+        receiver
+            .borrow_and_update()
+            .presence
+            .as_ref()
+            .unwrap()
+            .key
+            .duration,
+        Some(Duration::from_secs(300))
+    );
+    playback.has_source = false;
+    service.update(Some(&track), &playback);
+    assert!(receiver.has_changed().unwrap());
+    assert!(receiver.borrow_and_update().presence.is_none());
+    service.update(None, &playback);
+    assert!(!receiver.has_changed().unwrap());
 }
 #[tokio::test]
 async fn disabled_default_never_starts_worker_and_shutdown_is_idempotent() {
@@ -317,6 +402,51 @@ async fn shutdown_interrupts_reconnect_backoff() {
         .await
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn service_reuses_one_worker_and_both_teardown_paths_stop_it() {
+    for drop_service in [false, true] {
+        let (track, playback) = sample(PlayerState::Playing);
+        let mut service = Service::default();
+        service.update(Some(&track), &playback);
+        let (sender, receiver) = watch::channel(service.desired.clone());
+        let state = Arc::new(MockState::default());
+        state.available.store(true, Ordering::SeqCst);
+        let mock = Mock(state.clone());
+        let runtime = tokio::runtime::Handle::current();
+        // Install the existing mock seam so enabling cannot search a user's Discord.
+        service.worker = Some(tokio::task::spawn_blocking(move || {
+            run(mock, receiver, &runtime);
+        }));
+        service.sender = Some(sender);
+        let worker_id = service.worker.as_ref().unwrap().id();
+        service.enabled(true);
+        wait_event(&state, "set:crystallized", 1).await;
+        service.enabled(true);
+        assert_eq!(service.worker.as_ref().unwrap().id(), worker_id);
+        service.enabled(false);
+        wait_event(&state, "clear", 1).await;
+        service.enabled(true);
+        wait_event(&state, "set:crystallized", 2).await;
+        if drop_service {
+            let task = service.worker.take().unwrap();
+            drop(service);
+            tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .unwrap()
+                .unwrap();
+        } else {
+            tokio::time::timeout(Duration::from_secs(2), service.shutdown())
+                .await
+                .unwrap();
+            assert!(service.worker.is_none() && service.sender.is_none());
+            service.shutdown().await;
+        }
+        let events = state.events.lock().unwrap();
+        assert_eq!(events.iter().filter(|event| *event == "connect").count(), 2);
+        assert_eq!(events.last().unwrap(), "close");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

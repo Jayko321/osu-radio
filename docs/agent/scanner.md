@@ -25,6 +25,22 @@ The confirmed product direction is desktop music playback from local osu! instal
 
 Discovery is also used for backend folder inspection in [installation service](../../crates/radio-services/src/osu_installation.rs). Changes to candidate selection can affect that caller even without importing anything. Its database-dependent behavior is outside this guide.
 
+Focused [known-path tests](../../crates/radio-scanner/src/discovery/known.rs) check
+the 64 KiB `storage.ini` boundary, non-file/invalid UTF-8 input, duplicate roots
+and relocation. The Linux default-path test runs child processes with private or
+absent HOME/XDG values; only fixture candidates are probed, without a filesystem
+sweep. [Build-script tests](../../crates/radio-scanner/tests/test_build_helper.py)
+run the actual `build.rs` with a fake `dotnet` to verify override handling, exact
+arguments/environment, emitted Cargo directives and failure diagnostics. They
+require POSIX and `rustc`; native Windows/macOS behavior remains unverified.
+Discovery assertions also cover canonical identity deduplication while preserving
+the first supplied marker path, missing scan roots and not following symlinked
+files/directories outside an explicit tree. Stable import checks directory-valued
+collection/configuration paths and invalid UTF-8 configuration: the entire import
+fails with the offending path while fixture sources remain unchanged. An isolated
+runtime-helper test exercises both default Lazer and set-only compatibility APIs;
+invalid collection data must fail before any set-only result is returned.
+
 ## Domain and audio references
 
 `OsuKind` currently has `Stable` and `Lazer`; `as_str` and `FromStr` use lowercase `stable`/`lazer` and reject other strings. `OsuMarker` carries the kind, marker file path, and its parent root path.
@@ -32,6 +48,15 @@ Discovery is also used for backend folder inspection in [installation service](.
 `ImportedSnapshot` contains all beatmap sets and collections. Each `ImportedCollection` carries a source-local `source_id`, original `name`, and ordered `beatmap_md5_hashes` (including unknown/repeated hashes). `ImportedBeatmapSet` contains `source`, optional online ID/hash, named file usages, and all of its `ImportedBeatmap` values. A beatmap holds optional difficulty name, BPM, native `hash`, independent `md5_hash`, and metadata. MD5 values must be exactly 32 ASCII hexadecimal characters and are normalized to lowercase; native hashes remain unchanged. `BeatmapMetadata` contains title/artist variants, optional author, source/tags, user tags, preview time, and audio/background filenames. `RealmNamedFileUsage`, `RealmFile`, and `RealmUser` are the current names in the shared domain; despite these names, the crate performs no Realm I/O. Do not put GUI styling or a hosted-provider decision into these types incidentally.
 
 The C# helper constructs each file reference as `<realm-parent>/files/<first hash character>/<first two hash characters>/<hash>`. A missing or shorter-than-two-character hash gives no resolved path. This is path construction, not an existence or readability check.
+
+The [real-helper fixtures](../../tools/osu-lazer-realm-parser/fixture-generator/Program.cs)
+keep minimal and rich schemas separate. [Rust consumer assertions](../../crates/radio-scanner/src/lazer/tests.rs)
+cover metadata/author/user-tag ordering, float BPM, Int32 overflow handling,
+null/short file hashes, read-only export and missing optional fields. Direct
+process tests check CLI exit codes/stderr, corrupt input and `--schema`'s sorted
+records, collection kinds, nullability, primary keys and indexes. They compare
+the bytes of synthetic Realm files before/after; no audio is created or decoded.
+There is no C# source-line coverage report or native Windows/macOS acceptance.
 
 `ImportedBeatmapSet::resolved_audio_path` matches `metadata.audio_file` against a named file usage's `filename` and returns its `file.resolved_path`. The match is exact and the first matching usage wins; absent metadata, audio filename, file, or path yields `None`. `resolved_background_path` performs the same exact first-match lookup for `metadata.background_file`. Both reuse a private named-file resolver. These pure lookups do not inspect the disk. The CLI's `resolved` audio status therefore means a reference was supplied, not that playback succeeded. Preserve references to the original source files; copying audio is not scanner work.
 
@@ -149,6 +174,8 @@ These are source-linked checks to select for a change, not a claim that they wer
 | Concern | Existing tests / evidence |
 | --- | --- |
 | Core source names | [`radio-core/src/lib.rs`](../../crates/radio-core/src/lib.rs): `osu_kind_round_trips_through_its_stored_string`, `unknown_osu_kind_is_rejected`. |
+| Pure media references | [`import_types.rs`](../../crates/radio-core/src/import_types.rs): independent audio/background resolution, exact first-match semantics, missing metadata/file/path and Unix non-Unicode paths, without filesystem reads. |
+| CLI source consumers | [`CLI subprocess tests`](../../apps/osu-radio-cli/tests/commands.rs): explicit-root discovery, filters/limits, unique/ambiguous/indexed marker selection, current stable binary previews and read-before-reset/source-preservation checks against private SQLite. These fixtures do not validate a real game installation. |
 | Roots, limits, source filter, tier depth, deduplication, async parity | [`discovery/mod.rs`](../../crates/radio-scanner/src/discovery/mod.rs): `finds_markers_under_explicit_root`, `stops_after_limit`, `filters_by_kind_during_the_walk`, `known_depth_finds_candidates_without_walking`, `shallow_depth_skips_deeply_nested_markers`, `does_not_emit_duplicates_across_tiers`, `discover_stream_yields_the_same_markers_as_the_sync_core`. |
 | Parallel stopping and stream cancellation | [`discovery/mod.rs`](../../crates/radio-scanner/src/discovery/mod.rs): `parallel_sweep_stops_after_limit_or_callback_break`, `dropping_discovery_sets_worker_stop_flag_without_markers`. The drop test checks the shared flag deterministically, not shutdown latency. |
 | Overlapping roots and Git ignore isolation | [`discovery/sweep.rs`](../../crates/radio-scanner/src/discovery/sweep.rs): `full_sweep_visits_overlapping_roots_once_in_either_order`, `shallow_sweep_preserves_depth_relative_to_each_root`, `full_sweep_preserves_explicit_roots_inside_pruned_directories`, `git_exclude_rules_do_not_hide_markers`, `git_global_ignores_do_not_hide_markers`. Visits are counted before marker deduplication; global Git configuration is isolated in a child test process. |
@@ -159,9 +186,10 @@ These are source-linked checks to select for a change, not a claim that they wer
 | NDJSON mapping, strict collections/MD5 and wrong record shape | [`lazer/tests.rs`](../../crates/radio-scanner/src/lazer/tests.rs): `parses_lazer_beatmap_set_json_into_core_type`, `rejects_beatmap_first_json`, `validates_collection_records_and_normalizes_md5_without_changing_native_hashes`. |
 | Stable collections | [`stable/tests.rs`](../../crates/radio-scanner/src/stable/tests.rs): `imports_collections_including_empty_duplicates_unicode_and_unknown_maps`, `rejects_corrupt_collection_databases_without_partial_results`; temporary binary fixtures cover same-name identities, Unicode/empty names, unknown/repeated MD5s, truncations and corruption. |
 | Real Realm protocol | [`lazer/tests.rs`](../../crates/radio-scanner/src/lazer/tests.rs): `imports_real_realm_fixtures_with_the_production_helper` builds the [fixture generator](../../tools/osu-lazer-realm-parser/fixture-generator/Program.cs) in a temporary directory using the existing Realm dependency, then invokes the production helper and Rust importer. Synthetic Realm databases cover differing native/MD5 hashes, absent collection type, Unicode/empty collections, unknown/repeated hashes, invalid MD5 and null required name. |
-| Child process success and failure diagnostics | Unix-only fake-helper tests in [`lazer/tests.rs`](../../crates/radio-scanner/src/lazer/tests.rs): `accepts_a_fake_ndjson_helper`, `includes_helper_stderr_in_failure`. |
+| Child process protocol and diagnostics | Unix-only fake-helper tests in [`lazer/tests.rs`](../../crates/radio-scanner/src/lazer/tests.rs): exact Unicode/spaced marker arguments, mixed CRLF/final-line records, empty success, valid output followed by failure, oversized stderr pipe draining, invalid stderr encoding and spawn diagnostics. The [CLI helper probe](../../apps/osu-radio-cli/tests/commands.rs) verifies a child-scoped override and successful stderr forwarding. |
+| Child cleanup | Linux fake-helper tests in [`lazer/tests.rs`](../../crates/radio-scanner/src/lazer/tests.rs) verify that malformed/blank/unknown-type/invalid-UTF-8 stdout kills and reaps a blocked helper before returning the error, and that aborting an active import terminates its helper. These use private PID files and `/proc`, with a live Tokio runtime; sandbox process isolation may require running them outside the sandbox. |
 
-Existing tests do not establish a discovery shutdown-latency bound, malformed-output child cleanup, Windows helper execution, real stable-library compatibility, or compatibility with an actual installed osu! Realm library. The automated synthetic Realm test exercises the production helper on genuine Realm files; it does not establish compatibility with every game schema/version. There is no separate C# test framework. Passing binary and synthetic Realm fixtures does not prove a real osu! library imports correctly. Use the [verification matrix](development.md) and add a focused regression check for behavior changed; do not run broad filesystem discovery or a real import as an automatic documentation check.
+Existing tests do not establish a discovery shutdown-latency bound, synchronous cleanup on import cancellation, Windows helper execution, real stable-library compatibility, or compatibility with an actual installed osu! Realm library. Cancellation still relies on `kill_on_drop` and Tokio's background reaper; the cleanup tests observe completion on a live Linux runtime, not a synchronous cancellation contract. The automated synthetic Realm test exercises the production helper on genuine Realm files; it does not establish compatibility with every game schema/version. There is no separate C# test framework. Passing binary and synthetic Realm fixtures does not prove a real osu! library imports correctly. Use the [verification matrix](development.md) and add a focused regression check for behavior changed; do not run broad filesystem discovery or a real import as an automatic documentation check.
 
 
 Executed for the collection-import change (Linux, 2026-10-04):

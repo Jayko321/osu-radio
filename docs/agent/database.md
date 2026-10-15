@@ -455,7 +455,7 @@ its lock. Independent pools/processes therefore cannot select the same pending w
 
 Application tables without applied SeaORM migration history produce an actionable
 legacy-database error. There is no legacy data migration: choose a new database or
-explicit reset. Reset drops only the twelve application tables and their SeaORM/
+explicit reset. Reset drops only application-owned tables and their SeaORM/
 Diesel migration history, in child-first order, then recreates the schema in the
 same transaction. Unrelated tables are preserved; reset does not use a broad
 schema refresh or drop external objects.
@@ -476,6 +476,9 @@ workflow writes but before commit, and source-file preservation. The same contra
 run on temporary SQLite files and fresh disposable PostgreSQL databases. A separate
 test-only ORM connection installs failure triggers and checks row counts; there is
 no public raw-SQL service escape hatch. Folder-validation tests use explicit temporary roots.
+[Marker/reimport assertions](../../crates/radio-services/src/tests/folder_selection.rs)
+check exact relative/missing/directory/wrong-name errors without registration and
+reject changed source kind/path before replacement, retaining all previous data.
 
 [Repository contracts](../../crates/radio-db/src/tests.rs) retain legacy detection,
 reset scope, restrictive foreign keys, explicit/drop rollback and immutable metadata
@@ -486,6 +489,60 @@ cleanup with null references. On Linux, native-path checks use distinct invalid
 UTF-8 bytes; Windows surrogate checks require running the contracts on Windows.
 [Hash tests](../../crates/radio-db/src/repositories/beatmap_metadata.rs) pin
 v2 encoding, each retained field, and exclusion of tags.
+Plain declarations are tested through these consumers: folder patches distinguish
+omitted/null/empty values, queue contracts compare complete state across reopen and
+rollback, and tag contracts check normalized identities and composite links.
+[Audio settings](../../crates/radio-db/src/tests/audio_settings.rs) and
+[listening history](../../crates/radio-db/src/tests/listening_history.rs) compare
+source-keyed values across independent pools, read snapshots, rollback and reset.
+[Queue boundary assertions](../../crates/radio-db/src/tests/queue.rs) reject
+mismatched playlist positions, invalid empty/current states and counters outside
+BIGINT without replacing the stored row. The [service queue tests](../../crates/radio-services/src/tests/queue.rs)
+also seed the persisted revision/token at BIGINT's maximum: failed commands retain
+the exact queue and playback assignment. A missing settings row is tested inside
+a rolled-back fixture; get/settings/update/lock report the missing row and never
+recreate it implicitly.
+The [coverage worklist](test-coverage.md) keeps declaration/consumer evidence
+separate from source-line measurements and remaining projection audits.
+[Field projection contracts](../../crates/radio-db/src/tests/model_projections.rs)
+use explicit expected metadata/set/beatmap values and compare complete library,
+search and playlist projections on SQLite and disposable PostgreSQL. They cover
+empty sets, absent metadata/audio, Unicode text, chunk-boundary deduplication,
+filtered multiplicity, persisted custom covers and detached playlist labels after
+library deletion. All fixture writes are rolled back. Playlist volume/history
+enrichment belongs to the service layer; repository projections leave those fields null.
+[Track projection assertions](../../crates/radio-services/src/beatmap_set/tracks.rs)
+compare all library-track/difficulty fields while merging audio across sets,
+preserving first-seen audio order, choosing labels by the globally lowest
+difficulty ID and selecting a cover independently from the label representative.
+[Service history assertions](../../crates/radio-services/src/tests/listening_history.rs)
+bound acknowledged timestamps by wall-clock Unix milliseconds. [Volume assertions](../../crates/radio-services/src/tests/audio_settings.rs)
+check stored 0/100 overrides, omitted-field updates and typed validation errors.
+[Playlist assertions](../../crates/radio-services/src/tests/playlists.rs) cover
+damaged PNG pixel data and exact NotFound errors across mutations of a deleted
+playlist, while comparing retained covers and queue state.
+[Migration lifecycle contracts](../../crates/radio-db/src/tests/migration_lifecycle.rs)
+first verify the frozen v1 schema's singleton/kind/required-field/uniqueness and
+foreign-key constraints, lookup indexes and installation cascade while retaining
+shared metadata/audio rows. They then step through additive migrations 5–11 in both directions, checking migration
+history, table/column/index presence, retained installation/difficulty/background
+references and an unrelated table, then reapply the latest schema and verify
+default queue/audio settings. A separate fixture rolls background migration 2
+down/up and confirms native-path migration 3 refuses a lossy downgrade; migration
+4's tag downgrade also leaves data/history intact on rejection. The same lifecycle
+contract runs in SQLite and the disposable PostgreSQL repository suite.
+
+The [service benchmark fixture](../../crates/radio-services/src/beatmap_set/benchmarks.rs)
+creates its own six-set SQLite database, asserts tag/difficulty/Unicode/empty
+search cardinalities and runs all three snapshot benchmark reference stages.
+Library rows and an unrelated sentinel table remain unchanged. The large synthetic
+benchmark separately seeds temporary 1,000/10,000/50,000-set databases; its debug
+instrumented timings do not establish production performance.
+[Connection tests](../../crates/radio-db/src/connection.rs) exercise supported
+memory URL forms without creating files, and plain file paths/SQLite URLs with
+WAL, busy timeout, enforced foreign keys and reopen/readback. Pure
+[source identity tests](../../crates/radio-db/src/model/audio_source.rs) retain
+location spelling and reject unknown or differently cased/whitespace-padded kinds.
 [Migration tag contracts](../../crates/radio-db/src/tests/tag_migration.rs) cover
 filled upgrades, shared links, metadata merging, collision rollback, dropped
 columns, repeat/concurrent migration and rejected downgrade.
@@ -496,6 +553,15 @@ and cancellation contracts also compare tag rows and set links before/after roll
 See [development](development.md) for commands.
 These checks do not exercise a real Realm library, GUI interaction, audio playback
 or Windows deployment.
+
+Executed on Linux on 2026-10-15 for the per-file test audit: SQLite repository
+tests passed 10 checks, and PostgreSQL 18.6 passed six repository checks (including
+the shared migration lifecycle) and the service contract on two fresh
+`radio_db_test_*` databases. SQLite service regressions and scoped denied-warning
+Clippy results are recorded in the [coverage worklist](test-coverage.md).
+The temporary loopback PostgreSQL cluster was stopped and removed after the run;
+the configured application database was not opened. These are fixture-backed
+persistence checks, not native Windows or frontend acceptance.
 
 Executed on Linux on 2026-09-14: repository/service contracts passed with SQLite
 and a fresh disposable PostgreSQL cluster; CLI and both SQLite server router

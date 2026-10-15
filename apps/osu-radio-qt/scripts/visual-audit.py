@@ -39,7 +39,8 @@ for size in args.sizes:
                 env = os.environ.copy()
                 for key in ("SQLITE_DATABASE_URL", "POSTGRES_DATABASE_URL", "QT_QUICK_BACKEND", "QSG_RHI_BACKEND", "OSU_RADIO_QT_PROBE_SCREEN"):
                     env.pop(key, None)
-                env.update(QT_QPA_PLATFORM=args.platform, QT_SCALE_FACTOR=scale,
+                env.update(XDG_CONFIG_HOME=str(working / "config"),
+                           QT_QPA_PLATFORM=args.platform, QT_SCALE_FACTOR=scale,
                            QT_FORCE_STDERR_LOGGING="1", QT_LOGGING_RULES="qml.info=true;qml.warning=true",
                            QML_DISABLE_DISK_CACHE="1", OSU_RADIO_QT_SMOKE_TEST="1",
                            OSU_RADIO_QT_PROBE_CASE=args.case, OSU_RADIO_SERVER_BIN=str(server),

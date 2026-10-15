@@ -34,6 +34,7 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
     recovery_and_reopen(database, url, a).await;
     missing_sources_are_skipped(database, [a, b, c], &installations).await;
     assignment_metadata(database, a, installations[0]).await;
+    counter_limits_preserve_the_persisted_assignment(database, a).await;
     database.queue().clear().await.unwrap();
     for id in installations {
         database.osu_installations().delete(id).await.unwrap();
@@ -42,6 +43,33 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
 
 async fn command(database: &TestDatabase, command: Command) -> PlaybackAssignment {
     database.queue().command(command).await.unwrap()
+}
+
+async fn counter_limits_preserve_the_persisted_assignment(database: &TestDatabase, audio: i32) {
+    database.queue().clear().await.unwrap();
+    database.queue().append(vec![audio]).await.unwrap();
+    let original = database.queue().get().await.unwrap();
+    for (column, restore) in [
+        ("revision", original.revision),
+        ("playback_token", original.playback_token),
+    ] {
+        sql(
+            database,
+            &format!("UPDATE playback_queue SET {column} = {}", i64::MAX),
+        )
+        .await;
+        let before = database.queue().get().await.unwrap();
+        let assignment = database.queue().playback().await.unwrap();
+        assert!(database.queue().command(Command::Stop).await.is_err());
+        assert_eq!(database.queue().get().await.unwrap(), before);
+        assert_eq!(database.queue().playback().await.unwrap(), assignment);
+        sql(
+            database,
+            &format!("UPDATE playback_queue SET {column} = {restore}"),
+        )
+        .await;
+    }
+    database.queue().clear().await.unwrap();
 }
 
 async fn upcoming_tracks_follow_queue_order(database: &TestDatabase, [a, b, c]: [i32; 3]) {

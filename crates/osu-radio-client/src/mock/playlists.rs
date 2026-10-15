@@ -391,6 +391,151 @@ impl MockPlaylists {
 mod tests {
     use super::*;
     #[test]
+    fn editor_cover_errors_stale_epochs_cancel_and_delete_preserve_storage() {
+        let mut demo = MockPlaylists::default();
+        let original = demo.storage.clone();
+        assert!(!demo.apply(PlaylistAction::BeginEdit(999)));
+        assert!(!demo.apply(PlaylistAction::SetEditorName("closed".into())));
+        assert!(!demo.apply(PlaylistAction::SaveEditor));
+        assert!(!demo.apply(PlaylistAction::ResetEditorCover));
+        demo.apply(PlaylistAction::BeginEdit(1));
+        let epoch = demo.view.editor_epoch;
+        for (png, error) in [
+            (
+                Ok(Some(vec![0; 2 * 1024 * 1024 + 1])),
+                "Playlist cover exceeds 2 MiB.",
+            ),
+            (Err("picker failed".into()), "picker failed"),
+        ] {
+            assert!(demo.apply(PlaylistAction::CompleteCoverPick { epoch, png }));
+            assert_eq!(demo.view.message, error);
+            assert!(demo.view.editor_cover_png.is_none());
+            assert_eq!(demo.view.editor_epoch, epoch);
+            assert_eq!(demo.storage, original);
+        }
+        let before = demo.clone();
+        assert!(!demo.apply(PlaylistAction::CompleteCoverPick {
+            epoch,
+            png: Ok(None)
+        }));
+        assert_eq!(demo, before);
+        let png = vec![42; 2 * 1024 * 1024];
+        demo.apply(PlaylistAction::CompleteCoverPick {
+            epoch,
+            png: Ok(Some(png.clone())),
+        });
+        assert!(demo.view.message.is_empty());
+        assert!(!demo.apply(PlaylistAction::CompleteCoverPick {
+            epoch,
+            png: Err("stale".into())
+        }));
+        let serialized = serde_json::to_value(&demo).unwrap();
+        assert!(serialized.get("storage").is_none());
+        assert!(serialized.get("covers").is_none());
+        assert!(serialized["view"].get("editor_cover_png").is_none());
+        demo.apply(PlaylistAction::SetEditorName("  夜 / Вечер  ".into()));
+        demo.apply(PlaylistAction::SaveEditor);
+        assert_eq!(demo.storage.first().unwrap().name, "夜 / Вечер");
+        let revision = demo
+            .view
+            .playlists
+            .first()
+            .unwrap()
+            .custom_cover_revision
+            .unwrap();
+        assert_eq!(demo.cover(1, revision), Some(png.as_slice()));
+        assert!(demo.cover(1, revision + 1).is_none());
+        assert!(demo.cover(999, revision).is_none());
+        demo.apply(PlaylistAction::BeginEdit(1));
+        demo.apply(PlaylistAction::ResetEditorCover);
+        demo.apply(PlaylistAction::CancelEditor);
+        assert_eq!(demo.cover(1, revision), Some(png.as_slice()));
+        assert!(demo.view.editor_name.is_empty());
+        assert!(!demo.view.editor_open && !demo.view.editor_cover_reset);
+        demo.apply(PlaylistAction::BeginEdit(1));
+        demo.apply(PlaylistAction::Delete(1));
+        assert!(!demo.view.editor_open);
+        assert!(demo.cover(1, revision).is_none());
+        assert!(demo.storage.is_empty() && demo.view.playlists.is_empty());
+        assert_eq!(demo.view.target_id, None);
+    }
+
+    #[test]
+    fn sorting_selection_and_offline_controls_keep_saved_item_order() {
+        let mut demo = MockPlaylists::default();
+        let playlist = demo.storage.first_mut().unwrap();
+        playlist.items[0].title = Some("Zulu".into());
+        playlist.items[0].last_played_at_ms = Some(20);
+        playlist.items[1].title = Some("Alpha".into());
+        playlist.items[2].title = Some("Middle".into());
+        playlist.items[2].last_played_at_ms = Some(30);
+        let original = demo.storage.clone();
+        assert!(demo.apply(PlaylistAction::Select(Some(1))));
+        assert_eq!(
+            demo.view
+                .active
+                .as_ref()
+                .unwrap()
+                .items
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            [2, 3, 1]
+        );
+        assert_eq!(demo.view.selected_item_id, Some(2));
+        assert!(demo.apply(PlaylistAction::SelectItem(3)));
+        assert!(!demo.apply(PlaylistAction::SelectItem(999)));
+        demo.set_track_sort(TrackSort::RecentlyPlayed);
+        assert_eq!(
+            demo.view
+                .active
+                .as_ref()
+                .unwrap()
+                .items
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            [3, 1, 2]
+        );
+        assert_eq!(demo.view.selected_item_id, Some(3));
+        assert_eq!(demo.storage, original);
+        for action in [
+            PlaylistAction::AddToQueue(3),
+            PlaylistAction::Play {
+                id: 1,
+                start_item_id: Some(3),
+            },
+            PlaylistAction::TogglePlayback,
+        ] {
+            demo.apply(action);
+            assert_eq!(
+                demo.view.message,
+                "Playback is unavailable in the offline gallery."
+            );
+            assert_eq!(demo.storage, original);
+        }
+        demo.apply(PlaylistAction::ShowLibrary);
+        assert!(!demo.apply(PlaylistAction::SelectItem(1)));
+        assert_eq!(demo.view.selected_item_id, Some(3));
+        demo.apply(PlaylistAction::Select(Some(1)));
+        assert_eq!(demo.view.selected_item_id, Some(3));
+        demo.apply(PlaylistAction::SelectItem(2));
+        assert_eq!(demo.view.selected_item_id, Some(2));
+        demo.apply(PlaylistAction::RemoveItem(2));
+        assert_eq!(demo.view.selected_item_id, Some(3));
+        demo.apply(PlaylistAction::Create("  ".into()));
+        assert_eq!(demo.view.message, "Playlist name cannot be empty.");
+        demo.apply(PlaylistAction::Rename {
+            id: 1,
+            name: "  Renamed  ".into(),
+        });
+        assert_eq!(demo.view.active.as_ref().unwrap().name, "Renamed");
+        demo.apply(PlaylistAction::ChooseTarget(999));
+        assert_eq!(demo.view.target_id, Some(1));
+        demo.apply(PlaylistAction::Select(Some(999)));
+        assert!(demo.view.active.is_none() && demo.view.selected_item_id.is_none());
+    }
+    #[test]
     fn offline_playlists_show_duplicate_audio_unavailable_entries_and_edit_in_memory() {
         let mut demo = MockPlaylists::default();
         demo.apply(PlaylistAction::Select(Some(1)));

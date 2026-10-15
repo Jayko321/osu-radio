@@ -3,6 +3,299 @@ use super::*;
 use crate::models::{PlaybackAssignment, PlaybackCommand, PlaybackMode, Playlist, PlaylistItem};
 use crate::view_models::player;
 
+#[test]
+fn media_and_controller_resolve_duplicate_audio_from_the_same_state_owner() {
+    fn assert_title(state: &Controller, expected: Option<&str>) {
+        assert_eq!(state.track(1).map(|track| track.title.as_str()), expected);
+        let input = media::MediaInput {
+            library: &state.library,
+            playlists: &state.playlists,
+            player: &state.player,
+            upcoming: Some(&state.upcoming),
+        };
+        assert_eq!(input.track(1).map(|track| track.title.as_str()), expected);
+        assert!(state.track(999).is_none() && input.track(999).is_none());
+    }
+    let (mut state, _) = controller();
+    let mut library = track(1);
+    library.title = "Library".into();
+    library.title_original = Some("Library".into());
+    state.replace_tracks(vec![library], true);
+    state.playlists.view.visible = true;
+    state.playlists.view.active_id = Some(7);
+    state.install_playlist(playlist());
+    state.playlist_action(PlaylistAction::SelectItem(31));
+    assert_title(&state, Some("Z"));
+    state.playlist_action(PlaylistAction::SelectItem(32));
+    assert_title(&state, Some("A"));
+    state.playlists.view.visible = false;
+    let mut current = track(1);
+    current.title = "Playing".into();
+    state.player.current_track = Some(current);
+    assert_title(&state, Some("Playing"));
+    state.player.current_track = None;
+    assert_title(&state, Some("Library"));
+    let mut queued = track(1);
+    queued.title = "Queued".into();
+    state.upcoming.view.tracks = vec![queued];
+    state.library.indices.insert(1, usize::MAX);
+    assert_title(&state, Some("Queued"));
+    state.upcoming.view.tracks.clear();
+    let mut selected = track(1);
+    selected.title = "Selected".into();
+    state.player.selected_track = Some(selected);
+    assert_title(&state, Some("Selected"));
+    state.player.selected_track = None;
+    assert_title(&state, None);
+}
+
+#[test]
+fn duration_effect_updates_duplicate_rows_without_changing_selection_or_playback() {
+    for open in [false, true] {
+        let (mut state, updates) = controller();
+        state.replace_tracks(vec![track(1), track(2)], true);
+        state.command(AppCommand::SelectTrack(Some(2)));
+        state.playlists.view.visible = true;
+        state.playlists.view.active_id = Some(7);
+        state.install_playlist(playlist());
+        state.playlist_action(PlaylistAction::SelectItem(31));
+        state.player.current_track = Some(track(1));
+        state.upcoming.open = open;
+        state.upcoming.view.tracks = vec![track(1), track(2), track(1)];
+        let playback = state.player.playback.clone();
+        for duration in [Some(Duration::from_secs(42)), None] {
+            updates.lock().unwrap().clear();
+            state.apply_effects(vec![workflow::Effect::DurationChanged {
+                audio_id: 1,
+                duration,
+            }]);
+            assert_eq!(state.library.tracks.first().unwrap().duration, duration);
+            assert_eq!(state.library.tracks.get(1).unwrap().duration, None);
+            assert!(
+                state
+                    .playlists
+                    .tracks
+                    .iter()
+                    .filter(|row| row.track.audio_source_id == 1)
+                    .all(|row| row.track.duration == duration)
+            );
+            assert!(
+                state
+                    .upcoming
+                    .view
+                    .tracks
+                    .iter()
+                    .filter(|track| track.audio_source_id == 1)
+                    .all(|track| track.duration == duration)
+            );
+            assert_eq!(
+                state.player.selected_track.as_ref().unwrap().duration,
+                duration
+            );
+            assert_eq!(
+                state.player.current_track.as_ref().unwrap().duration,
+                duration
+            );
+            assert_eq!(state.library.selected, Some(2));
+            assert_eq!(state.playlists.view.selected_item_id, Some(31));
+            assert_eq!(state.player.playback, playback);
+            assert!(state.player.commands.is_empty() && state.playback.is_none());
+            let events = updates.lock().unwrap().clone();
+            assert_eq!(events.iter().filter(|event| matches!(event, AppUpdate::LibraryTrackChanged(track) if track.audio_source_id == 1 && track.duration == duration)).count(), 1);
+            let playlist_items: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    AppUpdate::PlaylistTrackChanged(row) => Some(row.item_id),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(playlist_items, [32, 31]);
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, AppUpdate::Queue(_)))
+                    .count(),
+                usize::from(open)
+            );
+            assert!(events.iter().all(|event| !matches!(
+                event,
+                AppUpdate::LibraryTracksReplaced { .. }
+                    | AppUpdate::PlaylistTracksReplaced { .. }
+                    | AppUpdate::Playback(_)
+            )));
+        }
+    }
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn audio_download_guards_preserve_current_work_and_seek_reaches_the_worker() {
+    async fn message(
+        receiver: &mut mpsc::UnboundedReceiver<crate::playback::Message>,
+    ) -> crate::playback::Message {
+        tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    }
+    async fn snapshot(
+        receiver: &mut mpsc::UnboundedReceiver<crate::playback::Playback>,
+        matches: impl Fn(&crate::playback::Playback) -> bool + Send + Sync,
+    ) -> crate::playback::Playback {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let state = receiver.recv().await.unwrap();
+                if matches(&state) {
+                    return state;
+                }
+            }
+        })
+        .await
+        .unwrap()
+    }
+    let (mut state, _) = controller();
+    state.replace_tracks(vec![track(1)], true);
+    state.download(crate::playback::Download {
+        generation: 0,
+        id: 1,
+    });
+    assert!(state.audio_task.is_none() && state.tasks.is_empty());
+    let (sender, mut snapshots) = mpsc::unbounded_channel();
+    let (worker, mut feedback) = crate::playback::Worker::spawn_fake(Arc::new(move |state| {
+        let _ = sender.send(state);
+    }))
+    .unwrap();
+    let first = worker.invalidate();
+    worker.send(crate::playback::Command::Assign {
+        generation: first,
+        id: Some(1),
+        playback_token: 5,
+        mode: PlaybackMode::Playing,
+        volume: 0.4,
+    });
+    assert_eq!(
+        message(&mut feedback).await,
+        crate::playback::Message::Download(crate::playback::Download {
+            generation: first,
+            id: 1
+        })
+    );
+    state.playback = Some(worker);
+    state.download(crate::playback::Download {
+        generation: 0,
+        id: 1,
+    });
+    assert!(state.audio_task.is_none() && state.tasks.is_empty());
+    state.download(crate::playback::Download {
+        generation: first,
+        id: 1,
+    });
+    assert_eq!(
+        message(&mut feedback).await,
+        crate::playback::Message::Failed(5)
+    );
+    let failed = snapshot(&mut snapshots, |state| state.error.is_some()).await;
+    assert_eq!(
+        failed.error.as_deref(),
+        Some("Connect to the server before playing a track.")
+    );
+    assert!(!failed.has_source && failed.loading_audio_id.is_none());
+    let worker = state.playback.as_ref().unwrap();
+    let current = worker.invalidate();
+    worker.send(crate::playback::Command::Assign {
+        generation: current,
+        id: Some(1),
+        playback_token: 6,
+        mode: PlaybackMode::Playing,
+        volume: 0.4,
+    });
+    assert_eq!(
+        message(&mut feedback).await,
+        crate::playback::Message::Download(crate::playback::Download {
+            generation: current,
+            id: 1
+        })
+    );
+    let task = state.task(std::future::pending());
+    state.audio_task = Some(task.clone());
+    let expired_file = tempfile::NamedTempFile::new().unwrap();
+    let expired_path = expired_file.path().to_owned();
+    state.complete(Completed::Audio {
+        generation: first,
+        id: 1,
+        result: Ok(expired_file),
+    });
+    assert!(!expired_path.exists());
+    assert_eq!(state.audio_task.as_ref().unwrap().id(), task.id());
+    assert!(!task.is_finished());
+    let current_file = tempfile::NamedTempFile::new().unwrap();
+    let current_path = current_file.path().to_owned();
+    std::fs::write(&current_path, b"mp3").unwrap();
+    state.complete(Completed::Audio {
+        generation: current,
+        id: 1,
+        result: Ok(current_file),
+    });
+    assert!(state.audio_task.is_none());
+    assert_eq!(
+        message(&mut feedback).await,
+        crate::playback::Message::Started(6)
+    );
+    let playing = snapshot(&mut snapshots, |state| state.has_source).await;
+    assert_eq!(playing.current_audio_id, Some(1));
+    assert!(playing.error.is_none() && current_path.exists());
+    let mut assigned = assignment(PlaybackMode::Playing);
+    assigned.playback_token = 6;
+    state.player.assignment = Some(assigned);
+    state.command(AppCommand::Seek(Duration::from_secs(3)));
+    let sought = snapshot(&mut snapshots, |state| state.seek_serial == 1).await;
+    assert_eq!(sought.snapshot.position, Duration::from_secs(3));
+    assert_eq!(sought.playback_token, 6);
+    state.tasks.abort_all();
+    while state.tasks.join_next().await.is_some() {}
+    state.playback.take().unwrap().shutdown();
+    assert!(!current_path.exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn audio_gate_wait_is_cancelled_and_closed_gate_returns_without_http() {
+    let (_directory, session) = super::tests::test_session().await;
+    let (mut state, updates) = controller();
+    state.session = Some(session);
+    let (worker, _) = crate::playback::Worker::spawn_fake(Arc::new(|_| {})).unwrap();
+    state.playback = Some(worker);
+    state.audio_gate = Arc::new(tokio::sync::Semaphore::new(0));
+    state.download(crate::playback::Download {
+        generation: 0,
+        id: 1,
+    });
+    let blocked = state.audio_task.as_ref().unwrap().clone();
+    tokio::task::yield_now().await;
+    assert!(!blocked.is_finished());
+    assert_eq!(state.audio_gate.available_permits(), 0);
+    state.cancel_audio();
+    assert!(state.audio_task.is_none());
+    assert!(
+        matches!(state.tasks.join_next().await.unwrap(), Err(ref error) if error.is_cancelled())
+    );
+    assert!(blocked.is_finished());
+    let current = state.playback.as_ref().unwrap().generation();
+    assert_eq!(current, 1);
+    state.audio_gate.close();
+    state.download(crate::playback::Download {
+        generation: current,
+        id: 1,
+    });
+    let completed = state.tasks.join_next().await.unwrap().unwrap();
+    assert!(matches!(completed, Completed::Cancelled));
+    state.complete(completed);
+    assert!(updates.lock().unwrap().is_empty());
+    assert!(state.tasks.is_empty());
+    state.playback.take().unwrap().shutdown();
+    state.session.take().unwrap().shutdown().await.unwrap();
+}
+
 fn playlist() -> Playlist {
     Playlist {
         id: 7,
@@ -316,4 +609,171 @@ fn worker_start_failure_updates_player_state_and_presentation() {
         PlaybackCommand::PauseIfCurrent { playback_token: 5 }
     );
     assert_eq!(pending.expected_token, Some(5));
+}
+
+#[test]
+fn player_presentation_gates_play_and_seek_without_borrowing_another_items_position() {
+    let mut player = PlayerViewModel::default();
+    let mut selected = track(1);
+    selected.duration = Some(Duration::from_secs(42));
+    player.select_track(Some(selected.clone()));
+    player.playback.current_audio_id = Some(1);
+    player.playback.current_playlist_item_id = Some(31);
+    player.playback.has_source = true;
+    player.playback.snapshot.state = crate::playback::PlayerState::Playing;
+    player.playback.snapshot.position = Duration::from_secs(7);
+    player.playback.snapshot.duration = Some(Duration::from_secs(60));
+    player.playback.can_next = true;
+    for connected in [false, true] {
+        for loaded in [false, true] {
+            for available in [false, true] {
+                let view = player.presentation(Some(31), available, connected, loaded);
+                assert_eq!(view.selected_track, Some(selected.clone()));
+                assert_eq!(view.can_play, connected && loaded && available);
+                assert_eq!(
+                    view.can_seek, available,
+                    "local seek survives HTTP disconnection"
+                );
+                assert_eq!(view.selected_is_playing, available);
+                assert_eq!(
+                    view.position,
+                    if available {
+                        Duration::from_secs(7)
+                    } else {
+                        Duration::ZERO
+                    }
+                );
+                assert_eq!(view.duration, available.then_some(Duration::from_secs(60)));
+                assert!(view.can_next && !view.can_previous);
+            }
+        }
+    }
+    let other_item = player.presentation(Some(32), true, true, true);
+    assert!(!other_item.can_seek && !other_item.selected_is_playing);
+    assert_eq!(
+        (other_item.position, other_item.duration),
+        (Duration::ZERO, None)
+    );
+    player.playback.snapshot.duration = None;
+    assert_eq!(
+        player.presentation(None, true, true, true).duration,
+        Some(Duration::from_secs(42))
+    );
+    player.playback.snapshot.duration = Some(Duration::ZERO);
+    assert!(!player.presentation(None, true, true, true).can_seek);
+    player.playback.snapshot.duration = Some(Duration::from_secs(60));
+    player.playback.has_source = false;
+    assert!(!player.presentation(None, true, true, true).can_seek);
+    player.playback.loading_audio_id = Some(1);
+    assert_eq!(
+        player.presentation(None, true, true, true).message,
+        "Loading audio…"
+    );
+    player.playback.error = Some("decoder failed".into());
+    assert_eq!(
+        player.presentation(None, true, true, true).message,
+        "decoder failed"
+    );
+    player.select_track(Some(track(-1)));
+    assert!(!player.presentation(None, true, true, true).can_play);
+    player.select_track(None);
+    assert!(!player.presentation(None, true, true, true).can_play);
+    assert!(player.selected_track().is_none());
+}
+
+#[test]
+fn seek_effect_keeps_the_launch_token_and_rejects_a_different_duplicate_audio_item() {
+    for (detail, selected_item, assigned, expected) in [
+        (false, None, true, Some((1, 5))),
+        (false, None, false, Some((1, 0))),
+        (true, Some(31), true, Some((1, 5))),
+        (true, Some(32), true, None),
+        (true, Some(33), true, None),
+        (true, None, true, None),
+        (true, Some(31), false, None),
+    ] {
+        let (mut state, _) = controller();
+        state.replace_tracks(vec![track(1)], true);
+        if detail {
+            state.playlists.view.visible = true;
+            state.playlists.view.active_id = Some(7);
+            state.install_playlist(playlist());
+            state.playlists.view.selected_item_id = selected_item;
+        }
+        state.player.assignment = assigned.then(|| assignment(PlaybackMode::Playing));
+        let input = player::PlayerInput {
+            library: &state.library,
+            playlists: &state.playlists,
+            settings: &state.settings,
+            media: &state.media,
+            assignment_sender: &state.assignment_sender,
+        };
+        let mut work = workflow::Workflow {
+            api: None,
+            tasks: &mut state.tasks,
+            cancel: &state.cancel,
+            effects: Vec::new(),
+        };
+        state
+            .player
+            .seek_selected(Duration::from_secs(17), &input, &mut work);
+        if let Some((id, token)) = expected {
+            assert!(
+                matches!(work.effects.as_slice(), [workflow::Effect::PlayerCommand(crate::playback::Command::Seek {
+                expected_id: Some(actual), playback_token, position,
+            })] if *actual == id && *playback_token == token && *position == Duration::from_secs(17))
+            );
+        } else {
+            assert!(work.effects.is_empty());
+        }
+        assert!(state.playback.is_none());
+    }
+}
+
+#[test]
+fn offline_transport_commands_report_errors_without_queuing_or_opening_a_worker() {
+    let (mut state, updates) = controller();
+    state.replace_tracks(vec![track(1)], true);
+    for command in [
+        AppCommand::PlayTrack(1),
+        AppCommand::Pause,
+        AppCommand::Resume,
+        AppCommand::Stop,
+        AppCommand::Next,
+        AppCommand::Previous,
+    ] {
+        updates.lock().unwrap().clear();
+        state.command(command);
+        assert!(
+            state.player.commands.is_empty() && state.tasks.is_empty() && state.playback.is_none()
+        );
+        assert_eq!(state.library.selected_id(), Some(1));
+        assert!(
+            updates
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event, AppUpdate::Player(view)
+            if view.message == "Connect to the server before playing a track." && !view.can_play))
+        );
+    }
+    for action in [
+        PlaylistAction::Play {
+            id: 7,
+            start_item_id: Some(31),
+        },
+        PlaylistAction::AddToQueue(7),
+    ] {
+        updates.lock().unwrap().clear();
+        state.playlist_action(action);
+        assert!(state.player.commands.is_empty() && state.playback.is_none());
+        assert!(
+            updates
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| matches!(event, AppUpdate::Player(view)
+            if view.message == "Connect to the server to queue a playlist."))
+        );
+    }
 }

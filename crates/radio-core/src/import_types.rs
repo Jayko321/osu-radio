@@ -86,3 +86,155 @@ pub struct RealmUser {
     pub username: Option<String>,
     pub country_code: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn beatmap() -> ImportedBeatmap {
+        ImportedBeatmap {
+            md5_hash: None,
+            difficulty_name: None,
+            bpm: None,
+            hash: None,
+            metadata: Some(BeatmapMetadata {
+                title: None,
+                title_unicode: None,
+                artist: None,
+                artist_unicode: None,
+                author: None,
+                source: None,
+                tags: None,
+                user_tags: Vec::new(),
+                preview_time: None,
+                audio_file: Some("audio.mp3".into()),
+                background_file: Some("cover.jpg".into()),
+            }),
+        }
+    }
+
+    fn usage(name: &str, path: &str) -> RealmNamedFileUsage {
+        RealmNamedFileUsage {
+            filename: Some(name.into()),
+            file: Some(RealmFile {
+                hash: None,
+                resolved_path: Some(path.into()),
+            }),
+        }
+    }
+
+    fn set(files: Vec<RealmNamedFileUsage>) -> ImportedBeatmapSet {
+        ImportedBeatmapSet {
+            source: OsuKind::Lazer,
+            online_id: None,
+            hash: None,
+            files,
+            beatmaps: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn resolves_audio_and_background_independently_without_reading_files() {
+        let set = set(vec![
+            usage("cover.jpg", "missing/曲/cover.jpg"),
+            usage("audio.mp3", "missing/曲/audio.mp3"),
+        ]);
+        let beatmap = beatmap();
+        assert_eq!(
+            set.resolved_audio_path(&beatmap),
+            Some(Path::new("missing/曲/audio.mp3"))
+        );
+        assert_eq!(
+            set.resolved_background_path(&beatmap),
+            Some(Path::new("missing/曲/cover.jpg"))
+        );
+        // Resolution uses only metadata/file usages; membership in set.beatmaps is not required.
+        assert!(set.beatmaps.is_empty());
+    }
+
+    #[test]
+    fn absent_metadata_and_filenames_have_no_resolved_paths() {
+        let set = set(vec![
+            usage("audio.mp3", "audio"),
+            usage("cover.jpg", "cover"),
+        ]);
+        let mut beatmap = beatmap();
+        if let Some(metadata) = &mut beatmap.metadata {
+            metadata.audio_file = None;
+            metadata.background_file = None;
+        }
+        assert_eq!(set.resolved_audio_path(&beatmap), None);
+        assert_eq!(set.resolved_background_path(&beatmap), None);
+        beatmap.metadata = None;
+        assert_eq!(set.resolved_audio_path(&beatmap), None);
+        assert_eq!(set.resolved_background_path(&beatmap), None);
+    }
+
+    #[test]
+    fn filenames_match_exactly_including_case_and_whitespace() {
+        let beatmap = beatmap();
+        let unmatched = set(vec![
+            usage("AUDIO.MP3", "wrong-case"),
+            usage("audio.mp3 ", "wrong-space"),
+            usage("cover.JPG", "wrong-cover"),
+        ]);
+        assert_eq!(unmatched.resolved_audio_path(&beatmap), None);
+        assert_eq!(unmatched.resolved_background_path(&beatmap), None);
+        assert_eq!(set(Vec::new()).resolved_audio_path(&beatmap), None);
+    }
+
+    #[test]
+    fn first_matching_usage_wins_even_when_its_file_or_path_is_absent() {
+        let beatmap = beatmap();
+        for filename in ["audio.mp3", "cover.jpg"] {
+            for first in [
+                RealmNamedFileUsage {
+                    filename: Some(filename.into()),
+                    file: None,
+                },
+                RealmNamedFileUsage {
+                    filename: Some(filename.into()),
+                    file: Some(RealmFile {
+                        hash: None,
+                        resolved_path: None,
+                    }),
+                },
+                usage(filename, "first"),
+            ] {
+                let expected = first
+                    .file
+                    .as_ref()
+                    .and_then(|file| file.resolved_path.clone());
+                let set = set(vec![
+                    RealmNamedFileUsage {
+                        filename: None,
+                        file: None,
+                    },
+                    first,
+                    usage(filename, "later"),
+                ]);
+                let resolved = if filename == "audio.mp3" {
+                    set.resolved_audio_path(&beatmap)
+                } else {
+                    set.resolved_background_path(&beatmap)
+                };
+                assert_eq!(resolved, expected.as_deref());
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolved_paths_preserve_native_non_unicode_bytes() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+        let path = PathBuf::from(OsString::from_vec(b"source/\xff.mp3".to_vec()));
+        let set = set(vec![RealmNamedFileUsage {
+            filename: Some("audio.mp3".into()),
+            file: Some(RealmFile {
+                hash: None,
+                resolved_path: Some(path.clone()),
+            }),
+        }]);
+        assert_eq!(set.resolved_audio_path(&beatmap()), Some(path.as_path()));
+    }
+}

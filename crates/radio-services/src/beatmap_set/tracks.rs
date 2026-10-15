@@ -69,3 +69,110 @@ pub(crate) fn from_sets(sets: Vec<BeatmapSetWithAudio>) -> Vec<LibraryTrack> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{AudioSource, BeatmapDetails, BeatmapSet, SourceType};
+
+    fn detail(id: i32, audio: i32, title: &str, cover: bool) -> BeatmapDetails {
+        BeatmapDetails {
+            id,
+            audio_source_id: Some(audio),
+            difficulty_name: Some(format!("Difficulty {id}")),
+            title: Some(title.into()),
+            title_unicode: Some(format!("曲 {title}")),
+            artist: Some(format!("Artist {title}")),
+            artist_unicode: Some(format!("演奏者 {title}")),
+            has_cover: cover,
+        }
+    }
+
+    #[test]
+    fn merges_global_audio_with_first_seen_order_lowest_id_labels_and_independent_cover() {
+        assert!(from_sets(vec![]).is_empty());
+        let audio = |id| AudioSource {
+            id,
+            s_type: SourceType::Local(format!("/audio/{id}")),
+        };
+        let sets = vec![
+            BeatmapSetWithAudio {
+                beatmap_set: BeatmapSet {
+                    id: 100,
+                    installation_id: 7,
+                    online_id: None,
+                    hash: None,
+                },
+                audio_sources: vec![audio(20), audio(10)],
+                has_multiple_audio_sources: true,
+                beatmaps: vec![
+                    detail(31, 10, "Other", false),
+                    detail(23, 20, "Later", true),
+                    detail(21, 20, "Middle", false),
+                ],
+            },
+            BeatmapSetWithAudio {
+                beatmap_set: BeatmapSet {
+                    id: 200,
+                    installation_id: 8,
+                    online_id: None,
+                    hash: None,
+                },
+                audio_sources: vec![audio(20)],
+                has_multiple_audio_sources: false,
+                beatmaps: vec![detail(1, 20, "Earliest", false)],
+            },
+        ];
+        assert_eq!(
+            from_sets(sets),
+            [
+                LibraryTrack {
+                    audio_source_id: 20,
+                    last_played_at_ms: None,
+                    volume_percent: None,
+                    title: Some("Earliest".into()),
+                    title_unicode: Some("曲 Earliest".into()),
+                    artist: Some("Artist Earliest".into()),
+                    artist_unicode: Some("演奏者 Earliest".into()),
+                    cover_beatmap_id: Some(23),
+                    difficulties: vec![
+                        TrackDifficulty {
+                            beatmap_id: 1,
+                            beatmap_set_id: 200,
+                            difficulty_name: Some("Difficulty 1".into()),
+                            set_has_multiple_audio_sources: false
+                        },
+                        TrackDifficulty {
+                            beatmap_id: 21,
+                            beatmap_set_id: 100,
+                            difficulty_name: Some("Difficulty 21".into()),
+                            set_has_multiple_audio_sources: true
+                        },
+                        TrackDifficulty {
+                            beatmap_id: 23,
+                            beatmap_set_id: 100,
+                            difficulty_name: Some("Difficulty 23".into()),
+                            set_has_multiple_audio_sources: true
+                        },
+                    ],
+                },
+                LibraryTrack {
+                    audio_source_id: 10,
+                    last_played_at_ms: None,
+                    volume_percent: None,
+                    title: Some("Other".into()),
+                    title_unicode: Some("曲 Other".into()),
+                    artist: Some("Artist Other".into()),
+                    artist_unicode: Some("演奏者 Other".into()),
+                    cover_beatmap_id: None,
+                    difficulties: vec![TrackDifficulty {
+                        beatmap_id: 31,
+                        beatmap_set_id: 100,
+                        difficulty_name: Some("Difficulty 31".into()),
+                        set_has_multiple_audio_sources: true
+                    }],
+                },
+            ]
+        );
+    }
+}

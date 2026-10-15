@@ -23,6 +23,48 @@ QtObject {
     property int originalHeight: 0
     onStageChanged: console.info("visual stage", stage)
 
+    readonly property var embeddedAssetSources: [
+        "qrc:/assets/fonts/Nunito-Variable.ttf",
+        "qrc:/assets/fonts/Poppins-Bold.ttf",
+        "qrc:/assets/fonts/Poppins-Medium.ttf",
+        "qrc:/assets/fonts/Poppins-Regular.ttf",
+        "qrc:/assets/fonts/Poppins-SemiBold.ttf",
+        "qrc:/assets/icons/add-to-queue.svg",
+        "qrc:/assets/icons/arrow-down-s-line.svg",
+        "qrc:/assets/icons/arrow-left.svg",
+        "qrc:/assets/icons/chevron-down.svg",
+        "qrc:/assets/icons/circle-plus.svg",
+        "qrc:/assets/icons/copy.svg",
+        "qrc:/assets/icons/layers.svg",
+        "qrc:/assets/icons/minus.svg",
+        "qrc:/assets/icons/music.svg",
+        "qrc:/assets/icons/pause.svg",
+        "qrc:/assets/icons/pencil-line.svg",
+        "qrc:/assets/icons/pencil.svg",
+        "qrc:/assets/icons/play.svg",
+        "qrc:/assets/icons/playlist-delete.svg",
+        "qrc:/assets/icons/playlist-edit.svg",
+        "qrc:/assets/icons/plus.svg",
+        "qrc:/assets/icons/repeat-2.svg",
+        "qrc:/assets/icons/rotate-cw.svg",
+        "qrc:/assets/icons/search-line.svg",
+        "qrc:/assets/icons/search.svg",
+        "qrc:/assets/icons/settings-4-line.svg",
+        "qrc:/assets/icons/settings.svg",
+        "qrc:/assets/icons/shuffle.svg",
+        "qrc:/assets/icons/skip-back.svg",
+        "qrc:/assets/icons/skip-forward.svg",
+        "qrc:/assets/icons/square.svg",
+        "qrc:/assets/icons/volume-2.svg",
+        "qrc:/assets/icons/volume-up-fill.svg",
+        "qrc:/assets/icons/x.svg",
+        "qrc:/assets/logos/lazer.png",
+        "qrc:/assets/logos/stable.png"
+    ]
+    property var embeddedAssetObjects: []
+    readonly property Component assetImage: Component { Image { cache: false; visible: false } }
+    readonly property Component assetFont: Component { FontLoader {} }
+
     property bool monitorArtwork: false
     property string retainedArtwork: ""
     property int continuityFrames: 0
@@ -343,6 +385,7 @@ QtObject {
         }
     }
     function nativeStep(): void {
+        if (testCase === "native-assets") { assetStep(); return; }
         const picker = find(window.contentItem, "playlistCoverPicker");
         switch (stage) {
         case 0:
@@ -381,6 +424,32 @@ QtObject {
             check(!picker.visible && bridge.playlists.playlistEditorOpen && !bridge.playlists.playlistCoverPreparing, "native picker cancellation retains editor");
             bridge.playlists.cancelPlaylistEditor(); finish(); break;
         }
+    }
+    function assetStep(): void {
+        if (stage === 0) {
+            for (const source of embeddedAssetSources) {
+                const component = source.endsWith(".ttf") ? assetFont : assetImage;
+                const object = component.createObject(window.contentItem, { source: source });
+                check(object !== null, "create asset loader " + source);
+                embeddedAssetObjects.push(object);
+            }
+            stage = 1; return;
+        }
+        for (let i = 0; i < embeddedAssetSources.length; ++i) {
+            const object = embeddedAssetObjects[i];
+            if (!object) continue;
+            const source = embeddedAssetSources[i];
+            if (source.endsWith(".ttf")) {
+                if (object.status === FontLoader.Loading) return;
+                const family = source.includes("Nunito") ? "Nunito" : "Poppins";
+                check(object.status === FontLoader.Ready && object.name === family, "embedded font " + source);
+            } else {
+                if (object.status === Image.Loading) return;
+                check(object.status === Image.Ready && object.sourceSize.width > 0 && object.sourceSize.height > 0, "embedded image " + source);
+            }
+        }
+        console.info("Embedded asset probe checked", embeddedAssetSources.length, "resources");
+        finish();
     }
     function queueStep(): void {
         const panel = find(window.contentItem, "queuePanel");

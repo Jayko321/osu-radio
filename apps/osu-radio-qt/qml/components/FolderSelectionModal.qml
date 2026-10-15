@@ -54,7 +54,7 @@ AppModal {
                         required property var modelData
                         required property int index
                         objectName: "folderSelectionRow" + index
-                        width: parent.width
+                        width: parent ? parent.width : 0
                         height: Math.max(94, rowContent.implicitHeight + 32)
                         radius: 8
                         color: modelData.registered ? "#303faf7c" : "#80333333"

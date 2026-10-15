@@ -190,3 +190,115 @@ impl LiveRuntime {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        sync::{
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        },
+        time::{Duration, Instant},
+    };
+
+    struct Dropped(Arc<AtomicBool>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn runtime_prunes_completed_work_and_waits_for_controller_and_task_cleanup() {
+        assert!(RuntimeContext::current().is_none());
+        let live = LiveRuntime::new().unwrap();
+        let context = RuntimeContext::current().unwrap();
+        assert!(Arc::ptr_eq(&context, &live.context));
+
+        let finished = context.handle.spawn(async {});
+        live.runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !finished.is_finished() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        });
+        context.track(finished);
+        let controller_stopped = Arc::new(AtomicBool::new(false));
+        let controller_guard = Dropped(controller_stopped.clone());
+        context.retain(AppController::spawn(
+            &context.handle,
+            osu_radio_client::ServerOptions::default(),
+            move |_| {
+                let _ = &controller_guard;
+            },
+        ));
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let pending_guard = Dropped(cancelled.clone());
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let pending = context.handle.spawn(async move {
+            let _guard = pending_guard;
+            let _ = started.send(());
+            std::future::pending::<()>().await;
+        });
+        live.runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), ready)
+                .await
+                .unwrap()
+                .unwrap();
+        });
+        let fallback_abort = pending.abort_handle();
+        context.track(pending);
+        assert_eq!(
+            context.tasks.lock().unwrap().len(),
+            1,
+            "completed work must not accumulate"
+        );
+
+        let (release, blocked) = mpsc::channel();
+        let (started, ready) = mpsc::channel();
+        let completed = Arc::new(AtomicBool::new(false));
+        let flag = completed.clone();
+        context.track(context.handle.spawn_blocking(move || {
+            started.send(()).unwrap();
+            blocked.recv().unwrap();
+            flag.store(true, Ordering::SeqCst);
+        }));
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        let worker = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let ordered = loop {
+                if cancelled.load(Ordering::SeqCst)
+                    && controller_stopped.load(Ordering::SeqCst)
+                    && RuntimeContext::current().is_none()
+                {
+                    break true;
+                }
+                if Instant::now() >= deadline {
+                    break false;
+                }
+                std::thread::yield_now();
+            };
+            // Release both tasks even on failure so a broken shutdown cannot hang this test.
+            fallback_abort.abort();
+            release.send(()).unwrap();
+            ordered
+        });
+        live.shutdown();
+        assert!(
+            worker.join().unwrap(),
+            "shutdown must clear context and stop controllers before completing tracked work"
+        );
+        assert!(
+            completed.load(Ordering::SeqCst),
+            "started blocking work must finish before shutdown returns"
+        );
+        assert!(RuntimeContext::current().is_none());
+        assert!(context.tasks.lock().unwrap().is_empty());
+        assert!(context.controllers.lock().unwrap().is_empty());
+    }
+}

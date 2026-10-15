@@ -30,7 +30,22 @@ native `hash` and include independent `md5_hash` from Realm `MD5Hash`.
 MD5 values are validated and normalized; malformed mandatory collection fields
 abort export. A Realm schema without `BeatmapCollection` remains supported.
 
-The `fixture-generator` project uses the existing Realm package to create genuine
-synthetic databases. The scanner's `imports_real_realm_fixtures_with_the_production_helper`
-test builds this project and creates all fixture databases in temporary directories,
-then checks both the production executable and Rust importer.
+The [fixture-generator](fixture-generator/Program.cs) uses the existing Realm
+package to create genuine synthetic databases. The scanner's
+[real-helper tests](../../crates/radio-scanner/src/lazer/tests.rs) build it in
+temporary directories and check the production executable and Rust importer:
+
+- Minimal schemas retain compatibility with missing optional metadata/files and
+  no collection type; invalid collection hashes/names reject the snapshot.
+- A separate rich schema checks metadata/author fields, ordered user tags,
+  numeric overflow and content-addressed paths, including null/short hashes.
+- `--schema` emits sorted object records with scalar/list/set/dictionary field
+  types, nullability, primary keys and index metadata. An unrelated schema can be
+  inspected but cannot be imported as beatmaps.
+- Invalid arguments, missing/directory inputs and corrupt files use the expected
+  exit code and stderr diagnostics. Rich export/schema checks compare Realm bytes
+  before/after and assert that media files were not created.
+
+Run `cargo test -p radio-scanner --locked -- real_ --test-threads=1` from the root.
+These tests use synthetic Realm data, not a real lazer installation. Native
+Windows/macOS behavior and C# source-line coverage remain unverified.

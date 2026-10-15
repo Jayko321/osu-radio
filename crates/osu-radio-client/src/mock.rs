@@ -360,6 +360,73 @@ mod tests {
     use super::*;
 
     #[test]
+    fn folder_staging_partial_apply_retry_and_reset_remain_in_memory() {
+        let mut state = MockState::default();
+        let initial = state.gallery.folder_rows.clone();
+        for action in [
+            Action::FolderToggle("missing".into()),
+            Action::FolderRefresh("missing".into()),
+            Action::FolderCount("missing".into()),
+            Action::FolderRefresh("/demo/osu/1/marker".into()),
+        ] {
+            assert!(!state.apply(action));
+            assert_eq!(state.gallery.folder_rows, initial);
+        }
+        let registered = "/demo/osu/0/marker";
+        assert!(state.apply(Action::FolderRefresh(registered.into())));
+        assert_eq!(state.gallery.folder_rows.first().unwrap().action, "refresh");
+        assert!(state.apply(Action::FolderRefresh(registered.into())));
+        assert!(state.gallery.folder_rows.first().unwrap().action.is_empty());
+        for path in [registered, "/demo/osu/1/marker", "/demo/osu/2/marker"] {
+            assert!(state.apply(Action::FolderToggle(path.into())));
+        }
+        assert!(state.apply(Action::FolderApply));
+        let rows = &state.gallery.folder_rows;
+        assert!(!rows.first().unwrap().registered);
+        assert!(rows.get(1).unwrap().registered);
+        let failed = rows.get(2).unwrap();
+        assert!(!failed.registered);
+        assert_eq!(failed.action, "add");
+        assert_eq!(failed.error, "Demo import failed. Apply again to retry.");
+        assert_eq!(
+            state.gallery.folder_message,
+            "Some changes failed. Successful changes are saved."
+        );
+        assert!(state.apply(Action::FolderCount("/demo/osu/2/marker".into())));
+        assert_eq!(state.gallery.folder_rows.get(2).unwrap().count, "42");
+        assert!(
+            state
+                .gallery
+                .folder_rows
+                .get(2)
+                .unwrap()
+                .count_error
+                .is_empty()
+        );
+        assert!(state.apply(Action::FolderApply));
+        assert!(state.gallery.folder_rows.get(2).unwrap().registered);
+        assert!(
+            state
+                .gallery
+                .folder_rows
+                .iter()
+                .all(|row| row.action.is_empty() && row.error.is_empty())
+        );
+        assert!(state.gallery.folder_message.is_empty());
+        assert!(state.apply(Action::FolderBrowse));
+        let pending = state.gallery.folder_rows.last().unwrap();
+        assert_eq!(pending.marker_path, "/demo/selected/osu/client.realm");
+        assert!(pending.count_pending && !pending.registered);
+        assert_eq!(pending.action, "add");
+        let browsed = state.clone();
+        assert!(!state.apply(Action::FolderBrowse));
+        assert_eq!(state, browsed);
+        assert!(state.apply(Action::FolderReset));
+        assert_eq!(state.gallery.folder_rows, initial);
+        assert!(state.gallery.folder_message.is_empty());
+    }
+
+    #[test]
     fn demo_sorts_all_modes_by_stable_id_and_preserves_selected_song() {
         let mut state = MockState::default();
         assert_eq!(
@@ -514,6 +581,13 @@ mod tests {
         assert!(!state.apply(Action::GalleryDisabled(true)));
         let disabled = state.clone();
         for action in [
+            Action::Playlist(crate::view_models::PlaylistAction::BeginCreate),
+            Action::FolderReset,
+            Action::FolderToggle("/demo/osu/0/marker".into()),
+            Action::FolderRefresh("/demo/osu/0/marker".into()),
+            Action::FolderCount("/demo/osu/2/marker".into()),
+            Action::FolderBrowse,
+            Action::FolderApply,
             Action::Press,
             Action::Field("new".into()),
             Action::Filled("new".into()),

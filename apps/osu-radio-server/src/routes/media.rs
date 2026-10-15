@@ -279,6 +279,7 @@ mod tests {
                     response.headers()[header::CONTENT_LENGTH],
                     bytes.len().to_string()
                 );
+                assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
                 let mut body = response.into_body();
                 let mut received = Vec::new();
                 let mut frames = 0_usize;
@@ -489,6 +490,11 @@ mod tests {
             .into_response();
         assert_eq!(response.status(), axum::http::StatusCode::OK);
         assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "application/octet-stream"
+        );
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(
             axum::body::to_bytes(
                 response.into_body(),
                 usize::try_from(MAX_COVER_BYTES).unwrap()
@@ -526,7 +532,14 @@ mod tests {
     #[test]
     fn bounds_cover_reads() {
         let file = tempfile::NamedTempFile::new().unwrap();
+        file.as_file().set_len(MAX_COVER_BYTES).unwrap();
+        assert_eq!(
+            u64::try_from(read_cover(file.path()).unwrap().len()).unwrap(),
+            MAX_COVER_BYTES
+        );
         file.as_file().set_len(MAX_COVER_BYTES + 1).unwrap();
         assert!(read_cover(file.path()).is_none());
+        let directory = tempfile::tempdir().unwrap();
+        assert!(read_cover(directory.path()).is_none());
     }
 }

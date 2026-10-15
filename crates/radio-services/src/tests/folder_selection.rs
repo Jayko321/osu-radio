@@ -1,5 +1,111 @@
 use super::*;
 
+#[tokio::test]
+async fn invalid_marker_previews_and_imports_report_the_path_without_registering() {
+    let directory = tempfile::tempdir().unwrap();
+    let services = Services::connect(":memory:").await.unwrap();
+    services.migrate().await.unwrap();
+    let folder = services.osu_installations();
+    let named_directory = directory.path().join("directory/osu!.db");
+    std::fs::create_dir_all(&named_directory).unwrap();
+    let wrong_name = directory.path().join("other.db");
+    std::fs::write(&wrong_name, b"not a marker").unwrap();
+    for (path, relative) in [
+        (std::path::PathBuf::from("relative/osu!.db"), true),
+        (directory.path().join("missing/osu!.db"), false),
+        (named_directory, false),
+        (wrong_name, false),
+    ] {
+        for error in [
+            folder.folder_metadata(path.clone()).await.unwrap_err(),
+            folder.import_folder(path.clone()).await.unwrap_err(),
+        ] {
+            match error {
+                crate::RegisterFolderError::RelativePath(actual) if relative => {
+                    assert_eq!(actual, path);
+                }
+                crate::RegisterFolderError::NotAnOsuFolder(actual) if !relative => {
+                    assert_eq!(actual, path);
+                }
+                other => panic!("unexpected error for {path:?}: {other:?}"),
+            }
+        }
+        assert!(folder.all().await.unwrap().is_empty());
+        assert!(
+            services
+                .beatmap_sets()
+                .all_with_audio_sources()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
+async fn reimport_rejects_a_changed_source_identity_and_preserves_the_snapshot() {
+    use radio_core::import_types::ImportedSnapshot;
+    let directory = tempfile::tempdir().unwrap();
+    let marker_path = directory.path().join("client.realm");
+    std::fs::write(&marker_path, b"source-read fixture").unwrap();
+    let marker = OsuMarker {
+        kind: OsuKind::Lazer,
+        root_path: directory.path().to_path_buf(),
+        marker_path: std::fs::canonicalize(marker_path).unwrap(),
+    };
+    let services = Services::connect(":memory:").await.unwrap();
+    services.migrate().await.unwrap();
+    let service = services.osu_installations();
+    let before = service
+        .register_snapshot(&marker, &snapshot("Original", "/fixture/original.mp3"))
+        .await
+        .unwrap()
+        .into_installation();
+    let sets = services
+        .beatmap_sets()
+        .all_with_audio_sources()
+        .await
+        .unwrap();
+    let replacement = ImportedSnapshot {
+        beatmap_sets: snapshot("Must not commit", "/fixture/replacement.mp3"),
+        collections: vec![],
+    };
+    for stale in [
+        OsuMarker {
+            kind: OsuKind::Stable,
+            ..marker.clone()
+        },
+        OsuMarker {
+            marker_path: directory.path().join("other/client.realm"),
+            ..marker.clone()
+        },
+    ] {
+        let error = service
+            .reimport_snapshot(before.id, &stale, &replacement)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("Registered source changed during import")
+        );
+        assert_eq!(service.get(before.id).await.unwrap(), Some(before.clone()));
+        assert_eq!(
+            services
+                .beatmap_sets()
+                .all_with_audio_sources()
+                .await
+                .unwrap(),
+            sets
+        );
+        assert!(services.playlists().all().await.unwrap().is_empty());
+    }
+    assert_eq!(
+        std::fs::read(&marker.marker_path).unwrap(),
+        b"source-read fixture"
+    );
+}
+
 /// One Stable set with any number of difficulties, using the current database layout.
 fn stable_database(difficulties: &[&str]) -> Vec<u8> {
     fn text(bytes: &mut Vec<u8>, value: &str) {

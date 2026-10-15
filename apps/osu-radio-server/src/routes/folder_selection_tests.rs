@@ -32,6 +32,13 @@ async fn discovery_stream_has_resolved_candidates_and_explicit_completion() {
     assert_eq!(events.len(), 2);
     assert_eq!(events[0]["event"], "candidate");
     assert_eq!(events[0]["kind"], "stable");
+    let root = std::fs::canonicalize(directory.path()).unwrap();
+    assert_eq!(events[0]["root_path"], root.to_str().unwrap());
+    assert_eq!(
+        events[0]["marker_path"],
+        root.join("osu!.db").to_str().unwrap()
+    );
+    assert!(events[0]["registered_id"].is_null());
     assert_eq!(events[1]["event"], "complete");
     assert!(
         state
@@ -41,6 +48,43 @@ async fn discovery_stream_has_resolved_candidates_and_explicit_completion() {
             .await
             .unwrap()
             .is_empty()
+    );
+    for depth in ["known", "shallow"] {
+        let response = router(state.clone())
+            .oneshot(
+                Request::post("/api/user-data/osu-folders/discover")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::json!({"roots": [directory.path()], "depth": depth})
+                            .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), 10000).await.unwrap();
+        let scoped: Vec<serde_json::Value> = std::str::from_utf8(&bytes)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(scoped, events, "{depth}");
+    }
+    let response = router(state.clone())
+        .oneshot(
+            Request::post("/api/user-data/osu-folders/discover")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"roots":["relative"],"depth":"known"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let bytes = to_bytes(response.into_body(), 1024).await.unwrap();
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+        serde_json::json!({"error": "Discovery roots must be absolute paths."})
     );
     for operation in ["metadata", "import"] {
         let response = router(state.clone())

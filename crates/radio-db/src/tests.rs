@@ -46,6 +46,8 @@ async fn repository_contracts(url: &str) {
     let database = Database::connect(url).await.unwrap();
     database.check_connection().await.unwrap();
     concurrent_schema_changes(&database, url).await;
+    #[cfg(feature = "postgres")]
+    migration_lifecycle::contracts(&database).await;
     native_path_migration(&database).await;
     tag_migration::contracts(&database, url).await;
     queue::migration_contracts(&database, url).await;
@@ -80,6 +82,8 @@ async fn repository_contracts(url: &str) {
 
     let other_pool = Database::connect(url).await.unwrap();
     other_pool.migrate().await.unwrap();
+    missing_settings_do_not_recreate_the_singleton(&database).await;
+    model_projections::contracts(&database).await;
     native_path_registration(&database, &other_pool).await;
     aggregate_grouping_and_cleanup(&database).await;
     repository_transaction_contracts(&database).await;
@@ -99,6 +103,47 @@ async fn sql(database: &Database, statement: &str) {
         .execute_unprepared(statement)
         .await
         .unwrap();
+}
+
+async fn missing_settings_do_not_recreate_the_singleton(database: &Database) {
+    let transaction = database.begin().await.unwrap();
+    transaction
+        .connection
+        .execute_unprepared("DELETE FROM user_data WHERE id = 1")
+        .await
+        .unwrap();
+    let settings = transaction.user_data();
+    for error in [
+        settings.get().await.unwrap_err(),
+        settings.audio_settings().await.unwrap_err(),
+        settings
+            .update_audio_settings(None, None)
+            .await
+            .unwrap_err(),
+        settings
+            .update_audio_settings(Some(true), Some(50))
+            .await
+            .unwrap_err(),
+        settings.lock().await.unwrap_err(),
+    ] {
+        assert!(
+            error.to_string().contains("Settings row is missing"),
+            "{error:#}"
+        );
+    }
+    assert!(
+        crate::entities::user_data::Entity::find_by_id(1)
+            .one(&transaction.connection)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    transaction.rollback().await.unwrap();
+    assert_eq!(database.user_data().get().await.unwrap().id, 1);
+    assert_eq!(
+        database.user_data().audio_settings().await.unwrap(),
+        crate::model::AudioSettings::default()
+    );
 }
 
 /// Historical fixtures insert only the original columns, independently of current entities.
@@ -700,3 +745,5 @@ mod queue;
 mod audio_settings;
 
 mod collections;
+mod migration_lifecycle;
+mod model_projections;

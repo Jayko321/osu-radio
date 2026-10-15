@@ -103,6 +103,91 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn wire_projection_preserves_all_fields_and_source_kinds_without_internal_installation_id() {
+        use radio_services::model::{BeatmapDetails, BeatmapSet, SourceType};
+        let listed = BeatmapSetWithAudio {
+            has_multiple_audio_sources: true,
+            beatmap_set: BeatmapSet {
+                id: 17,
+                online_id: Some(123),
+                hash: Some("set-identity".into()),
+                installation_id: 999,
+            },
+            audio_sources: vec![
+                AudioSource {
+                    id: 51,
+                    s_type: SourceType::Local("fixture/曲/a.mp3".into()),
+                },
+                AudioSource {
+                    id: 52,
+                    s_type: SourceType::Copied(r"C:\copied\a.ogg".into()),
+                },
+                AudioSource {
+                    id: 53,
+                    s_type: SourceType::Online("https://fixture.invalid/a?q=曲".into()),
+                },
+            ],
+            beatmaps: vec![
+                BeatmapDetails {
+                    id: 71,
+                    audio_source_id: Some(51),
+                    difficulty_name: Some("Hard".into()),
+                    title: Some("Title".into()),
+                    title_unicode: Some("題".into()),
+                    artist: Some("Artist".into()),
+                    artist_unicode: Some("演奏者".into()),
+                    has_cover: true,
+                },
+                BeatmapDetails {
+                    id: 72,
+                    audio_source_id: None,
+                    difficulty_name: None,
+                    title: None,
+                    title_unicode: None,
+                    artist: None,
+                    artist_unicode: None,
+                    has_cover: false,
+                },
+            ],
+        };
+        let actual = serde_json::to_value(BeatmapSetResponse::from(listed)).unwrap();
+        assert_eq!(
+            actual,
+            serde_json::json!({
+                "id": 17, "online_id": 123, "hash": "set-identity", "has_multiple_audio_sources": true,
+                "audio_sources": [
+                    {"id": 51, "kind": "local", "location": "fixture/曲/a.mp3"},
+                    {"id": 52, "kind": "copied", "location": "C:\\copied\\a.ogg"},
+                    {"id": 53, "kind": "online", "location": "https://fixture.invalid/a?q=曲"},
+                ],
+                "beatmaps": [
+                    {"id": 71, "audio_source_id": 51, "difficulty_name": "Hard", "title": "Title", "title_unicode": "題", "artist": "Artist", "artist_unicode": "演奏者", "has_cover": true},
+                    {"id": 72, "audio_source_id": null, "difficulty_name": null, "title": null, "title_unicode": null, "artist": null, "artist_unicode": null, "has_cover": false},
+                ]
+            })
+        );
+        let wire: osu_radio_client::BeatmapSet = serde_json::from_value(actual).unwrap();
+        assert_eq!(wire.audio_sources.len(), 3);
+        let empty = BeatmapSetWithAudio {
+            has_multiple_audio_sources: false,
+            beatmap_set: BeatmapSet {
+                id: 18,
+                online_id: None,
+                hash: None,
+                installation_id: 999,
+            },
+            audio_sources: Vec::new(),
+            beatmaps: Vec::new(),
+        };
+        assert_eq!(
+            serde_json::to_value(BeatmapSetResponse::from(empty)).unwrap(),
+            serde_json::json!({
+                "id": 18, "online_id": null, "hash": null, "has_multiple_audio_sources": false, "audio_sources": [], "beatmaps": []
+            })
+        );
+    }
+
     #[tokio::test]
     async fn http_query_decodes_literal_symbols_and_returns_only_matching_audio() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

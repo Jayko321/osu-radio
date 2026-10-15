@@ -109,4 +109,57 @@ mod tests {
         assert_eq!(loading.value(), Some(&7));
         assert_eq!(loading.error(), None);
     }
+
+    #[test]
+    fn loading_accessors_distinguish_idle_pending_ready_and_failed() {
+        for (state, pending, value, error) in [
+            (Loading::<u8>::default(), false, None, None),
+            (Loading::Pending, true, None, None),
+            (Loading::Ready(7), false, Some(7), None),
+            (
+                Loading::Failed("unavailable".into()),
+                false,
+                None,
+                Some("unavailable"),
+            ),
+        ] {
+            assert_eq!(state.is_pending(), pending);
+            assert_eq!(state.value().copied(), value);
+            assert_eq!(state.error(), error);
+        }
+    }
+
+    #[test]
+    fn error_descriptions_walk_all_causes_without_repeating_existing_text() {
+        #[derive(Debug)]
+        struct Error(&'static str, Option<Box<Self>>);
+        impl std::fmt::Display for Error {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.0)
+            }
+        }
+        impl std::error::Error for Error {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                self.1
+                    .as_deref()
+                    .map(|cause| -> &dyn std::error::Error { cause })
+            }
+        }
+        let error = Error(
+            "load failed: disk unavailable",
+            Some(Box::new(Error(
+                "disk unavailable",
+                Some(Box::new(Error("permission denied", None))),
+            ))),
+        );
+        assert_eq!(
+            describe(&error),
+            "load failed: disk unavailable: permission denied"
+        );
+        assert_eq!(describe(&Error("plain failure", None)), "plain failure");
+        assert_eq!(
+            Loading::<()>::from_result(Err(error)).error(),
+            Some("load failed: disk unavailable: permission denied")
+        );
+    }
 }

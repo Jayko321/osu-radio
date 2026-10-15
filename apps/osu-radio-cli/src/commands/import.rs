@@ -212,3 +212,165 @@ fn audio_status(beatmap_set: &ImportedBeatmapSet, beatmap: &ImportedBeatmap) -> 
         None => "unknown",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use radio_core::{
+        OsuKind,
+        import_types::{BeatmapMetadata, RealmFile, RealmNamedFileUsage, RealmUser},
+    };
+    use std::path::PathBuf;
+
+    fn fixture() -> (ImportedBeatmapSet, ImportedBeatmap) {
+        let beatmap = ImportedBeatmap {
+            md5_hash: None,
+            difficulty_name: Some("Hard".into()),
+            bpm: Some(123.45),
+            hash: Some("map-hash".into()),
+            metadata: Some(BeatmapMetadata {
+                title: Some("Song".into()),
+                title_unicode: Some("曲".into()),
+                artist: Some("Artist".into()),
+                artist_unicode: Some("歌手".into()),
+                author: Some(RealmUser {
+                    online_id: Some(42),
+                    username: Some("Mapper".into()),
+                    country_code: Some("JP".into()),
+                }),
+                source: Some("Game".into()),
+                tags: Some("tag two".into()),
+                user_tags: vec!["user tag".into()],
+                preview_time: Some(1234),
+                audio_file: Some("audio.mp3".into()),
+                background_file: Some("cover.jpg".into()),
+            }),
+        };
+        let set = ImportedBeatmapSet {
+            source: OsuKind::Stable,
+            online_id: Some(123),
+            hash: Some("set-hash".into()),
+            files: vec![RealmNamedFileUsage {
+                filename: Some("audio.mp3".into()),
+                file: Some(RealmFile {
+                    hash: Some("audio-hash".into()),
+                    resolved_path: Some(PathBuf::from("fixture/audio.mp3")),
+                }),
+            }],
+            beatmaps: vec![beatmap.clone(), beatmap.clone()],
+        };
+        (set, beatmap)
+    }
+
+    #[test]
+    fn table_prefers_unicode_with_ordinary_and_unknown_fallbacks() {
+        let (_, mut beatmap) = fixture();
+        assert_eq!(beatmap_artist(&beatmap), "歌手");
+        assert_eq!(beatmap_title(&beatmap), "曲");
+        assert_eq!(beatmap_bpm(&beatmap), "123.5");
+        let metadata = beatmap.metadata.as_mut().unwrap();
+        metadata.artist_unicode = None;
+        metadata.title_unicode = None;
+        assert_eq!(beatmap_artist(&beatmap), "Artist");
+        assert_eq!(beatmap_title(&beatmap), "Song");
+        let metadata = beatmap.metadata.as_mut().unwrap();
+        metadata.artist = None;
+        metadata.title = None;
+        assert_eq!(beatmap_artist(&beatmap), "-");
+        assert_eq!(beatmap_title(&beatmap), "-");
+        beatmap.metadata = None;
+        beatmap.bpm = None;
+        assert_eq!(beatmap_artist(&beatmap), "-");
+        assert_eq!(beatmap_title(&beatmap), "-");
+        assert_eq!(beatmap_bpm(&beatmap), "-");
+    }
+
+    #[test]
+    fn audio_status_distinguishes_a_reference_from_an_unresolved_or_unknown_file() {
+        let (mut set, mut beatmap) = fixture();
+        assert_eq!(audio_status(&set, &beatmap), "resolved");
+        set.files.clear();
+        assert_eq!(audio_status(&set, &beatmap), "unresolved");
+        beatmap.metadata.as_mut().unwrap().audio_file = None;
+        assert_eq!(audio_status(&set, &beatmap), "unknown");
+        beatmap.metadata = None;
+        assert_eq!(audio_status(&set, &beatmap), "unknown");
+    }
+
+    #[test]
+    fn json_preserves_metadata_file_references_and_limits_difficulties() {
+        let (set, _) = fixture();
+        let value = beatmap_set_to_json(&set, 1);
+        assert_eq!(value["source"], "stable");
+        assert_eq!(value["online_id"], 123);
+        assert_eq!(value["hash"], "set-hash");
+        assert_eq!(
+            value["files"],
+            json!([{
+                "filename": "audio.mp3", "file": {
+                    "hash": "audio-hash", "resolved_path": PathBuf::from("fixture/audio.mp3").display().to_string(),
+                },
+            }])
+        );
+        assert_eq!(value["beatmaps"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            value["beatmaps"][0],
+            json!({
+                "difficulty_name": "Hard", "bpm": 123.45, "hash": "map-hash",
+                "metadata": {
+                    "title": "Song", "title_unicode": "曲", "artist": "Artist", "artist_unicode": "歌手",
+                    "author": { "online_id": 42, "username": "Mapper", "country_code": "JP" },
+                    "source": "Game", "tags": "tag two", "user_tags": ["user tag"],
+                    "preview_time": 1234, "audio_file": "audio.mp3", "background_file": "cover.jpg",
+                },
+                "resolved_audio_path": PathBuf::from("fixture/audio.mp3").display().to_string(),
+            })
+        );
+        assert_eq!(beatmap_count(&[set]), 2);
+        assert_eq!(beatmap_count(&[]), 0);
+    }
+
+    #[test]
+    fn json_retains_null_fields_and_empty_file_records() {
+        let (mut set, mut beatmap) = fixture();
+        beatmap.metadata = None;
+        beatmap.difficulty_name = None;
+        beatmap.hash = None;
+        beatmap.bpm = None;
+        assert_eq!(
+            beatmap_to_json(&set, &beatmap),
+            json!({
+                "difficulty_name": null, "bpm": null, "hash": null,
+                "metadata": null, "resolved_audio_path": null,
+            })
+        );
+        set.files = vec![
+            RealmNamedFileUsage {
+                filename: None,
+                file: None,
+            },
+            RealmNamedFileUsage {
+                filename: Some("missing".into()),
+                file: Some(RealmFile {
+                    hash: None,
+                    resolved_path: None,
+                }),
+            },
+        ];
+        let value = beatmap_set_to_json(&set, 0);
+        assert_eq!(value["beatmaps"], json!([]));
+        assert_eq!(
+            value["files"],
+            json!([
+                { "filename": null, "file": null },
+                { "filename": "missing", "file": { "hash": null, "resolved_path": null } },
+            ])
+        );
+        let metadata = set.beatmaps[0].metadata.as_mut().unwrap();
+        metadata.author = None;
+        assert_eq!(
+            beatmap_set_to_json(&set, usize::MAX)["beatmaps"][0]["metadata"]["author"],
+            Value::Null
+        );
+    }
+}

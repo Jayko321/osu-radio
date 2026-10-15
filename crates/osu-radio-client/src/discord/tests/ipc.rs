@@ -45,6 +45,7 @@ impl Fixture {
         assert_eq!(opcode, 0);
         let json: serde_json::Value = serde_json::from_slice(&payload).unwrap();
         assert_eq!(json["client_id"], APPLICATION_ID);
+        assert_eq!(json["v"], 1);
         write_json(&mut peer, &serde_json::json!({ "evt": "READY" })).await;
         peer
     }
@@ -92,6 +93,8 @@ async fn activity(peer: &mut UnixStream) -> serde_json::Value {
     assert_eq!(opcode, 1);
     let json: serde_json::Value = serde_json::from_slice(&payload).unwrap();
     assert_eq!(json["cmd"], "SET_ACTIVITY");
+    assert_eq!(json["args"]["pid"], std::process::id());
+    assert!(!json["nonce"].as_str().unwrap().is_empty());
     json
 }
 async fn write_json(peer: &mut UnixStream, json: &serde_json::Value) {
@@ -461,6 +464,16 @@ async fn clear_and_unrelated_errors_do_not_retry_or_disable_artwork() {
         ("SET_ACTIVITY", serde_json::json!("unknown nonce")),
     ] {
         write_json(&mut peer, &serde_json::json!({ "cmd": cmd, "evt": "ERROR", "nonce": nonce, "data": { "code": 4000, "message": "unrelated" } })).await;
+    }
+    for reply in [
+        serde_json::Value::Null,
+        serde_json::json!({}),
+        serde_json::json!({ "cmd": "SET_ACTIVITY", "evt": null }),
+        serde_json::json!({ "cmd": "SET_ACTIVITY", "nonce": 42 }),
+        serde_json::json!({ "cmd": "SET_ACTIVITY", "nonce": next["nonce"], "evt": "UNRELATED" }),
+        serde_json::json!({ "cmd": "OTHER", "evt": "ERROR", "data": [] }),
+    ] {
+        write_json(&mut peer, &reply).await;
     }
     ping_barrier(&mut peer).await;
     quiet(&mut peer, Duration::from_millis(30)).await;

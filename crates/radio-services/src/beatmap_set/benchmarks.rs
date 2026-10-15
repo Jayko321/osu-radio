@@ -259,6 +259,122 @@ async fn snapshot_search_timings() {
 }
 
 #[cfg(feature = "sqlite")]
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Seed, run and verify one private benchmark database together.
+async fn synthetic_fixture_validates_benchmark_search_and_all_reference_stages() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("benchmark.sqlite");
+    let services = crate::Services::connect(path.to_str().unwrap())
+        .await
+        .unwrap();
+    services.migrate().await.unwrap();
+    let mut options = sea_orm::ConnectOptions::new(format!("sqlite://{}?mode=rwc", path.display()));
+    options.sqlx_logging(false);
+    let connection = sea_orm::Database::connect(options).await.unwrap();
+    seed(&connection, 6).await;
+    connection
+        .execute_unprepared("UPDATE beatmap_metadata SET title_unicode='星の曲' WHERE hash='1'")
+        .await
+        .unwrap();
+    connection
+        .execute_unprepared("CREATE TABLE benchmark_sentinel (value INTEGER NOT NULL)")
+        .await
+        .unwrap();
+    connection
+        .execute_unprepared("INSERT INTO benchmark_sentinel VALUES (42)")
+        .await
+        .unwrap();
+    let before = services
+        .beatmap_sets()
+        .all_with_audio_sources()
+        .await
+        .unwrap();
+    for (query, sets, tracks, maps_per_set) in [
+        ("rock", 6, 12, 4),
+        ("rock hard", 6, 6, 2),
+        ("星", 1, 2, 4),
+        ("does-not-exist-zzzz", 0, 0, 0),
+        ("", 6, 12, 4),
+    ] {
+        let found = services
+            .beatmap_sets()
+            .search_with_audio_sources(query)
+            .await
+            .unwrap();
+        assert_eq!(found.len(), sets, "{query}");
+        assert!(
+            found
+                .iter()
+                .all(|set| set.beatmaps.len() == maps_per_set && set.has_multiple_audio_sources)
+        );
+        let found_tracks = services.beatmap_sets().search_tracks(query).await.unwrap();
+        assert_eq!(found_tracks.len(), tracks, "{query}");
+        if query == "星" {
+            assert!(found.iter().all(|set| set.beatmap_set.id == 1));
+            assert_eq!(
+                found_tracks
+                    .iter()
+                    .map(|track| track.audio_source_id)
+                    .collect::<Vec<_>>(),
+                [1, 2]
+            );
+        }
+    }
+    let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "beatmap_set::benchmarks::snapshot_search_timings",
+            "--ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env_clear()
+        .current_dir(directory.path())
+        .kill_on_drop(true)
+        .env("RADIO_SEARCH_BENCH_DB", &path);
+    if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+        command.env("LLVM_PROFILE_FILE", profile);
+    }
+    let output = tokio::time::timeout(std::time::Duration::from_secs(30), command.output())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .filter(|line| line.starts_with("stage="))
+            .count(),
+        15
+    );
+    assert_eq!(
+        services
+            .beatmap_sets()
+            .all_with_audio_sources()
+            .await
+            .unwrap(),
+        before
+    );
+    let sentinel = connection
+        .query_one_raw(sea_orm::Statement::from_string(
+            connection.get_database_backend(),
+            "SELECT value FROM benchmark_sentinel",
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(sentinel.try_get::<i32>("", "value").unwrap(), 42);
+    connection.close().await.unwrap();
+}
+
+#[cfg(feature = "sqlite")]
 enum ReferenceTags {
     Names(Vec<crate::model::SetTag>),
     Ids(Vec<Vec<i32>>),

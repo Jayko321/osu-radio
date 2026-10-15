@@ -66,3 +66,41 @@ pub(crate) fn normalize_md5(value: &str) -> anyhow::Result<String> {
     );
     Ok(value.to_ascii_lowercase())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_source_errors_identify_the_source_kind() {
+        for kind in [OsuKind::Stable, OsuKind::Lazer] {
+            assert_eq!(
+                UnsupportedSourceError { kind }.to_string(),
+                format!("unsupported osu! source: {kind:?}")
+            );
+        }
+    }
+
+    #[test]
+    fn md5_requires_exactly_thirty_two_ascii_hex_digits() {
+        assert_eq!(
+            normalize_md5("0123456789ABCDEFabcdef0123456789").unwrap(),
+            "0123456789abcdefabcdef0123456789"
+        );
+        assert_eq!(
+            normalize_md5("00000000000000000000000000000000").unwrap(),
+            "00000000000000000000000000000000"
+        );
+        for value in [
+            "",
+            "abcdef",
+            "0123456789abcdef0123456789abcde",
+            "0123456789abcdef0123456789abcdef0",
+            "g123456789abcdef0123456789abcdef",
+            " 123456789abcdef0123456789abcdef",
+            "é123456789abcdef0123456789abcde",
+        ] {
+            assert!(normalize_md5(value).is_err(), "accepted {value}");
+        }
+    }
+}

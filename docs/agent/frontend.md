@@ -24,6 +24,13 @@ Vizia has been removed. See [architecture](architecture.md) for the complete own
 
 `ApiClient` owns a reusable HTTP client and normalized base URL. Transport failures, response decoding failures, and unsuccessful HTTP statuses remain distinct `ApiError` cases. Status errors use the response's `error` field where it can be decoded, with the HTTP status as fallback. Keep this handling out of views; this guide intentionally does not freeze endpoint payloads or persistence-dependent status contracts.
 
+The [HTTP boundary contracts](../../crates/osu-radio-client/src/api/contract_tests.rs)
+assert every public operation's method, path/query and request payload, preserve
+HTTP/decode/stream/transport/file error distinctions, and check cover/NDJSON/audio
+size boundaries with local socket fixtures. They use private files and synthetic
+responses; physical output and native Windows remain separate. Executed results
+and unforced failure limits are in the [coverage worklist](test-coverage.md#client-http-boundaries-and-lifecycle-2026-10-15).
+
 `Loading<T>` represents `Idle`, `Pending`, `Ready(T)`, and `Failed(String)` and offers `is_pending`, `value`, `error`, and `from_result`. `describe` walks an error's source chain into a single display message, suppressing cause text already present. These helpers are available to frontends; the current GUI uses a status signal rather than `Loading<T>` for connection status. Unit tests are colocated in [client `lib.rs`](../../crates/osu-radio-client/src/lib.rs).
 
 Songs loads `/api/tracks?q=…` through `ApiClient::search_tracks` and the shared
@@ -50,6 +57,19 @@ not add difficulty notation. `Track` retains every related difficulty (IDs, null
 multiplicity), plus title, artist, subtitle and optional `Duration`, with no toolkit assets. Unknown duration is `--:--`. Selection survives a
 refresh by audio ID, falling back to the first remaining row. Tests live in
 [track.rs](../../crates/osu-radio-client/src/view_models/track.rs).
+
+The [per-file coverage worklist](test-coverage.md#client-dtos-and-presentation-state-2026-10-15)
+records executed DTO volume/null/default/token checks and library/queue request
+cancellation, stale-result and selection assertions. The full client suites run
+with `mock` off/on; the separate embedded-server test uses a private SQLite and
+checks folder persistence through restart. These checks do not establish physical
+audio or native Windows behavior.
+
+The [player/settings/playlist owner checks](test-coverage.md#client-player-settings-and-playlist-owners-2026-10-15)
+exercise token/item-bound seek effects, local presentation while disconnected,
+folder alias preview cancellation and chooser epochs, and retained offline
+playlist drafts/list/mutation state. These reusable VM tests use synthetic state
+and fake workers/sessions; live Qt interactions and physical sound are separate.
 
 ## Track sorting and listening dates
 
@@ -157,6 +177,12 @@ Shuffle, repeat and output-device selection remain deferred.
 Physical output, desktop slider interaction and Windows require separate manual
 checks.
 
+The real worker-thread test uses a fake engine to assert download generations,
+stale-file deletion, ordered Started/Finished feedback, periodic Playing updates,
+source replacement, joined shutdown and temporary-file cleanup. Core tests also
+reject nonfinite/out-of-range assignment volume without replacing the current
+source, mode, token or volume. These checks open no audio device.
+
 ## Discord Rich Presence
 
 The shared client [Discord service](../../crates/osu-radio-client/src/discord.rs)
@@ -246,6 +272,14 @@ Automated coverage: [Activity/lifecycle mock tests](../../crates/osu-radio-clien
 [real IPC worker regressions](../../crates/osu-radio-client/src/discord/tests/ipc.rs)
 cover READY/ACK silence, fragmented/bounded frames, cancellation, raw PING/PONG,
 nonce-correlated fallback, stale replies, clear errors and reconnect backoff.
+The [transport tests](../../crates/osu-radio-client/src/discord/transport.rs)
+also launch child probes with cleared, private runtime/temporary-directory
+environments for Unix discovery (including compatible-client subpaths, index 9,
+Snap's runtime parent and absence). They exercise the real byte-read path without
+searching the user's Discord sockets. Disconnected operations, nonce wraparound,
+restored cancellation after a failed clear, extreme timestamp bounds, watch
+notifications/coalescing and service teardown are asserted directly. IPC fixture
+helpers validate handshake version, PID and nonce fields as well as reply shapes.
 Other coverage includes controller stale-token/selection tests,
 successful seek serial tests and the Qt `discord-*` persistence/search probes.
 Real Discord appearance, artwork propagation, sandbox permissions, physical
@@ -380,6 +414,10 @@ Readiness parsing has focused unit tests in [server.rs](../../crates/osu-radio-c
 The [launcher](../../apps/osu-radio-qt/src/main.rs) selects live or offline gallery
 mode before constructing the runtime. Live mode retains the runtime/controller
 through awaited shutdown and child reaping. Gallery mode has no session or device.
+The [runtime unit contract](../../apps/osu-radio-qt/src/runtime.rs) verifies that
+completed tracked work is pruned, the shared context is cleared during shutdown,
+retained controllers stop, pending tasks are cancelled and already-started
+blocking work completes before shutdown returns, without opening a backend/device.
 
 `AppController::spawn/send/shutdown` remains the command facade. Its one event
 loop coordinates VM inputs and asynchronous results. Library and playlist list
@@ -401,6 +439,25 @@ navigation retains it. Encoded covers stay bounded to 16 MiB and 30 seconds.
 Qt owns the shared 64 MiB decoded cache and scales images proportionally to 1280px.
 QML provider images use `cache: false`; evicted images may reload without repeating
 duration requests. Shutdown cancels requests and awaits workers and the child server.
+
+The [controller checks](../../crates/osu-radio-client/src/controller.rs) and
+[coordination tests](../../crates/osu-radio-client/src/controller/view_model_tests.rs)
+assert generation wraparound with acknowledged HTTP cancellation and retained
+decoder slots, unavailable-cover/unknown-duration caching, duplicate-row duration
+updates and identical metadata lookup precedence in the controller and media
+input. Fake-engine tests exercise stale/current audio-file ownership, offline
+download errors, gated cancellation and public seek dispatch. Process fixtures
+assert one pending connection, retained search debounce and reaping a session
+whose startup completion arrives during shutdown. These checks do not open an
+audio device.
+
+The [client benchmark fixture](../../crates/osu-radio-client/src/controller/benchmarks.rs)
+is an ordinary Unix test that drives both opt-in benchmarks in isolated child
+processes. It compares captured legacy/compact payloads for five synthetic
+queries and serves them through a private HTTP child with no database or media
+access. It asserts representative metadata, empty results, duplicate audio and
+all 120 requests across both endpoint/debounce modes. Standalone benchmark entry
+points remain opt-in; fixture timings are correctness checks, not performance data.
 
 ## Implemented interactions and placeholders
 
@@ -430,6 +487,29 @@ shared workflow described above. Qt folder additions import their source when
 Apply succeeds.
 The engine selects Basic before loading QML, matching the explicit Basic imports
 and keeping fallback file-dialog controls independent of KDE Breeze overrides.
+The offline `native-assets` [probe](../../apps/osu-radio-qt/tests/VisualProbe.qml)
+loads every bundled SVG/PNG/TTF through Qt, checks image readiness/dimensions and
+the Poppins/Nunito font families. The
+[tool tests](../../apps/osu-radio-qt/tests/test_tools.py) compare its manifest with
+the asset directory so added resources require a decode assertion. This checks
+resource packaging and decoding, not desktop/GPU appearance.
+
+The offline `controls`, `controls-popups`, `controls-window` and `controls-panels`
+[adapter probes](../../apps/osu-radio-qt/tests/AdapterProbe.qml) instantiate the
+production components in the gallery window. They assert keyboard/pointer
+activation, disabled input suppression, Unicode field clearing, tab/filter
+selection, menu value roles and navigation, modal dismissal rules and restored
+focus. Composed checks cover blank/preparing/busy editor gates, marker/difficulty
+IDs, empty/error queue states and delegate cleanup. The folder-row width binding
+tolerates its parent disappearing during dialog teardown; the new scenario
+rejects the QML diagnostic that previously occurred after a successful close.
+A window double checks tab/queue/window calls and all resize-edge flags.
+The probes also check Theme font loading, artwork clearing, material coordinate
+updates and Store payload conversion. These are Qt software input/property
+checks; blur, masking and appearance still need desktop/GPU acceptance. Native
+[artwork checks](../../apps/osu-radio-qt/src/native_tests.h) separately assert
+cache keys/epochs and image read/format/decode/size failures without opening an
+audio device or application database.
 
 Each domain adapter exposes typed properties. Library and playlist contents use
 separate instances of the same `TrackListModel` with
@@ -569,6 +649,13 @@ indices in the gallery. Gallery playlist actions modify only in-memory mock data
 Its folder examples exercise registered/new rows, zero and failed counts,
 Computing, staged actions and partial-success retry without filesystem or backend
 access.
+
+The [mock reducer tests](../../crates/osu-radio-client/src/mock.rs) assert staged
+folder actions, partial-success retry, browse/reset and disabled-action isolation.
+The [mock playlist tests](../../crates/osu-radio-client/src/mock/playlists.rs)
+assert editor epochs, cover size/errors/cancellation, revision-specific lookup and
+cleanup, serialized draft exclusion, sort/selection independence from saved order
+and explicit offline playback errors. They use only memory and inert cover bytes.
 
 [`build.rs`](../../apps/osu-radio-qt/build.rs) embeds QML and assets; resource
 loading does not depend on the working directory. Server configuration still does.

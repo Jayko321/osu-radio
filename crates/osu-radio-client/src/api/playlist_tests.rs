@@ -1,7 +1,7 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-async fn read_request(stream: &mut tokio::net::TcpStream) -> (String, Vec<u8>) {
+pub(super) async fn read_request(stream: &mut tokio::net::TcpStream) -> (String, Vec<u8>) {
     let mut headers = Vec::new();
     while !headers.ends_with(b"\r\n\r\n") {
         headers.push(stream.read_u8().await.unwrap());

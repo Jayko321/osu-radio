@@ -66,7 +66,29 @@ inline QString checkArtworkCache() {
     if (artworkUrl(playlistGeneration, 1).isEmpty() || playlistArtworkUrl(playlistGeneration, 1, 1, -1).isEmpty()
         || playlistArtworkUrl(playlistGeneration, 1, 2, -1).isEmpty()) return "playlist cache keys collide";
     if (playlistArtworkUrl(playlistGeneration, 1, 1, -1) == playlistArtworkUrl(playlistGeneration, 1, 2, -1)) return "cover version URL reused";
-    resetArtwork();
+    if (!installPlaylistArtwork(playlistGeneration, 1, -1, 9, bytes).isEmpty()) return "playlist key advertised a track change";
+    if (!installDraftArtwork(playlistGeneration, 9, bytes).isEmpty()) return "draft key advertised a track change";
+    const auto automatic = playlistArtworkUrl(playlistGeneration, 1, -1, 9);
+    const auto draft = draftArtworkUrl(playlistGeneration, 9);
+    if (automatic.isEmpty() || draft.isEmpty() || automatic == draft
+        || automatic == playlistArtworkUrl(playlistGeneration, 1, 1, -1)) return "automatic/draft keys collide";
+    if (!playlistArtworkUrl(playlistGeneration, 1, -1, 10).isEmpty()
+        || !draftArtworkUrl(playlistGeneration, 10).isEmpty()) return "missing artwork key exposed";
+    const auto prefix = QStringLiteral("image://artwork/").size();
+    if (provider.requestImage(automatic.mid(prefix), nullptr, {}).isNull()
+        || provider.requestImage(draft.mid(prefix), nullptr, {}).isNull()) return "nested provider keys missing";
+    if (!provider.requestImage(QStringLiteral("1/invalid"), &size, {}).isNull()) return "malformed provider path exposed";
+    const auto replacementGeneration = resetArtwork();
+    if (replacementGeneration <= playlistGeneration || !artworkUrl(playlistGeneration, 1).isEmpty()
+        || !playlistArtworkUrl(playlistGeneration, 1, -1, 9).isEmpty()
+        || !draftArtworkUrl(playlistGeneration, 9).isEmpty()) return "reset retained old URLs";
+    if (!installDraftArtwork(playlistGeneration, 9, bytes).isEmpty()
+        || !draftArtworkUrl(replacementGeneration, 9).isEmpty()) return "stale draft installation accepted";
+    {
+        auto cache = artworkCache();
+        QMutexLocker lock(&cache->mutex);
+        if (cache->bytes != 0 || !cache->entries.empty() || !cache->protectedKey.isEmpty()) return "reset retained cache state";
+    }
     return {};
 }
 inline QString checkPlaylistCoverPreparation() {
@@ -88,6 +110,11 @@ inline QString checkPlaylistCoverPreparation() {
     if (decoded.size() != QSize(512, 512) || decoded.pixelColor(0, 0) != QColor(Qt::green)
         || decoded.pixelColor(511, 511) != QColor(Qt::green)) return "center crop or retained PNG failed";
     if (!preparePlaylistCover("https://example.invalid/image.png", error).isEmpty() || error.isEmpty()) return "remote URL accepted";
+    if (!preparePlaylistCover(QUrl::fromLocalFile(path).toString(), error).isEmpty()
+        || error != "Cannot open the selected image.") return "missing local file error lost";
+    if (!original.save(path, "BMP")) return "BMP fixture encoding failed";
+    if (!preparePlaylistCover(QUrl::fromLocalFile(path).toString(), error).isEmpty()
+        || error != "Choose a PNG or JPEG image.") return "unsupported image format accepted";
     QFile invalid(path);
     if (!invalid.open(QIODevice::WriteOnly)) return "invalid fixture creation failed";
     invalid.write("broken image"); invalid.close();
@@ -112,5 +139,17 @@ inline QString checkPlaylistCoverPreparation() {
     const auto oriented = QImage::fromData(preparePlaylistCover(QUrl::fromLocalFile(path).toString(), error), "PNG");
     if (!error.isEmpty() || oriented.isNull()) return "JPEG preparation failed";
     if (oriented.pixelColor(256, 40).red() < 200 || oriented.pixelColor(256, 470).blue() < 200) return "EXIF orientation ignored";
+    // Keep valid PNG metadata but corrupt compressed pixels to reach the decode error.
+    QByteArray encoded; QBuffer encodedBuffer(&encoded); encodedBuffer.open(QIODevice::WriteOnly);
+    if (!original.save(&encodedBuffer, "PNG")) return "damaged fixture encoding failed";
+    const auto idat = encoded.indexOf("IDAT");
+    if (idat < 0 || idat + 6 >= encoded.size()) return "fixture pixel chunk missing";
+    encoded[idat + 4] = 0; encoded[idat + 5] = 0;
+    if (!invalid.open(QIODevice::WriteOnly)) return "damaged fixture creation failed";
+    invalid.write(encoded); invalid.close();
+    if (!preparePlaylistCover(QUrl::fromLocalFile(path).toString(), error).isEmpty()
+        || error != "Cannot decode the selected image.") return "damaged PNG decode error lost: " + error;
+    if (!original.save(path, "PNG") || preparePlaylistCover(QUrl::fromLocalFile(path).toString(), error).isEmpty()
+        || !error.isEmpty()) return "successful preparation retained a previous error";
     return {};
 }

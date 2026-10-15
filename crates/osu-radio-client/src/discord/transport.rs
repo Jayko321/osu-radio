@@ -245,6 +245,129 @@ async fn open() -> io::Result<Socket> {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn disconnected_operations_and_wrapping_nonces_preserve_transport_state() {
+        let (_sender, receiver) = watch::channel(Desired::default());
+        let mut transport = Transport::new(Handle::current(), receiver);
+        assert_eq!(transport.get_client_id(), APPLICATION_ID);
+        assert!(matches!(transport.ready().await, Err(Error::NotConnected)));
+        assert!(matches!(transport.recv_raw(), Err(Error::NotConnected)));
+        assert!(matches!(transport.read(&mut [0]), Err(Error::NotConnected)));
+        assert!(matches!(transport.write(&[1]), Err(Error::NotConnected)));
+        assert!(matches!(transport.pong(&[2]), Err(Error::NotConnected)));
+        assert!(matches!(
+            crate::discord::Rpc::clear(&mut transport),
+            Err(Error::NotConnected)
+        ));
+        assert!(
+            transport.cancellable,
+            "a failed clear restores normal cancellation"
+        );
+        transport.nonce = u64::MAX;
+        assert_eq!(transport.next_nonce(), "0");
+        assert_eq!(transport.next_nonce(), "1");
+        DiscordIpc::close(&mut transport).unwrap();
+        DiscordIpc::close(&mut transport).unwrap();
+        assert!(transport.socket.is_none() && transport.first_byte.is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[allow(clippy::too_many_lines)]
+    async fn unix_discovery_uses_only_child_environment_roots_and_reports_absence() {
+        const PROBE: &str = "OSU_RADIO_TEST_DISCORD_SOCKET";
+        const MISSING: &str = "OSU_RADIO_TEST_DISCORD_MISSING";
+        if let Some(path) = std::env::var_os(PROBE) {
+            let (_sender, receiver) = watch::channel(Desired {
+                enabled: true,
+                ..Desired::default()
+            });
+            let mut transport = Transport::new(Handle::current(), receiver);
+            if std::env::var_os(MISSING).is_some() {
+                let error = tokio::task::spawn_blocking(move || transport.connect_ipc())
+                    .await
+                    .unwrap()
+                    .unwrap_err();
+                assert!(
+                    matches!(error, Error::ReadError(ref error) if error.kind() == io::ErrorKind::NotFound)
+                );
+                return;
+            }
+            let path = std::path::PathBuf::from(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let listener = tokio::net::UnixListener::bind(&path).unwrap();
+            let task = tokio::task::spawn_blocking(move || {
+                transport.connect_ipc().unwrap();
+                let mut bytes = [0; 3];
+                transport.read(&mut bytes).unwrap();
+                assert_eq!(bytes, [3, 2, 1]);
+                DiscordIpc::close(&mut transport).unwrap();
+                assert!(matches!(
+                    transport.read(&mut bytes),
+                    Err(Error::NotConnected)
+                ));
+            });
+            let (mut peer, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                .await
+                .unwrap()
+                .unwrap();
+            peer.write_all(&[3, 2, 1]).await.unwrap();
+            tokio::time::timeout(Duration::from_secs(5), task)
+                .await
+                .unwrap()
+                .unwrap();
+            return;
+        }
+
+        for (root_name, subpath, index) in [
+            ("XDG_RUNTIME_DIR", "", 0),
+            ("TMPDIR", "app/dev.vencord.Vesktop", 9),
+            ("TMP", ".flatpak/com.discordapp.Discord/xdg-run", 4),
+            ("TEMP", "snap.discord-canary", 8),
+            ("SNAP", ".flatpak/dev.vencord.Vesktop", 1),
+            ("MISSING", "", 0),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+            command.args(["--exact", "discord::transport::tests::unix_discovery_uses_only_child_environment_roots_and_reports_absence", "--nocapture", "--test-threads=1"])
+                .env_clear().current_dir(directory.path()).kill_on_drop(true);
+            let mut selected = directory.path().join("unused");
+            for name in ["XDG_RUNTIME_DIR", "TMPDIR", "TMP", "TEMP"] {
+                let path = directory.path().join(name);
+                std::fs::create_dir_all(&path).unwrap();
+                command.env(name, &path);
+                if name == root_name {
+                    selected = path;
+                }
+            }
+            if root_name == "SNAP" {
+                selected = directory.path().to_owned();
+                command.env("SNAP", "fixture");
+            }
+            if root_name == "MISSING" {
+                command.env(MISSING, "1");
+            }
+            command.env(
+                PROBE,
+                selected.join(subpath).join(format!("discord-ipc-{index}")),
+            );
+            if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+                command.env("LLVM_PROFILE_FILE", profile);
+            }
+            let output = tokio::time::timeout(Duration::from_secs(10), command.output())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{root_name}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"));
+        }
+    }
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn cancelling_first_byte_wait_preserves_frame_and_close_discards_saved_byte() {

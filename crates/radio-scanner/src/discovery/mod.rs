@@ -439,6 +439,47 @@ mod tests {
         assert_eq!(deduped, paths);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn known_aliases_deduplicate_by_identity_and_preserve_the_first_readable_path() {
+        let temp = TempDir::new().unwrap();
+        let real = temp.path().join("real installation");
+        let alias = temp.path().join("installation alias");
+        write_marker(&real.join("client.realm"));
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let markers = find_osu_markers(&DiscoveryOptions {
+            roots: vec![alias.clone(), real, alias.clone()],
+            depth: DiscoveryDepth::Known,
+            ..DiscoveryOptions::default()
+        });
+        assert_eq!(markers.len(), 1);
+        assert_eq!(markers[0].marker_path, alias.join("client.realm"));
+        assert_eq!(markers[0].root_path, alias);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sweep_skips_links_and_missing_roots_without_leaving_the_explicit_tree() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("scan here");
+        let external = temp.path().join("outside the scan");
+        write_marker(&root.join("nested/real/client.realm"));
+        write_marker(&external.join("client.realm"));
+        std::os::unix::fs::symlink(&external, root.join("nested/directory link")).unwrap();
+        std::os::unix::fs::symlink(external.join("client.realm"), root.join("nested/osu!.db"))
+            .unwrap();
+        let markers = find_osu_markers(&DiscoveryOptions {
+            roots: vec![temp.path().join("does not exist"), root.clone()],
+            ..DiscoveryOptions::default()
+        });
+        assert_eq!(markers.len(), 1, "{markers:?}");
+        assert_eq!(
+            markers[0].marker_path,
+            root.join("nested/real/client.realm")
+        );
+        assert_eq!(markers[0].kind, OsuKind::Lazer);
+    }
+
     #[tokio::test]
     async fn discover_stream_yields_the_same_markers_as_the_sync_core() {
         let temp = fixture();

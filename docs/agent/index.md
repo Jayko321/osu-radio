@@ -14,6 +14,7 @@ successful playback or validation on every target platform.
    before editing an affected behavior.
 3. Use [development](development.md) for environment requirements, scoped
    commands, verification selection, troubleshooting, and upstream documentation.
+   The [coverage worklist](test-coverage.md) records per-file test evidence and verification limits.
 4. For GUI or scanner implementation work, follow the linked
    [GUI](../../.agents/skills/osu-radio-gui/SKILL.md) or
    [scanner](../../.agents/skills/osu-radio-scanner/SKILL.md) procedure. For a

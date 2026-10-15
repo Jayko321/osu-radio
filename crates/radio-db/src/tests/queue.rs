@@ -2,6 +2,7 @@ use super::*;
 use crate::model::{PlaybackMode, QueueState};
 use sea_orm_migration::MigratorTrait;
 
+#[allow(clippy::too_many_lines)] // One migrated queue fixture checks reopen, rollback and rejected saves.
 pub(super) async fn migration_contracts(database: &Database, url: &str) {
     crate::migrations::Migrator::up(&database.connection, Some(4))
         .await
@@ -86,6 +87,41 @@ pub(super) async fn migration_contracts(database: &Database, url: &str) {
     assert!(database.queue().save(&invalid).await.is_err());
     invalid.current_index = Some(2);
     assert!(database.queue().save(&invalid).await.is_err());
+    let mut mismatched = state.clone();
+    mismatched.playlist_item_ids.pop();
+    for invalid in [
+        mismatched,
+        QueueState {
+            current_index: None,
+            ..state.clone()
+        },
+        QueueState {
+            revision: u64::MAX,
+            ..state.clone()
+        },
+        QueueState {
+            playback_token: u64::MAX,
+            ..state.clone()
+        },
+        QueueState {
+            mode: PlaybackMode::Paused,
+            ..empty.clone()
+        },
+        QueueState {
+            current_index: Some(0),
+            ..empty.clone()
+        },
+    ] {
+        assert!(
+            database.queue().save(&invalid).await.is_err(),
+            "{invalid:?}"
+        );
+        assert_eq!(
+            database.queue().get().await.unwrap(),
+            state,
+            "a rejected save must be atomic"
+        );
+    }
     database.reset().await.unwrap();
     assert_eq!(database.queue().get().await.unwrap(), empty);
     drop_application_tables(database).await;

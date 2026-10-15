@@ -282,3 +282,113 @@ impl LibraryViewModel {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::controller::tests::track;
+
+    #[tokio::test]
+    async fn new_load_cancels_old_work_and_stale_completion_preserves_current_status() {
+        let mut library = LibraryViewModel::default();
+        let old = tokio::spawn(std::future::pending::<()>());
+        library.task = Some(old.abort_handle());
+        library.request = u64::MAX;
+        library.connection_pending();
+        assert!(library.status().loading);
+        assert_eq!(library.status().message, "Connecting…");
+        let before = Instant::now();
+        assert_eq!(library.begin_load(Duration::from_secs(1), false), (0, true));
+        assert!(library.deadline.unwrap() >= before.checked_add(Duration::from_secs(1)).unwrap());
+        assert!(
+            library.deadline.unwrap()
+                <= Instant::now().checked_add(Duration::from_secs(1)).unwrap()
+        );
+        assert!(old.await.unwrap_err().is_cancelled());
+        assert!(!library.accepts(u64::MAX));
+        assert!(
+            library.status().loading,
+            "stale completion cannot clear current status"
+        );
+        assert!(library.accepts(0));
+        assert!(!library.status().loading);
+        assert!(library.status().message.is_empty());
+        library.invalidation_pending = false;
+        assert_eq!(library.begin_load(Duration::ZERO, false), (1, false));
+        assert_eq!(library.begin_load(Duration::ZERO, true), (2, true));
+        assert_eq!(library.begin_load(Duration::ZERO, false), (3, true));
+        library.connection_failed("offline".into());
+        assert!(!library.status().loading);
+        assert_eq!(library.status().message, "offline");
+        assert_eq!(library.status().retry, Some(SettingsRetry::Load));
+        library.connection_pending();
+        library.connection_finished();
+        assert!(!library.status().loading);
+        assert!(library.status().retry.is_none());
+    }
+
+    #[test]
+    fn refresh_preserves_current_selection_outside_results_and_rejects_unavailable_selection() {
+        let mut library = LibraryViewModel::default();
+        library.replace(vec![track(7), track(8)], None);
+        assert_eq!(library.tracks().len(), 2);
+        assert_eq!(library.selected_id(), Some(7));
+        assert!(!library.select(Some(99), false));
+        assert_eq!(library.selected_id(), Some(7));
+        assert!(library.select(Some(8), true));
+        library.replace(vec![track(7)], Some(8));
+        assert_eq!(library.selected_id(), Some(8));
+        library.replace(vec![track(7)], None);
+        assert_eq!(library.selected_id(), Some(7));
+        assert!(library.select(None, false));
+        assert_eq!(library.selected_id(), None);
+        library.replace(Vec::new(), None);
+        assert_eq!(library.selected_id(), None);
+        assert_eq!(
+            library.status().message,
+            "No songs yet. Import an osu! folder to populate your library."
+        );
+        assert!(library.search(" 曲 ".into()));
+        assert!(!library.search(" 曲 ".into()));
+        assert_eq!(library.query(), " 曲 ");
+        library.replace(Vec::new(), None);
+        assert_eq!(library.status().message, "Nothing found.");
+        assert!(library.search(" \t ".into()));
+        library.replace(Vec::new(), None);
+        assert_eq!(
+            library.status().message,
+            "No songs yet. Import an osu! folder to populate your library."
+        );
+    }
+
+    #[test]
+    fn history_only_moves_forward_and_updates_skip_unrelated_and_unavailable_rows() {
+        let mut library = LibraryViewModel::default();
+        let mut missing = track(-1);
+        missing.last_played_at_ms = Some(3);
+        let mut rows = vec![track(7), track(8), missing];
+        library.remember_dates(vec![(7, 20), (7, 10), (-1, 99)]);
+        library.merge_last_played(&mut rows);
+        assert_eq!(
+            rows.iter().map(|r| r.last_played_at_ms).collect::<Vec<_>>(),
+            [Some(20), None, Some(3)]
+        );
+        library.replace(rows, None);
+        library.remember_dates(vec![(7, 15), (8, 30)]);
+        assert!(library.apply_known_dates());
+        assert!(!library.apply_known_dates());
+        let before = library.tracks().to_vec();
+        library.set_duration(7, None);
+        library.set_track_volume(7, Some(0));
+        assert_eq!(library.tracks().first().unwrap().duration, None);
+        assert_eq!(library.tracks().first().unwrap().volume_percent, Some(0));
+        assert_eq!(library.tracks().get(1..), before.get(1..));
+        library.set_duration(7, Some(Duration::ZERO));
+        library.set_track_volume(7, None);
+        assert_eq!(
+            library.tracks().first().unwrap().duration,
+            Some(Duration::ZERO)
+        );
+        assert_eq!(library.tracks().first().unwrap().volume_percent, None);
+    }
+}

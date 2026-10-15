@@ -73,9 +73,18 @@ run in separate processes with cleared application environments and temporary
 working directories. They cover environment-only configuration, the default and
 explicit address, the required backend-specific URL, valid dotenv loading,
 process-variable precedence and fatal parse/read errors. The
-[startup test](../../apps/osu-radio-server/tests/startup.rs) launches the actual
+[repository dotenv test](../../apps/osu-radio-server/src/config/tests.rs) separately
+parses the checkout's optional `.env` through `dotenvy::from_read_iter`, compares
+the process environment before/after and withholds values in diagnostics. It
+does not install those values, construct application state or connect to the
+configured database. A checkout without that optional file skips this read.
+
+The [startup tests](../../apps/osu-radio-server/tests/startup.rs) launch the actual
 SQLite server without `.env`, using in-memory storage and an ephemeral loopback
-port. Both docs feature states run these checks; PostgreSQL configuration checks
+port. They also check configuration/connection/bind failures, including a held
+loopback port, nonzero exit and no false readiness announcement. Child-only
+environment and private working directories keep the application database out of
+these checks. Both docs feature states run them; PostgreSQL configuration checks
 need no database connection.
 
 The server emits:
@@ -365,6 +374,13 @@ without launching a server. Additional Unix process regressions cover missing
 binaries, a silent child, a live child closing stdout and startup cancellation,
 including awaited child cleanup.
 
+Additional client lifecycle assertions distinguish missing/nonexecutable child
+binaries, early exit and invalid UTF-8 output, and observe cleanup after explicit
+shutdown, startup cancellation and Drop. Binary resolution precedence is checked
+in child-only environment probes with private executable paths; no shared binary
+or parent environment is changed. The [coverage worklist](test-coverage.md#client-http-boundaries-and-lifecycle-2026-10-15)
+records executed Linux results and unforced failure paths.
+
 The ignored integration test
 [`the_embedded_server_answers_on_the_port_it_reports`](../../crates/osu-radio-client/tests/embedded_server.rs)
 launches a built server and also exercises database-backed requests. It is not a
@@ -372,6 +388,16 @@ pure supervision test; run it only against its isolated test environment. Server
 route tests use [`test_support.rs`](../../apps/osu-radio-server/src/test_support.rs),
 cover service-backed responses with isolated memory SQLite. Shared workflow and
 folder-validation tests live in `radio-services`, as described in [database](database.md).
+
+The [router contracts](../../apps/osu-radio-server/src/routes/mod.rs) now verify
+all 25 API paths and 35 method/path pairs with `docs` enabled/disabled, reject
+unsupported verbs and resolve every served OpenAPI schema reference. Projection
+checks compare complete track/set DTO JSON; rejected settings patches retain old
+values. [AppState tests](../../apps/osu-radio-server/src/state.rs) reopen a private
+SQLite database to verify paused queue recovery and monotone shared notifications.
+The [coverage worklist](test-coverage.md#server-routes-projections-and-recovery-2026-10-15)
+records actual runs and the separate benchmark, PostgreSQL compile-only, platform
+and physical-output limits.
 
 All behavior above is source-confirmed. Recommended checks and actual validation
 results must be reported separately; a source review or compile check is not a

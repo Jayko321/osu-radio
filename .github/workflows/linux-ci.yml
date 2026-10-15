@@ -41,6 +41,14 @@ jobs:
           dotnet-version: '8.0.x'
       - name: Install native build dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev
+      - name: Repository metadata tests
+        run: python3 -B -m unittest discover -s tests -v
+      - name: Scanner helper build script tests
+        run: python3 -B -m unittest discover -s crates/radio-scanner/tests -p 'test_*.py' -v
+      - name: Benchmark script tests
+        run: python3 -B -m unittest discover -s tools/search-benchmark -v
+      - name: Qt verification script tests
+        run: python3 -B -m unittest discover -s apps/osu-radio-qt/tests -p 'test_*.py' -v
       # radio-scanner's build.rs compiles the real .NET Realm helper.
       # Default database features select SQLite; ignored benchmarks stay skipped.
       - name: Core, scanner, SQLite backend and audio unit tests

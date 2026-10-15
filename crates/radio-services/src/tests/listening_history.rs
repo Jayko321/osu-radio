@@ -65,7 +65,15 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
     let acknowledgment = Command::Started {
         playback_token: launch.playback_token,
     };
+    let earliest = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
     let (one, two) = tokio::join!(left.command(acknowledgment), right.command(acknowledgment));
+    let latest = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
     let accounted = one.unwrap();
     assert_eq!(two.unwrap(), accounted);
     assert_eq!(
@@ -77,6 +85,10 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
     assert_eq!(accounted.revision, paused.revision.checked_add(1).unwrap());
     let timestamp = accounted.track.as_ref().unwrap().last_played_at_ms.unwrap();
     assert!(timestamp > 0);
+    assert!(
+        (earliest..=latest).contains(&u128::try_from(timestamp).unwrap()),
+        "history must use Unix milliseconds within the acknowledgement interval"
+    );
     assert_eq!(started(database, launch.playback_token).await, accounted);
     let tracks = database
         .beatmap_sets()

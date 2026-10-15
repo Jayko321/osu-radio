@@ -7,6 +7,31 @@ use super::{ADDRESS_ENV, DATABASE_URL_ENV, ServerConfig};
 const PROBE_ENV: &str = "OSU_RADIO_CONFIG_TEST_CASE";
 const DATABASE_URL: &str = "database-from-environment";
 
+#[test]
+fn repository_dotenv_parses_without_loading_values_or_connecting() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.env");
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return,
+        Err(error) => panic!(
+            "cannot read repository .env ({:?}); contents withheld",
+            error.kind()
+        ),
+    };
+    let before: std::collections::BTreeMap<_, _> = env::vars_os().collect();
+    // Iteration validates syntax without installing values or opening a database.
+    for entry in dotenvy::from_read_iter(file) {
+        assert!(
+            entry.is_ok(),
+            "repository .env syntax error; contents withheld"
+        );
+    }
+    assert!(
+        env::vars_os().collect::<std::collections::BTreeMap<_, _>>() == before,
+        "dotenv parsing must not modify the process environment"
+    );
+}
+
 fn directory_without_dotenv() -> TempDir {
     let directory = TempDir::new().expect("temporary working directory");
     for ancestor in directory.path().ancestors() {
@@ -27,8 +52,8 @@ fn check_in_subprocess(directory: &Path, scenario: &str, variables: &[(&str, &st
         .env_clear()
         .env(PROBE_ENV, scenario)
         .envs(variables.iter().copied());
-    // Windows needs SystemRoot; PATH may contain runtime DLLs. Neither supplies app config.
-    for name in ["SystemRoot", "PATH"] {
+    // Preserve runtime lookup and per-process coverage without inheriting app configuration.
+    for name in ["SystemRoot", "PATH", "LLVM_PROFILE_FILE"] {
         if let Some(value) = env::var_os(name) {
             command.env(name, value);
         }

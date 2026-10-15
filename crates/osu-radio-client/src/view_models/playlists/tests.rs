@@ -372,6 +372,185 @@ fn summary(id: i32, revision: Option<i64>) -> PlaylistSummary {
 }
 
 #[test]
+fn offline_editor_keeps_its_draft_rejects_oversized_covers_and_omits_bytes_from_serialized_state() {
+    let (mut state, _) = crate::controller::tests::controller();
+    state.playlist_action(PlaylistAction::BeginCreate);
+    state.playlist_action(PlaylistAction::SetEditorName(" 曲 ".into()));
+    state.playlist_action(PlaylistAction::CompleteCoverPick {
+        epoch: state.playlists.view.editor_epoch,
+        png: Ok(Some(vec![1, 2, 3])),
+    });
+    let epoch = state.playlists.view.editor_epoch;
+    state.playlist_action(PlaylistAction::CompleteCoverPick {
+        epoch,
+        png: Ok(Some(vec![0; 2 * 1024 * 1024 + 1])),
+    });
+    assert_eq!(state.playlists.view.editor_cover_png, Some(vec![1, 2, 3]));
+    assert_eq!(state.playlists.view.editor_epoch, epoch);
+    assert_eq!(
+        state.playlists.view.message,
+        "Playlist cover exceeds 2 MiB."
+    );
+    state.playlist_action(PlaylistAction::SaveEditor);
+    assert_eq!(
+        state.playlists.view.message,
+        "Connect to the server to edit playlists."
+    );
+    assert_eq!(state.playlists.view.editor_name, " 曲 ");
+    assert!(state.playlists.view.editor_open && !state.playlists.view.busy);
+    let json = serde_json::to_value(&state.playlists.view).unwrap();
+    assert_eq!(json["editor_name"], " 曲 ");
+    assert!(json.get("editor_cover_png").is_none());
+    state.playlists.view.busy = true;
+    let before = state.playlists.view.clone();
+    for action in [
+        PlaylistAction::BeginCreate,
+        PlaylistAction::SetEditorName("ignored".into()),
+        PlaylistAction::CancelEditor,
+        PlaylistAction::ResetEditorCover,
+        PlaylistAction::Close,
+    ] {
+        state.playlist_action(action);
+        assert_eq!(state.playlists.view, before);
+    }
+    state.playlists.view.busy = false;
+    state.playlist_action(PlaylistAction::Create("Offline".into()));
+    assert_eq!(
+        state.playlists.view.message,
+        "Connect to the server to edit playlists."
+    );
+    assert!(state.tasks.is_empty() && state.player.commands.is_empty() && state.playback.is_none());
+}
+
+#[test]
+fn current_list_errors_keep_detail_but_deleted_active_playlist_clears_only_its_selection() {
+    let (mut state, _) = crate::controller::tests::controller();
+    state.replace_tracks(vec![crate::controller::tests::track(99)], true);
+    install(&mut state, 7);
+    state.playlists.view.playlists = vec![summary(7, None)];
+    state.playlists.view.target_id = Some(7);
+    state.playlists.list_epoch = 5;
+    assert!(!state.playlists.select_item(99));
+    assert!(state.playlists.select_item(2));
+    assert_eq!(state.playlists.view.selected_item_id, Some(2));
+    state.playlists.view.visible = false;
+    assert!(!state.playlists.select_item(1));
+    assert_eq!(state.playlists.view.selected_item_id, Some(2));
+    state.playlists.view.visible = true;
+    let before = state.playlists.view.active.clone();
+    let rows = state.playlists.tracks.clone();
+    state.playlist_event(PlaylistEvent::List {
+        epoch: 5,
+        result: Err("list unavailable".into()),
+    });
+    assert_eq!(state.playlists.view.active, before);
+    assert_eq!(state.playlists.tracks, rows);
+    assert_eq!(state.playlists.view.message, "list unavailable");
+    let mut next = summary(8, None);
+    next.name = "Плейлист".into();
+    state.playlist_event(PlaylistEvent::List {
+        epoch: 5,
+        result: Ok(vec![next]),
+    });
+    assert_eq!(state.playlists.view.target_id, Some(8));
+    assert_eq!(state.playlists.view.active_id, None);
+    assert_eq!(state.playlists.view.selected_item_id, None);
+    assert!(state.playlists.tracks.is_empty() && state.playlists.view.active.is_none());
+    assert_eq!(state.library.selected_id(), Some(99));
+    state.playlist_action(PlaylistAction::Search("ПЛЕЙ".into()));
+    assert_eq!(
+        state
+            .playlists
+            .state()
+            .filtered_playlists()
+            .iter()
+            .map(|p| p.id)
+            .collect::<Vec<_>>(),
+        [8]
+    );
+    state.playlist_action(PlaylistAction::Search("absent".into()));
+    assert!(state.playlists.state().filtered_playlists().is_empty());
+    state.playlist_event(PlaylistEvent::List {
+        epoch: 5,
+        result: Ok(Vec::new()),
+    });
+    assert!(state.playlists.view.playlists.is_empty());
+    assert_eq!(state.playlists.view.target_id, None);
+    assert_eq!(state.library.selected_id(), Some(99));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn add_validation_and_created_renamed_deleted_results_preserve_library_state() {
+    let (_directory, session) = crate::controller::tests::test_session().await;
+    let (mut state, _) = crate::controller::tests::controller();
+    state.session = Some(session);
+    state.replace_tracks(vec![crate::controller::tests::track(99)], true);
+    install(&mut state, 7);
+    state.playlists.view.playlists = vec![summary(7, None)];
+    state.playlists.view.candidates = vec![PlaylistCandidate {
+        beatmap_id: 1,
+        name: "Hard".into(),
+        checked: true,
+    }];
+    state.playlist_action(PlaylistAction::Add);
+    assert_eq!(
+        state.playlists.view.message,
+        "Choose a playlist and at least one difficulty."
+    );
+    assert!(state.tasks.is_empty() && !state.playlists.view.busy);
+    state.playlists.view.target_id = Some(7);
+    state.playlists.view.candidates[0].checked = false;
+    state.playlist_action(PlaylistAction::Add);
+    assert_eq!(
+        state.playlists.view.message,
+        "Choose a playlist and at least one difficulty."
+    );
+    assert!(state.tasks.is_empty() && !state.playlists.view.busy);
+    state.playlist_event(PlaylistEvent::Mutation(Ok(Mutation::Created(summary(
+        8, None,
+    )))));
+    assert_eq!(state.playlists.view.target_id, Some(8));
+    assert_eq!(
+        state
+            .playlists
+            .view
+            .playlists
+            .iter()
+            .map(|p| p.id)
+            .collect::<Vec<_>>(),
+        [7, 8]
+    );
+    let mut renamed = summary(7, None);
+    renamed.name = "Renamed".into();
+    state.playlist_event(PlaylistEvent::Mutation(Ok(Mutation::Renamed(renamed))));
+    assert_eq!(
+        state.playlists.view.active.as_ref().unwrap().name,
+        "Renamed"
+    );
+    state.playlist_action(PlaylistAction::BeginEdit(7));
+    assert!(state.playlists.view.editor_open);
+    state.playlist_event(PlaylistEvent::Mutation(Ok(Mutation::Deleted(7))));
+    assert!(!state.playlists.view.editor_open);
+    assert!(state.playlists.view.active.is_none() && state.playlists.tracks.is_empty());
+    assert_eq!(
+        state
+            .playlists
+            .view
+            .playlists
+            .iter()
+            .map(|p| p.id)
+            .collect::<Vec<_>>(),
+        [8]
+    );
+    assert_eq!(state.library.selected_id(), Some(99));
+    assert!(state.player.commands.is_empty());
+    state.tasks.abort_all();
+    while state.tasks.join_next().await.is_some() {}
+    state.session.take().unwrap().shutdown().await.unwrap();
+}
+
+#[test]
 fn tabs_keep_independent_search_and_restore_the_playlist_item_without_playing() {
     let (mut state, updates) = crate::controller::tests::controller();
     state.replace_tracks(
