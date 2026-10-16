@@ -79,6 +79,8 @@ workspace/path/lockfile consistency, declared entry points, ignore rules and the
 coverage inventory. It also checks nonempty UTF-8 Markdown/closed example fences,
 player fixture names and full bundled attribution texts (normalizing line endings).
 It does not verify prose claims or external links.
+Agent guides under `docs/agent/` and `docs/specs/*.md` are versioned; implementation
+plans and other `docs/` files stay local and ignored. Link checks skip ignored targets.
 The same suite now checks the pinned toolchain's required components, the scoped
 CI command matrix and Bash syntax, root-anchored nested ignore rules, empty legacy
 metadata/no gitlinks and selected CR/Serena metadata fields. These tooling metadata

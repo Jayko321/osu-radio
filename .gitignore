@@ -1,7 +1,11 @@
 /target
 __pycache__/
 tools/**/FodyWeavers.xsd
-!docs/agent/
+/docs/*
+!/docs/agent/
+!/docs/specs/
+/docs/specs/*
+!/docs/specs/*.md
 tools/**/bin/
 tools/**/target/
 tools/**/obj/

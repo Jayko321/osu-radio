@@ -86,8 +86,15 @@ class RepositoryContracts(unittest.TestCase):
                 url = urlsplit(target.strip().strip("<>"))
                 if url.scheme or url.netloc:
                     continue
+                destination = source.parent / unquote(url.path) if url.path else source
+                ignored = subprocess.run(
+                    ["git", "check-ignore", "--no-index", "--quiet", "--", str(destination)],
+                    cwd=ROOT, capture_output=True,
+                )
+                self.assertIn(ignored.returncode, [0, 1], ignored.stderr)
+                if ignored.returncode == 0:
+                    continue
                 with self.subTest(source=name, target=target):
-                    destination = source.parent / unquote(url.path) if url.path else source
                     self.assertTrue(destination.exists(), f"Missing local target: {target}")
                     if url.fragment and destination.suffix == ".md":
                         self.assertIn(unquote(url.fragment), heading_anchors(destination.read_text(encoding="utf-8")))
@@ -163,14 +170,17 @@ class RepositoryContracts(unittest.TestCase):
                     if "path" in target:
                         self.assertTrue((base / target["path"]).is_file(), target["path"])
 
-    def test_generated_files_are_ignored_while_source_guides_remain_visible(self):
+    def test_generated_files_and_local_docs_are_ignored_while_sources_and_specs_remain_visible(self):
         generated = ["target/test-output", "docs/review-report.md", "tools/fixture/obj/restore.json",
+                     "docs/impl/queue-rework.md", "docs/agent-notes.md",
+                     "docs/specs/notes.txt", "docs/specs/nested/spec.md", "docs/specs.md", "docs/notes.md",
                      "tools/fixture/bin/fixture", "apps/osu-radio-qt/tests/fixtures/__pycache__/server.cpython-314.pyc",
                      "osu-radio.db", "osu-radio.db-shm", "osu-radio.db-wal",
                      ".serena/cache/probe", ".serena/project.local.yml",
                      "apps/osu-radio-qt/.qmlls.ini", "apps/osu-radio-cli/target/probe",
                      "crates/radio-core/target/probe", "crates/radio-scanner/target/probe"]
-        sources = ["docs/agent/index.md", "docs/agent/test-coverage.md", "crates/radio-core/src/lib.rs",
+        sources = ["docs/agent/index.md", "docs/agent/test-coverage.md", "docs/agent/nested/guide.md",
+                   "docs/specs/queue-rework.md", "docs/specs/new-feature.md", "crates/radio-core/src/lib.rs",
                    "apps/osu-radio-qt/tests/test_tools.py", "tools/osu-lazer-realm-parser/Program.cs",
                    ".serena/project.yml", ".serena/nested/cache/probe", ".serena/nested/project.local.yml",
                    "apps/osu-radio-qt/nested/.qmlls.ini", "apps/osu-radio-cli/targeting/source.rs",
@@ -273,6 +283,13 @@ class RepositoryContracts(unittest.TestCase):
         entries = re.findall(r"^\| \[([^]]+)\]\([^\n]+?\) \| (?:Focused|Pending) \|", worklist, re.MULTILINE)
         self.assertEqual(len(entries), len(set(entries)), "Duplicate inventory entries")
         self.assertEqual(set(entries), self.files)
+
+    def test_docs_only_contains_versioned_agent_guides_and_specification_markdown(self):
+        for name in self.files:
+            if name.startswith("docs/") and not name.startswith("docs/agent/"):
+                with self.subTest(file=name):
+                    self.assertEqual(Path(name).parent.as_posix(), "docs/specs")
+                    self.assertEqual(Path(name).suffix, ".md")
 
 
 if __name__ == "__main__":
