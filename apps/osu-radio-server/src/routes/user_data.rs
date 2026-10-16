@@ -252,6 +252,7 @@ pub(crate) async fn remove_osu_folder(
     let removed = state.services().osu_installations().delete(id).await?;
 
     if removed {
+        state.wake_queue_checks();
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(unknown_folder(id))

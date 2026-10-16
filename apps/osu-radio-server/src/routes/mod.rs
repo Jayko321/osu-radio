@@ -37,6 +37,7 @@ pub(crate) fn router(state: AppState) -> Router {
             axum::routing::delete(playlists::remove_item),
         )
         .route("/api/playlists/{id}/play", post(playlists::play))
+        .route("/api/playlists/{id}/queue", post(playlists::append_queue))
         .route(
             "/api/playlists/{id}/cover",
             get(playlists::get_cover)
@@ -51,6 +52,18 @@ pub(crate) fn router(state: AppState) -> Router {
             get(playback::get_queue).delete(playback::clear_queue),
         )
         .route("/api/queue/items", post(playback::append_items))
+        .route(
+            "/api/queue/items/{entry_id}/play",
+            post(playback::play_entry),
+        )
+        .route(
+            "/api/queue/items/{entry_id}",
+            patch(playback::move_entry).delete(playback::remove_entry),
+        )
+        .route(
+            "/api/queue/upcoming",
+            axum::routing::delete(playback::clear_upcoming),
+        )
         .route("/api/playback", get(playback::get_playback))
         .route("/api/playback/events", get(playback::events))
         .route("/api/playback/commands", post(playback::command))
@@ -111,6 +124,7 @@ pub(crate) fn router(state: AppState) -> Router {
         .routes(routes!(playlists::add_items))
         .routes(routes!(playlists::remove_item))
         .routes(routes!(playlists::play))
+        .routes(routes!(playlists::append_queue))
         .routes(routes!(
             playlists::get_cover,
             playlists::put_cover,
@@ -118,6 +132,9 @@ pub(crate) fn router(state: AppState) -> Router {
         ))
         .routes(routes!(playback::get_queue, playback::clear_queue))
         .routes(routes!(playback::append_items))
+        .routes(routes!(playback::play_entry))
+        .routes(routes!(playback::move_entry, playback::remove_entry))
+        .routes(routes!(playback::clear_upcoming))
         .routes(routes!(playback::get_playback))
         .routes(routes!(playback::events))
         .routes(routes!(playback::command))
@@ -173,9 +190,13 @@ mod tests {
         ("/api/playlists/{id}/items", &["post"]),
         ("/api/playlists/{id}/items/{item_id}", &["delete"]),
         ("/api/playlists/{id}/play", &["post"]),
+        ("/api/playlists/{id}/queue", &["post"]),
         ("/api/playlists/{id}/cover", &["get", "put", "delete"]),
         ("/api/queue", &["get", "delete"]),
         ("/api/queue/items", &["post"]),
+        ("/api/queue/items/{entry_id}/play", &["post"]),
+        ("/api/queue/items/{entry_id}", &["patch", "delete"]),
+        ("/api/queue/upcoming", &["delete"]),
         ("/api/playback", &["get"]),
         ("/api/playback/events", &["get"]),
         ("/api/playback/commands", &["post"]),

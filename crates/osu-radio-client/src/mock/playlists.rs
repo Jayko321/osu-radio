@@ -82,6 +82,13 @@ impl Default for MockPlaylists {
     }
 }
 impl MockPlaylists {
+    pub(crate) fn items(&self, id: i32) -> Option<&[PlaylistItem]> {
+        self.storage
+            .iter()
+            .find(|playlist| playlist.id == id)
+            .map(|playlist| playlist.items.as_slice())
+    }
+
     #[must_use]
     pub fn cover(&self, id: i32, revision: i64) -> Option<&[u8]> {
         self.covers

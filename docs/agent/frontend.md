@@ -123,17 +123,66 @@ The [player owner](../../crates/osu-radio-client/src/view_models/player.rs) appl
 strictly increasing revisions and reads a snapshot before each reconnect to the
 NDJSON event stream. Events use a separate one-hour deadline and blank-line
 heartbeats. Disconnecting the stream leaves current local playback running;
-reconnecting with the same token preserves position. A new token restarts even
-an identical audio ID from the beginning.
+reconnecting with the same entry ID/token preserves position. A new entry or token
+starts a new launch even for an identical audio ID.
+
+The T06 transport now exposes the full queue through `QueueState.entries`, with
+`current_entry_id`, `history_len`, persisted `waiting_for_check`, mode and counters.
+Client [DTOs](../../crates/osu-radio-client/src/models.rs) use an independent
+`QueueEntryId` with positive i64 validation and decimal-string serde, including the
+maximum BIGINT. Qt/QML bindings carry that string without converting through JavaScript Number. `PlaybackAssignment` receives nullable entry ID and
+availability plus waiting in both REST and NDJSON.
+
+[ApiClient](../../crates/osu-radio-client/src/api.rs) provides `insert_queue(items,
+placement)`, `append_playlist_to_queue`, `play_queue_entry`, `move_queue_entry(id,
+before_entry_id)`, `remove_queue_entry` and `clear_upcoming_queue`. `append_queue`
+wraps typed audio insertion at end; `queue` reads the full list and `clear_queue`
+clears everything. A null move anchor means end. Unknown references are 404;
+Play of an existing unavailable entry is 400. New operations return assignments.
+[HTTP fixture tests](../../crates/osu-radio-client/src/api/contract_tests.rs) assert
+methods, paths and bodies, including maximum string IDs and explicit null anchors.
+
+The [Queue VM](../../crates/osu-radio-client/src/view_models/queue.rs) now owns
+`QueueView.entries: Vec<QueueRow>`, including history, duplicates and nullable
+sources. Rows retain entry ID, position, optional audio/item ID, availability and
+`Track` presentation with saved ordinary/Unicode captions and difficulty suffix.
+The view carries current ID, history boundary, mode, waiting, revision/token,
+`loading`, operation `busy`, load `message` and independent `operation_error`.
+A failed GET or operation preserves the confirmed list and local playback.
+`AppCommand::Queue(QueueAction)` supports Refresh, Play/Remove by entry ID,
+Move with a nullable anchor, ClearUpcoming, ClearAll, and typed Insert at End/Next.
+All mutations share `PendingPlayback` with transport/callback/playlist commands;
+only token-bound callbacks retry. Whole-playlist append calls the server directly.
+Success applies the assignment and refreshes an open panel, including a no-op;
+closed panels do no GET, and epochs/cancellation/revisions reject stale replies.
+
+`SetVisibleQueueMedia(Vec<(QueueEntryId, bool)>)` replaces queue viewport demand;
+the boolean means artwork missing. The scheduler resolves IDs against the current
+Queue VM, merges duplicate audio IDs with library/selection demand and retains
+four pipelines and the shared cache. Closing drops queue demand. Loading a full
+history alone requests no media. Qt's full queue uses a separate `TrackListModel`
+instance and reports only viewport entry IDs. Track insertion menus use the same queue lane (T09).
+The [T07 tests](../../crates/osu-radio-client/src/view_models/queue/t07_tests.rs)
+cover mixed HTTP order, errors/no-ops/close, recovery, source rebinding, and visible
+media demand with 5000 past rows. The Qt [fixture](../../apps/osu-radio-qt/tests/fixtures/server.py)
+uses the T06 wire shape; fixture/probe evidence is separate from physical sound.
 
 A dedicated client worker owns the engine and opens the device only when an
 assignment starts playing. Restored paused queues, normal startup and offline
 galleries require no audio device. [`ApiClient`](../../crates/osu-radio-client/src/api.rs)
 downloads audio by ID into a temporary file in chunks, with a 256 MiB limit and
 30-second timeout. The worker retains the current file and one pending download;
-changing the token cancels and invalidates old downloads. A cached identical ID
+changing the entry ID or token cancels and invalidates old downloads. A cached identical ID
 can restart without downloading again. Finished/download/decode callbacks carry
 the token of their launch, and the server ignores stale or repeated callbacks.
+`waiting_for_check` travels through Player presentation, Playback and worker Assign.
+Waiting does not download audio, open an engine or send Started/Failed; Play/Pause
+retain server intention. Releasing waiting starts only Playing; Paused waits for
+explicit Play. Unchanged entry/token and cleared waiting preserve engine, position
+and seek across list edits and availability updates. Playback uses the assignment's
+source; a reimported queue-row binding cannot replace the existing launch's source,
+listening date or volume. The first restored Paused assignment leaves library and
+playlist selection independent and opens no audio device.
 Source errors advance the queue; an output-device failure pauses it and retains
 its position for explicit Play. Source and device callback retries pass through the same serialized command
 lane and token check. Device failures use `pause` with an optional playback token,
@@ -152,18 +201,43 @@ Position updates arrive every 100 ms while playing and state changes immediately
 Qt's title-bar layers button, immediately before the window controls, opens
 [`QueuePanel.qml`](../../apps/osu-radio-qt/qml/components/QueuePanel.qml) over the
 player with a dark gradient and rounded artwork cards showing title, artist and
-duration. The scrollable list contains the pending playable queue, retaining
-order and duplicates. Cards are read-only; opening the panel does not select or
-start a track. Close, Escape and outside click dismiss it and restore focus.
-The shared controller loads `/api/queue` only while open, refreshes on committed
-playback revisions and discards stale/closed-panel replies. Queue metadata and
-bounded artwork/duration requests remain independent of Songs search. Loading,
-empty and retryable error states are explicit; Qt owns popup presentation and
-decoded artwork. Probed durations retain their values as entries leave and re-enter
-the pending list, including a queue rewind outside search. Queue media updates
-preserve existing QML delegates and their displayed images when the row count
-is unchanged; duplicate audio entries share cached URLs. The existing Qt probe
-covers these interactions offscreen.
+duration. The virtualized `ListView` includes history, current and upcoming rows,
+checking/unavailable status and retained unavailable captions. Cards are 82px with
+14px spacing, a 96px cache buffer and no delegate reuse pool. Opening positions
+once on current (or first upcoming/end of history) after loading, without selecting
+or playing. Later role changes preserve scrolling and decoded artwork URLs.
+Close, Escape and outside click dismiss it and restore opener focus.
+
+The queue adapter exposes `tracks`, `startIndex`, `queueLoading`, `queueBusy`, `queueMessage`,
+`setQueueVisible(bool)`, `playEntry(QString)`, `removeEntry(QString)`,
+`moveEntry(QString, QVariant)`, `clearUpcoming()`, `clearAll()` and
+`setVisibleQueueMedia(QVariantList)`. Entry IDs and anchors are decimal strings,
+including values above JS integer precision; a null anchor means end. Rust rejects
+invalid IDs and non-string anchors before dispatching existing QueueAction.
+Existing roles 256–263 stay unchanged; queue adds 264 `entryId` (string),
+265 `isCurrent`, 266 `isPast` and 267 `availability` (checking/available/unavailable).
+`entryIdAt(index)` resolves keyboard/drop anchors. Queue reconciliation uses
+entry identity and standard row insert/remove/move notifications; role updates
+use `dataChanged`. Retained artwork is keyed by entry identity and cover source.
+Library and playlist instances retain their existing behavior.
+
+Play (including checking), remove, both clears and Ctrl+Up/Down dispatch existing
+client operations. The separate drag handle shows an insertion line and scrolls
+at viewport edges; only drop sends one ID/anchor command. Server confirmation
+updates order, and cancellation or rejection keeps the confirmed list. Arrow
+navigation changes focus; Enter/Space plays and Delete removes. Child actions do
+not activate the card. QML sends only viewport entry IDs on scroll/model/delegate
+changes; closing sends an empty demand snapshot. Duplicate audio shares the
+existing bounded media scheduler/cache. The gallery connects the same panel and
+model to MockQueue through MockBridge/Store, with an explicit error example,
+without a session, database, file checking or audio device.
+
+The controller loads `/api/queue` only while open, refreshes on committed revisions
+and rejects stale replies. Queue media remains independent of Songs search.
+Loading, empty and retryable error states are explicit. Qt model/HTTP/offscreen
+checks and measured virtualization limits are recorded in the
+[T08 report](../impl/queue-rework/T08.md#отчёт-о-выполнении); native Linux/Windows
+input, GPU rendering and physical audio remain T10 acceptance.
 Qt's [progress slider](../../apps/osu-radio-qt/qml/PlayerPanel.qml) fills the elapsed
 portion with `Theme.accent`, following its position during playback and seeking.
 Shutdown cancels the event stream and downloads, joins the worker, releases its
@@ -343,13 +417,15 @@ The player stays on the right with the existing window and sidebar dimensions.
 its list, editor and track cards with the offline gallery. List cards show square
 artwork, names and counts including unavailable entries. Their rounded dark menu
 contains **Add to queue**, **Edit**, **Delete**, in that order, with trailing SVG
-icons and red Delete text. Add to queue reads the saved insertion order, skips
-unavailable entries and appends audio IDs through the existing serialized queue
-lane, preserving duplicate difficulties. It retains active playback or pause;
-an empty/exhausted queue follows the existing first-append launch behavior.
-An empty or wholly unavailable playlist adds nothing. These additions use the
-ordinary queue API and carry no playlist-item identity. The offline gallery
-dispatches the same action without a server or audio device.
+icons and red Delete text. Add to queue calls `append_playlist_to_queue`
+directly through the existing serialized lane, retaining saved order, duplicate
+difficulties, unavailable items and playlist-item identity without a client GET.
+It preserves active playback or pause; an empty/exhausted queue stays stopped.
+The [offline queue mock](../../crates/osu-radio-client/src/mock/queue.rs) provides
+history, distinct entry IDs, duplicates, checking/unavailable rows, all QueueAction
+mutations, whole-playlist append, and memory-only check completion. Invalid actions
+preserve confirmed data and expose an operation error. The gallery snapshot exposes
+queue state without opening a Session, checking files or creating an audio device.
 `+` opens the inline new-playlist card; the detail pencil
 opens the same name/cover editor. Success closes it; failure retains the draft.
 [`PlaylistEditor.qml`](../../apps/osu-radio-qt/qml/components/PlaylistEditor.qml)
@@ -391,7 +467,30 @@ and [backend](backend.md#user-playlists). Coverage is in
 [native Qt checks](../../apps/osu-radio-qt/src/native_tests.h) and
 [Qt probes](../../apps/osu-radio-qt/tests/launch_smoke.rs). Desktop input, GPU
 rendering, native picker appearance, physical audio and Windows remain separate
-acceptance checks. Manual cropping, track reordering and queue UI remain deferred.
+acceptance checks. Manual cropping and playlist track reordering remain deferred.
+
+### Track insertion menus
+
+[`TrackQueueMenu.qml`](../../apps/osu-radio-qt/qml/components/TrackQueueMenu.qml)
+is shared by Songs (library/search), playlist track cards and offline gallery examples.
+Right click, Menu and Shift+F10 open it relative to the source row; Escape or
+activation returns focus to that row. “Add to end” and “Play next” change only
+insertion placement, without selecting the row, starting audio or resuming a pause.
+Playlist removal remains a distinct action in the same menu.
+
+The Library Qt adapter's `insertTrack(id, next)` sends `QueueItemRef::Audio`;
+the Playlists adapter's `insertPlaylistItem(itemId, next)` sends the active
+playlist ID and concrete item ID, preserving shared-audio difficulty identity and
+unavailable entries. Both use `QueueAction::Insert` in the existing client lane.
+Disconnected, `queueBusy` or `playlistBusy` disables insertion; whole-playlist
+append also observes queue busy and still calls the server without fetching items.
+`queueMessage` exposes operation errors; confirmed rows update only from server
+snapshots. Store JSON-encodes structured insertion payloads, and MockBridge
+validates placement, item type and positive i32 IDs before its memory-only action.
+
+[T09](../impl/queue-rework/T09.md) records the Qt keyboard/pointer/HTTP probes,
+client fake-engine tests and limits. These checks do not establish native desktop
+input, Windows, physical audio or real-database end-to-end acceptance (T10).
 
 ## Session and server supervision
 
@@ -464,12 +563,12 @@ points remain opt-in; fixture timings are correctness checks, not performance da
 | Surface | Behavior | Owner |
 | --- | --- | --- |
 | Songs / Playlists / Settings | Independent retained lists/searches/selections; player stays visible. | Main and domain panels |
-| Track cards | Click selects; explicit Play starts. Unavailable playlist items remain removable. | Library/Playlists VM |
+| Track cards | Click selects; explicit Play starts. Context menus insert at end/next without selecting or starting; unavailable playlist items remain insertable/removable. | Library/Playlists/Queue VM |
 | Transport | Client chooses Play/Pause/Resume using selected/current item identity and token. | Player VM and coordinator |
 | Progress | Selected current launch may seek; dragging is protected from position ticks. | Player adapter/panel |
 | Settings | Local preferences work without server; audio writes retry; staged folder actions preserve partial success. | Settings VM and Qt native storage |
 | Window | Native Qt move/resize/minimize/maximize/restore/close; observes actual visibility. | WindowBar |
-| Queue | Opening refreshes upcoming entries; server owns persisted order. | Queue VM / QueuePanel |
+| Queue | Full virtualized history/current/upcoming model, entry-ID Play/remove/move and both clears; viewport media demand. | Queue VM / QueuePanel |
 
 Shuffle, repeat, hosted providers and output-device selection remain deferred.
 Offscreen probes do not establish physical audio, GPU rendering or native Windows behavior.
@@ -531,9 +630,9 @@ eviction or a previous provider error. A resident immutable key accepts earlier
 installation URLs in the same cache epoch; stale epochs and missing keys fail.
 Duplicate playlist-cover deliveries reuse a resident immutable key. The adapter
 stores new playlist state before exposing properties that can request artwork.
-Playlist-summary and queue delegates bind to collection indices instead of
-recreating every card when artwork or duration changes. They use empty fallback
-rows while a shrinking collection removes its delegates.
+Playlist-summary delegates bind to collection indices with empty fallback rows
+while shrinking. Queue delegates bind to TrackListModel roles; entry-ID reconciliation
+updates media and order without resetting the list.
 
 [`Main.qml`](../../apps/osu-radio-qt/qml/Main.qml) composes separate Songs, Playlists,
 Settings and Player panels. Each panel uses its corresponding Qt VM; the shell
@@ -663,3 +762,22 @@ Asset origins/licenses are in [`SOURCES.md`](../../apps/osu-radio-qt/assets/SOUR
 Software-rendered integration probes verify state transitions, not GPU blur,
 native picker interaction, desktop layout or Windows behavior. See the manual
 acceptance matrix in [development](development.md#qt-frontend).
+
+## Queue-rework integration verification
+
+The [T10 report](../impl/queue-rework/T10.md#отчёт-о-выполнении) records exact
+commands and results. [launch_smoke](../../apps/osu-radio-qt/tests/launch_smoke.rs)
+adds `real_backend_queue_survives_restart_and_preserves_exact_entry_actions`:
+two Qt launches use the same private SQLite through a real embedded server,
+exercise recovered pause/history, exact entry IDs above 2^53, independent
+duplicates, move/remove, search Next, whole-playlist append and both clears.
+The fixture verifies retained library/playlists/dates/volume after shutdown.
+
+The [companion client test](../../crates/osu-radio-client/src/playback/tests/real_backend.rs)
+uses the existing private fake engine with real HTTP downloads, imports and checks.
+It tests seek/engine continuity, accepted Started, retained launch source on
+reimport, late callbacks, detached playlist snapshots, restart without an engine
+and silent append/source restoration. It drives the worker core directly;
+controller/NDJSON sequencing remains covered by the existing VM/route tests.
+Qt playing through a physical device and native Linux/Windows drag, focus, hit
+testing and scaling remain separate user acceptance.

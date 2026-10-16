@@ -1,7 +1,7 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-const ASSIGNMENT: &str = r#"{"current_audio_source_id":7,"track":{"audio_source_id":7,"title":"曲","title_unicode":null,"artist":null,"artist_unicode":null,"cover_beatmap_id":77,"difficulties":[]},"duration_ms":1234,"mode":"playing","revision":2,"playback_token":5,"can_next":true,"can_previous":true}"#;
+const ASSIGNMENT: &str = r#"{"current_audio_source_id":7,"track":{"audio_source_id":7,"title":"曲","title_unicode":null,"artist":null,"artist_unicode":null,"cover_beatmap_id":77,"difficulties":[]},"duration_ms":1234,"waiting_for_check":false,"mode":"playing","revision":2,"playback_token":5,"can_next":true,"can_previous":true}"#;
 
 async fn request(stream: &mut tokio::net::TcpStream) {
     let mut request = Vec::new();
@@ -134,5 +134,36 @@ fn playback_command_wire_shapes_are_explicit_and_token_bound() {
         ),
     ] {
         assert_eq!(serde_json::to_value(command).unwrap(), value);
+    }
+}
+
+#[test]
+fn entry_ids_are_positive_decimal_strings_with_exact_bigint_roundtrips() {
+    use crate::models::QueueEntryId;
+    for id in [1, 9_007_199_254_740_993, i64::MAX] {
+        let expected = QueueEntryId::new(id).unwrap();
+        let json = serde_json::to_string(&expected).unwrap();
+        assert_eq!(json, format!("\"{id}\""));
+        assert_eq!(
+            serde_json::from_str::<QueueEntryId>(&json).unwrap(),
+            expected
+        );
+    }
+    for invalid in [
+        r#""0""#,
+        r#""-1""#,
+        r#""+1""#,
+        r#""1.0""#,
+        r#"" 1""#,
+        r#""9223372036854775808""#,
+        "9223372036854775807",
+        "null",
+        "true",
+        r#""""#,
+    ] {
+        assert!(
+            serde_json::from_str::<QueueEntryId>(invalid).is_err(),
+            "{invalid}"
+        );
     }
 }

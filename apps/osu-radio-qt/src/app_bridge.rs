@@ -15,7 +15,7 @@ use std::{
 /// Preserve Qt's canonical list name in generated QML metadata.
 #[repr(transparent)]
 #[derive(Clone, Default, PartialEq)]
-pub struct VariantList(QList<QVariant>);
+pub struct VariantList(pub(crate) QList<QVariant>);
 // SAFETY: transparent alias of the relocatable QList<QVariant>; QVariantList is
 // the identical C++ typedef. Clone and destruction delegate to that owned list.
 unsafe impl cxx::ExternType for VariantList {
@@ -262,7 +262,12 @@ impl ffi::AppBridge {
                 .playlist_artwork_urls
                 .clear();
             self.as_mut().queue_mut().rust_mut().cache_epoch = epoch;
-            self.as_mut().queue_mut().rust_mut().queue_artwork.clear();
+            self.as_mut()
+                .queue_mut()
+                .rust_mut()
+                .model
+                .pin_mut()
+                .clear_artwork();
             self.as_mut().player_mut().rust_mut().cache_epoch = epoch;
             native::protect_artwork(epoch, self.player_ref().selected_cover_id.unwrap_or(-1));
             self.player_mut()
@@ -294,7 +299,11 @@ impl ffi::AppBridge {
                 self.as_mut().player_mut().set_selected_artwork_url(url);
             }
         }
-        self.queue_mut().project_queue();
+        self.queue_mut()
+            .rust_mut()
+            .model
+            .pin_mut()
+            .update_artwork(epoch, affected);
     }
     fn media_track(&self, id: i32) -> Option<&Track> {
         if self
@@ -327,9 +336,10 @@ impl ffi::AppBridge {
             .or_else(|| {
                 self.queue_ref()
                     .queue_state
-                    .tracks
+                    .entries
                     .iter()
-                    .find(|track| track.audio_source_id == id)
+                    .find(|row| row.audio_source_id == Some(id))
+                    .map(|row| &row.track)
             })
     }
     pub fn request_media(self: Pin<&mut Self>, id: i32) {
@@ -615,6 +625,7 @@ mod tests {
         let cover_error = native::check_playlist_cover_preparation();
         assert!(cover_error.is_empty(), "{cover_error}");
         independent_models_keep_item_identity_and_media();
+        queue_model_preserves_entry_identity_and_updates_roles();
         player_projection_does_not_reset_lists();
         warmed_rows_and_queue_keep_artwork_after_eviction();
         playlist_images_validate_revision_and_reuse_resident_keys();
@@ -799,6 +810,98 @@ mod tests {
         assert!(!bridge.player_ref().has_selection);
         assert_eq!(bridge.library_ref().model.track_count, 1);
     }
+    fn queue_model_preserves_entry_identity_and_updates_roles() {
+        use crate::qt_view_models::{parse_entry_id, queue_move};
+        use osu_radio_client::models::{QueueAvailability, QueueEntryId};
+        let maximum = QueueEntryId::new(i64::MAX).unwrap();
+        let large = QueueEntryId::new(9_007_199_254_740_993).unwrap();
+        let mut view = osu_radio_client::mock::MockState::default().queue.view;
+        view.entries.truncate(2);
+        let mut first = view.entries[0].clone();
+        first.id = large;
+        first.playlist_item_id = Some(88);
+        first.track = track(42, 52, "Duplicate");
+        let mut second = first.clone();
+        second.id = maximum;
+        second.position = 1;
+        view.entries = vec![first, second];
+        view.current_entry_id = None;
+        view.history_len = 1;
+        assert_eq!(
+            crate::qt_view_models::queue_start_index(&view),
+            1,
+            "first upcoming without current"
+        );
+        view.history_len = 2;
+        assert_eq!(
+            crate::qt_view_models::queue_start_index(&view),
+            1,
+            "end of history without current"
+        );
+        view.history_len = 0;
+        assert_eq!(crate::qt_view_models::queue_start_index(&view), 0);
+        view.current_entry_id = Some(maximum);
+        view.history_len = 1;
+        assert_eq!(
+            crate::qt_view_models::queue_start_index(&view),
+            1,
+            "current entry"
+        );
+        let mut model = native::new_track_list_model();
+        model.pin_mut().replace_queue_rows(&view, 0);
+        let index = model.index(1, 0, &QModelIndex::default());
+        assert_eq!(
+            model.data(&index, 264).value::<QString>().unwrap(),
+            QString::from(i64::MAX.to_string())
+        );
+        assert!(model.data(&index, 265).value::<bool>().unwrap());
+        assert_eq!(
+            model.rows[0].playlist_item_id,
+            model.rows[1].playlist_item_id
+        );
+        model.pin_mut().rust_mut().rows[0].artwork = QString::from("resident-cover");
+        view.entries[0].track.title = "Unicode 日本語".into();
+        view.entries[0].availability = QueueAvailability::Checking;
+        model.pin_mut().replace_queue_rows(&view, 0);
+        assert_eq!(model.rows[0].artwork, QString::from("resident-cover"));
+        view.entries.swap(0, 1);
+        view.history_len = 0;
+        model.pin_mut().replace_queue_rows(&view, 0);
+        assert_eq!(model.entry_id_at(0), QString::from(i64::MAX.to_string()));
+        assert_eq!(model.rows[1].artwork, QString::from("resident-cover"));
+        let moved = model.index(1, 0, &QModelIndex::default());
+        assert_eq!(
+            model.data(&moved, 267).value::<QString>().unwrap(),
+            QString::from("checking")
+        );
+        assert_eq!(
+            model.data(&moved, 257).value::<QString>().unwrap(),
+            QString::from("Unicode 日本語")
+        );
+        view.entries[1].track.cover_beatmap_id = None;
+        model.pin_mut().replace_queue_rows(&view, 0);
+        assert!(
+            model.rows[1].artwork.is_empty(),
+            "changed cover source drops old image"
+        );
+        view.entries.remove(0);
+        model.pin_mut().replace_queue_rows(&view, 0);
+        assert_eq!(model.entry_id_at(0), QString::from(large.to_string()));
+        assert_eq!(model.track_count, 1);
+        view.entries.clear();
+        model.pin_mut().replace_queue_rows(&view, 0);
+        assert_eq!(model.track_count, 0);
+        assert!(model.entry_id_at(-1).is_empty());
+        for invalid in ["", "-1", "0", "1.5", "1e3", "9223372036854775808", " 1"] {
+            assert!(parse_entry_id(&QString::from(invalid)).is_none());
+        }
+        let id = QString::from(i64::MAX.to_string());
+        assert!(queue_move(&id, &QVariant::from(&42_f64)).is_none());
+        assert!(queue_move(&id, &QVariant::from(&QString::from("bad"))).is_none());
+        assert!(
+            matches!(queue_move(&id, &QVariant::default()), Some(osu_radio_client::view_models::QueueAction::Move { id, before_entry_id: None }) if id == maximum)
+        );
+    }
     fn warmed_rows_and_queue_keep_artwork_after_eviction() {
         let mut object = native::new_app_bridge();
         let mut bridge = object.pin_mut();
@@ -822,11 +925,34 @@ mod tests {
         bridge.as_mut().update_artwork(&[17, 52]);
         let pinned = bridge.player_ref().selected_artwork_url.clone();
         let displayed = bridge.library_ref().model.rows[1].artwork.clone();
-        bridge.as_mut().queue_mut().rust_mut().queue_state.tracks =
-            vec![other.clone(), other.clone()];
+        bridge.as_mut().queue_mut().rust_mut().queue_state.entries = (1..=4)
+            .map(|id| {
+                let mut track = if id == 4 {
+                    selected.clone()
+                } else {
+                    other.clone()
+                };
+                if id > 2 {
+                    track.audio_source_id = -1;
+                }
+                osu_radio_client::view_models::QueueRow {
+                    id: osu_radio_client::models::QueueEntryId::new(id).unwrap(),
+                    position: usize::try_from(id.saturating_sub(1)).unwrap(),
+                    audio_source_id: (id <= 2).then_some(other.audio_source_id),
+                    playlist_item_id: None,
+                    availability: osu_radio_client::models::QueueAvailability::Available,
+                    track,
+                }
+            })
+            .collect();
         bridge.as_mut().queue_mut().project_queue();
-        let queue = bridge.queue_ref().queue_tracks.clone();
-        assert_eq!(queue.0.get(0), queue.0.get(1));
+        let queue = bridge.queue_ref().model.rows.clone();
+        assert_eq!(queue.len(), 4);
+        assert_ne!(
+            queue.first().unwrap().queue.as_ref().unwrap().id,
+            queue.get(1).unwrap().queue.as_ref().unwrap().id,
+            "duplicate audio retains entry identity"
+        );
         bridge.as_mut().apply(AppUpdate::PlaylistTracksReplaced {
             tracks: vec![],
             invalidate_artwork: false,
@@ -844,11 +970,19 @@ mod tests {
         assert_eq!(native::artwork_url(epoch, 17), pinned);
         bridge.as_mut().update_artwork(&[52]);
         assert_eq!(bridge.library_ref().model.rows[1].artwork, displayed);
-        assert!(bridge.queue_ref().queue_tracks == queue);
+        assert!(bridge.queue_ref().model.rows == queue);
         assert!(!native::install_artwork(epoch, 52, &large).is_empty());
         bridge.as_mut().update_artwork(&[52]);
         assert_ne!(bridge.library_ref().model.rows[1].artwork, displayed);
         bridge.as_mut().media_generation(2, true);
+        assert!(
+            bridge
+                .queue_ref()
+                .model
+                .rows
+                .iter()
+                .all(|row| row.artwork.is_empty())
+        );
         assert!(native::install_artwork(epoch, 17, &large).is_empty());
         assert!(bridge.player_ref().selected_artwork_url.is_empty());
         bridge.as_mut().apply(AppUpdate::Player(PlayerPresentation {

@@ -15,6 +15,8 @@ use std::{collections::VecDeque, time::Duration};
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)] // Independent presentation and transport availability flags.
 pub struct PlayerPresentation {
+    pub current_entry_id: Option<crate::models::QueueEntryId>,
+    pub waiting_for_check: bool,
     pub selected_track: Option<Track>,
     pub selected_playlist_item_id: Option<i32>,
     pub selected_is_playing: bool,
@@ -66,10 +68,18 @@ impl PlayerViewModel {
                 .as_ref()
                 .is_some_and(|assignment| assignment.current_playlist_item_id == Some(item))
         } else {
-            self.playback.current_audio_id == Some(selected.audio_source_id)
+            self.assignment.as_ref().map_or_else(
+                || self.playback.current_audio_id == Some(selected.audio_source_id),
+                |assignment| assignment.current_audio_source_id == Some(selected.audio_source_id),
+            )
         };
         if current {
-            let playing = if playlist.is_some() {
+            let playing = if playlist.is_some()
+                || self
+                    .assignment
+                    .as_ref()
+                    .is_some_and(|state| state.waiting_for_check)
+            {
                 self.assignment
                     .as_ref()
                     .is_some_and(|assignment| assignment.mode == PlaybackMode::Playing)
@@ -105,6 +115,11 @@ impl PlayerViewModel {
     ) -> PlayerPresentation {
         let selected = self.selected_track.as_ref();
         let selected_current = selection_available
+            && self.assignment.as_ref().is_none_or(|assignment| {
+                !assignment.waiting_for_check
+                    && assignment.playback_token == self.playback.playback_token
+                    && assignment.current_entry_id == self.playback.current_entry_id
+            })
             && selected.is_some_and(|track| {
                 self.playback.current_audio_id == Some(track.audio_source_id)
                     && selected_item_id
@@ -119,6 +134,14 @@ impl PlayerViewModel {
             })
             .flatten();
         PlayerPresentation {
+            current_entry_id: self
+                .assignment
+                .as_ref()
+                .and_then(|state| state.current_entry_id),
+            waiting_for_check: self
+                .assignment
+                .as_ref()
+                .is_some_and(|state| state.waiting_for_check),
             selected_track: self.selected_track.clone(),
             selected_playlist_item_id: selected_item_id,
             selected_is_playing: selected_current
@@ -139,7 +162,13 @@ impl PlayerViewModel {
             },
             duration,
             message: self.playback.error.clone().unwrap_or_else(|| {
-                if self.playback.loading_audio_id.is_some() {
+                if self
+                    .assignment
+                    .as_ref()
+                    .is_some_and(|state| state.waiting_for_check)
+                {
+                    "Checking audio…".into()
+                } else if self.playback.loading_audio_id.is_some() {
                     "Loading audio…".into()
                 } else {
                     String::new()
@@ -154,7 +183,11 @@ impl PlayerViewModel {
             }
             playback.can_next = assignment.can_next;
             playback.can_previous = assignment.can_previous;
+            if playback.current_entry_id != assignment.current_entry_id {
+                return None;
+            }
             playback.current_playlist_item_id = assignment.current_playlist_item_id;
+            playback.waiting_for_check = assignment.waiting_for_check;
         }
         self.playback = playback.clone();
         Some(playback)
@@ -179,6 +212,7 @@ impl PlayerViewModel {
         self.commands.push_back(PendingPlayback {
             command,
             playlist: None,
+            queue: None,
             expected_token: None,
         });
     }
@@ -202,6 +236,7 @@ impl PlayerViewModel {
                 audio_source_id: None,
             },
             playlist: Some(playlist),
+            queue: None,
             expected_token: None,
         });
     }
@@ -235,26 +270,34 @@ impl PlayerViewModel {
             }
             self.command_busy = true;
             work.task(async move {
-                let result = match pending.playlist {
-                    Some(PlaylistPlayback::Play(id, start)) => api.play_playlist(id, start).await,
-                    Some(PlaylistPlayback::Append(id)) => {
-                        async {
-                            let playlist = api.playlist(id).await?;
-                            let ids: Vec<_> = playlist
-                                .items
-                                .iter()
-                                .filter_map(|item| item.audio_source_id)
-                                .collect();
-                            if ids.is_empty() {
-                                return Err(crate::api::ApiError::Protocol(
-                                    "Playlist has no available tracks.".into(),
-                                ));
-                            }
-                            api.append_queue(&ids).await
-                        }
-                        .await
+                let result = match (&pending.queue, pending.playlist) {
+                    (Some(crate::view_models::QueueAction::Play(id)), _) => {
+                        api.play_queue_entry(*id).await
                     }
-                    None => api.playback_command(&pending.command).await,
+                    (Some(crate::view_models::QueueAction::Remove(id)), _) => {
+                        api.remove_queue_entry(*id).await
+                    }
+                    (
+                        Some(crate::view_models::QueueAction::Move {
+                            id,
+                            before_entry_id,
+                        }),
+                        _,
+                    ) => api.move_queue_entry(*id, *before_entry_id).await,
+                    (Some(crate::view_models::QueueAction::ClearUpcoming), _) => {
+                        api.clear_upcoming_queue().await
+                    }
+                    (Some(crate::view_models::QueueAction::ClearAll), _) => api.clear_queue().await,
+                    (Some(crate::view_models::QueueAction::Insert { items, placement }), _) => {
+                        api.insert_queue(items, *placement).await
+                    }
+                    (_, Some(PlaylistPlayback::Play(id, start))) => {
+                        api.play_playlist(id, start).await
+                    }
+                    (_, Some(PlaylistPlayback::Append(id))) => {
+                        api.append_playlist_to_queue(id).await
+                    }
+                    _ => api.playback_command(&pending.command).await,
                 }
                 .map_err(|error| describe(&error));
                 Completed::PlaybackCommand { pending, result }
@@ -279,7 +322,11 @@ impl PlayerViewModel {
                 self.apply_assignment(assignment, input, work);
             }
             Err(error) => {
-                self.playback_error(error, input, work);
+                if pending.queue.is_none()
+                    && !matches!(pending.playlist, Some(PlaylistPlayback::Append(_)))
+                {
+                    self.playback_error(error, input, work);
+                }
                 // Completion callbacks are token-bound and idempotent, so retrying cannot skip twice.
                 if matches!(
                     pending.command,
@@ -353,7 +400,7 @@ impl PlayerViewModel {
         }
         let restart = self.assignment.as_ref().is_none_or(|current| {
             current.playback_token != assignment.playback_token
-                || current.current_audio_source_id != assignment.current_audio_source_id
+                || current.current_entry_id != assignment.current_entry_id
         });
         self.current_track = assignment.track.clone().map(|track| {
             let mut track = Track::from(track);
@@ -375,7 +422,12 @@ impl PlayerViewModel {
             self.current_track = Some(track);
         }
         work.effect(Effect::AssignmentHistory);
-        if restart && assignment.mode != PlaybackMode::Stopped && self.current_track.is_some() {
+        let recovered_paused = self.assignment.is_none() && assignment.mode == PlaybackMode::Paused;
+        if restart
+            && !recovered_paused
+            && assignment.mode != PlaybackMode::Stopped
+            && self.current_track.is_some()
+        {
             work.effect(Effect::SelectPlayingTrack {
                 audio_id: assignment.current_audio_source_id,
                 playlist_item_id: assignment.current_playlist_item_id,
@@ -443,6 +495,8 @@ impl PlayerViewModel {
     ) {
         let assignment = self.assignment.as_ref();
         let mut playback = self.playback.clone();
+        playback.current_entry_id = assignment.and_then(|state| state.current_entry_id);
+        playback.waiting_for_check = assignment.is_some_and(|state| state.waiting_for_check);
         playback.current_audio_id = assignment.and_then(|state| state.current_audio_source_id);
         playback.current_playlist_item_id =
             assignment.and_then(|state| state.current_playlist_item_id);
@@ -503,7 +557,7 @@ impl PlayerViewModel {
         if self
             .assignment
             .as_ref()
-            .is_some_and(|state| state.playback_token == token)
+            .is_some_and(|state| state.playback_token == token && !state.waiting_for_check)
         {
             if matches!(command, PlaybackCommand::Started { .. }) {
                 self.pending_start = Some(token);
@@ -511,6 +565,7 @@ impl PlayerViewModel {
             self.commands.push_back(PendingPlayback {
                 command,
                 playlist: None,
+                queue: None,
                 expected_token: Some(token),
             });
         }
@@ -593,6 +648,7 @@ impl PlayerViewModel {
                 playback_token: token,
             },
             playlist: None,
+            queue: None,
             expected_token: Some(token),
         });
     }

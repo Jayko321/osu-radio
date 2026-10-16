@@ -96,6 +96,32 @@ fn gallery_is_offline_and_its_adapter_notifies_only_on_changes() {
 }
 
 #[test]
+fn gallery_queue_uses_the_shared_virtualized_panel_without_a_server() {
+    let directory = tempfile::tempdir().expect("isolated gallery queue");
+    assert_probe(&run(
+        &["--component-gallery"],
+        "offscreen",
+        directory.path(),
+        Path::new("/no/server/allowed"),
+        "gallery-queue",
+    ));
+    assert!(!directory.path().join("starts").exists());
+}
+
+#[test]
+fn gallery_insertion_menus_share_typed_actions_without_a_server() {
+    let directory = tempfile::tempdir().expect("isolated gallery insertions");
+    assert_probe(&run(
+        &["--component-gallery"],
+        "offscreen",
+        directory.path(),
+        Path::new("/no/server/allowed"),
+        "gallery-insert",
+    ));
+    assert!(!directory.path().join("starts").exists());
+}
+
+#[test]
 fn offline_controls_handle_keyboard_disabled_states_and_presentation_bindings() {
     let directory = tempfile::tempdir().expect("isolated controls probe");
     let output = run(
@@ -368,6 +394,243 @@ fn queue_controls_preserve_pause_and_current_metadata_outside_search() {
 
 #[cfg(unix)]
 #[test]
+fn insertion_menus_preserve_selection_and_send_typed_items_in_both_positions() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("isolated insertion fixture");
+    let server = directory.path().join("fixture-server");
+    std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700)).expect("executable");
+    assert_probe(&run(
+        &[],
+        "offscreen",
+        directory.path(),
+        &server,
+        "queue-insert",
+    ));
+    let operations: Vec<serde_json::Value> =
+        std::fs::read_to_string(directory.path().join("queue_operations"))
+            .expect("insertion operations")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("JSON"))
+            .collect();
+    assert_eq!(operations.len(), 9);
+    for (index, op) in operations.iter().take(7).enumerate() {
+        assert_eq!(op.get("method").expect("method"), "POST");
+        assert_eq!(op.get("path").expect("path"), "/api/queue/items");
+        let item = match index {
+            0 | 1 => serde_json::json!({"type":"audio", "audio_source_id":7}),
+            2 | 3 => serde_json::json!({"type":"audio", "audio_source_id":103}),
+            _ => serde_json::json!({"type":"playlist_item", "playlist_id":1, "item_id":index + 7}),
+        };
+        assert_eq!(
+            *op.get("body").expect("body"),
+            serde_json::json!({"items":[item], "placement":if index % 2 == 1 {"next"} else {"end"}})
+        );
+        assert_eq!(op.get("status").expect("status"), 200);
+    }
+    let whole = operations.get(7).expect("whole playlist");
+    assert_eq!(whole.get("path").expect("path"), "/api/playlists/1/queue");
+    assert_eq!(whole.get("method").expect("method"), "POST");
+    assert_eq!(*whole.get("body").expect("body"), serde_json::json!({}));
+    assert_eq!(
+        *whole.get("after_ids").expect("after_ids"),
+        serde_json::json!([
+            "1", "8", "6", "4", "2", "3", "5", "7", "9", "10", "11", "12"
+        ])
+    );
+    let failed = operations.last().expect("failed operation");
+    assert_eq!(failed.get("status").expect("status"), 409);
+    assert_eq!(
+        failed.get("after_ids").expect("after_ids"),
+        failed.get("before_ids").expect("before_ids")
+    );
+    assert!(
+        !directory.path().join("playback_commands").exists(),
+        "menus/selection must never Play"
+    );
+    let requests = std::fs::read_to_string(directory.path().join("requests")).expect("requests");
+    assert_eq!(
+        requests
+            .lines()
+            .filter(|line| *line == "/api/playlists/1")
+            .count(),
+        1,
+        "whole playlist append never reads its items again"
+    );
+    assert_child_reaped(directory.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn full_queue_visual_probe_preserves_cards_at_minimum_window_size() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("isolated queue visual fixture");
+    let server = directory.path().join("fixture-server");
+    std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fixture");
+    let output = run(&[], "offscreen", directory.path(), &server, "visual-queue");
+    assert!(
+        output.contains("Visual probe finished: 0 issues"),
+        "{output}"
+    );
+    for error in [
+        "VISUAL ISSUE",
+        "ReferenceError",
+        "TypeError",
+        "Cannot",
+        "Binding loop",
+    ] {
+        assert!(!output.contains(error), "{output}");
+    }
+    assert_child_reaped(directory.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn managed_queue_virtualizes_history_and_preserves_exact_entry_commands() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut measurements = Vec::new();
+    let mut media_counts = Vec::new();
+    let mut media_paths = Vec::new();
+    for case in ["queue-managed-small", "queue-managed"] {
+        let directory = tempfile::tempdir().expect("isolated managed queue fixture");
+        let server = directory.path().join("fixture-server");
+        std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+        std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700))
+            .expect("executable fixture");
+        let output = run(&[], "offscreen", directory.path(), &server, case);
+        assert_probe(&output);
+        let metrics = output
+            .lines()
+            .find_map(|line| line.split_once("Queue metrics ").map(|(_, json)| json))
+            .expect("delegate metrics");
+        let metrics: serde_json::Value = serde_json::from_str(metrics).expect("metrics JSON");
+        eprintln!("{case}: {metrics}");
+        measurements.push(metrics);
+        assert_queue_operations(directory.path());
+        let requests =
+            std::fs::read_to_string(directory.path().join("requests")).expect("requests");
+        let media: Vec<_> = requests
+            .lines()
+            .filter(|line| line.ends_with("/duration") || line.ends_with("/cover"))
+            .collect();
+        assert!(media.len() < 60, "bounded media requests: {media:?}");
+        for path in ["/api/audio-sources/42/duration", "/api/beatmaps/42/cover"] {
+            assert_eq!(
+                media.iter().filter(|line| **line == path).count(),
+                1,
+                "duplicates share {path}"
+            );
+        }
+        eprintln!("{case}: {} media requests", media.len());
+        let checkpoint = std::fs::read_to_string(directory.path().join("queue_viewport_requests"))
+            .expect("viewport route checkpoint before drag/edge scrolling");
+        let viewport_media = checkpoint
+            .lines()
+            .filter(|path| path.ends_with("/duration") || path.ends_with("/cover"))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        eprintln!(
+            "{case}: {} viewport route media requests",
+            viewport_media.len()
+        );
+        media_counts.push(viewport_media.len());
+        media_paths.push(viewport_media);
+        assert_child_reaped(directory.path());
+    }
+    let small = measurements.first().expect("small metrics");
+    let large = measurements.get(1).expect("large metrics");
+    assert_eq!(small.get("viewport"), large.get("viewport"));
+    for key in ["initialCreated", "created", "live", "demand"] {
+        let a = small
+            .get(key)
+            .and_then(serde_json::Value::as_i64)
+            .expect("small measurement");
+        let b = large
+            .get(key)
+            .and_then(serde_json::Value::as_i64)
+            .expect("large measurement");
+        // Qt may construct one extra viewport while polishing a jump.
+        assert!(
+            a.abs_diff(b) <= 12,
+            "{key} depends on viewport, not history: {measurements:?}"
+        );
+    }
+    assert!(
+        media_counts
+            .first()
+            .expect("small media")
+            .abs_diff(*media_counts.get(1).expect("large media"))
+            <= 6,
+        "media requests differ: {media_paths:?}"
+    );
+}
+
+#[cfg(unix)]
+fn assert_queue_operations(directory: &Path) {
+    let operations: Vec<serde_json::Value> =
+        std::fs::read_to_string(directory.join("queue_operations"))
+            .expect("operations")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("operation JSON"))
+            .collect();
+    let routes: Vec<_> = operations
+        .iter()
+        .map(|op| {
+            (
+                op.get("method")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("method"),
+                op.get("path")
+                    .and_then(serde_json::Value::as_str)
+                    .expect("path"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        routes,
+        [
+            ("PATCH", "/api/queue/items/9007199254740997"),
+            ("PATCH", "/api/queue/items/9223372036854775807"),
+            ("PATCH", "/api/queue/items/9223372036854775807"),
+            ("PATCH", "/api/queue/items/9223372036854775807"),
+            ("DELETE", "/api/queue/items/9007199254740995"),
+            ("PATCH", "/api/queue/items/9223372036854775807"),
+            ("PATCH", "/api/queue/items/9223372036854775807"),
+            ("POST", "/api/queue/items/9007199254740997/play"),
+            ("POST", "/api/queue/items/100000/play"),
+            ("DELETE", "/api/queue/items/9007199254740999"),
+            ("DELETE", "/api/queue/upcoming"),
+            ("DELETE", "/api/queue"),
+        ],
+        "one exact command per completed action; cancel/navigation/open send none"
+    );
+    let anchors: Vec<_> = operations
+        .iter()
+        .filter_map(|op| op.pointer("/body/before_entry_id").cloned())
+        .collect();
+    assert_eq!(
+        anchors,
+        [
+            serde_json::json!("9223372036854775807"),
+            serde_json::json!("9007199254740995"),
+            serde_json::json!("9223372036854775807"),
+            serde_json::json!("9007199254740997"),
+            serde_json::Value::Null,
+            serde_json::json!("9007199254740997")
+        ]
+    );
+    let rejected = operations.first().expect("rejected move");
+    assert_eq!(
+        rejected.get("status").and_then(serde_json::Value::as_u64),
+        Some(409)
+    );
+    assert_eq!(rejected.get("before_ids"), rejected.get("after_ids"));
+}
+
+#[cfg(unix)]
+#[test]
 fn playback_controls_show_loading_errors_and_global_volume_without_a_device() {
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().expect("isolated playback fixture");
@@ -515,6 +778,43 @@ with sqlite3.connect('library.sqlite') as db:
         &server,
         "playlists",
     ));
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs cargo build -p osu-radio-server --locked (SQLite)"]
+fn real_backend_queue_survives_restart_and_preserves_exact_entry_actions() {
+    let directory = tempfile::tempdir().expect("isolated real queue backend");
+    let server = Path::new(env!("CARGO_BIN_EXE_osu-radio-qt")).with_file_name("osu-radio-server");
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/queue_backend.py");
+    for mode in ["prepare", "verify"] {
+        if mode == "verify" {
+            // Both launches use the real embedded server and the same private database.
+            for case in ["queue-real-recovery", "queue-real"] {
+                assert_probe(&run(
+                    &[],
+                    "offscreen",
+                    directory.path(),
+                    &directory.path().join("fixture-server"),
+                    case,
+                ));
+            }
+        }
+        let output = Command::new("python3")
+            .arg(&fixture)
+            .arg(mode)
+            .arg(&server)
+            .current_dir(directory.path())
+            .output()
+            .expect("real queue fixture");
+        assert!(
+            output.status.success(),
+            "{mode}: {}\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+            std::fs::read_to_string(directory.path().join("server.log")).unwrap_or_default()
+        );
+    }
 }
 
 #[test]

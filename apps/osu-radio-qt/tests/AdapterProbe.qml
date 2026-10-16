@@ -70,6 +70,8 @@ QtObject {
             property alias folders: folders
             property alias playlists: playlists
             property alias queue: queue
+            property alias queueMock: fixtureQueueBridge
+            Radio.MockBridge { id: fixtureQueueBridge }
             Radio.PlaylistPane {
                 id: pane
                 width: 480; height: 740
@@ -106,10 +108,9 @@ QtObject {
             Radio.QueuePanel {
                 id: queue
                 host: fixture
+                tracks: null
                 onRetryRequested: fixture.actions.push("queue-retry")
-                onMediaDelegateAdded: row => fixture.delegatesAdded++
-                onMediaDelegateRemoved: row => fixture.delegatesRemoved++
-                onVisibleMediaChanged: fixture.viewportChanges++
+                onVisibleEntriesChanged: fixture.viewportChanges++
             }
         }
     }
@@ -613,6 +614,14 @@ QtObject {
             const menu = findChild(card, "playlistActionsMenu");
             if (!menu.opened) return;
             check(!menu.itemAt(0).enabled && menu.itemAt(1).activeFocus, "empty playlist disables queue and focuses Edit");
+            const populated = findChild(findChild(pane, "playlistList").itemAtIndex(1), "playlistActionsMenu");
+            pane.queueBusy = true;
+            check(!populated.itemAt(0).enabled && populated.itemAt(1).enabled, "queue busy gates playlist append independently of editing");
+            pane.queueBusy = false;
+            pane.connected = false;
+            check(!populated.itemAt(0).enabled, "offline gates playlist append");
+            pane.connected = true;
+            check(populated.itemAt(0).enabled, "connected idle playlist append recovers");
             input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
             stage = 5; break;
         }
@@ -683,17 +692,16 @@ QtObject {
             input.mouseClick(findChild(c.queue.contentItem, "queueRetryButton"));
             check(c.actions.includes("queue-retry"), "queue retry forwards to the owner");
             c.queue.message = "";
-            c.queue.tracks = [{ audioId: 42, title: "First", artist: "Artist", durationLabel: "01:02", artworkUrl: "" },
-                { audioId: 42, title: "Duplicate", artist: "Artist", durationLabel: "01:02", artworkUrl: "" }];
+            c.queue.tracks = c.queueMock.queueModel;
             stage = 13; break;
         case 13:
-            if (c.delegatesAdded !== 2) return;
-            check(c.viewportChanges > 0 && textChild(c.queue.contentItem, "First").visible
-                && textChild(c.queue.contentItem, "Duplicate").visible, "queue retains duplicate rows and registers visible demand");
-            c.queue.tracks = []; stage = 14; break;
+            if (c.queue.liveDelegates !== 5) return;
+            check(c.viewportChanges > 0 && c.queue.mediaDelegates.some(row => row.entryId === "1")
+                && c.queue.mediaDelegates.some(row => row.entryId === "3"), "queue retains duplicate entries and registers viewport demand");
+            c.queueMock.dispatch("queueClearAll", ""); stage = 14; break;
         case 14:
-            if (c.delegatesRemoved !== 2) return;
-            check(findChild(c.queue.contentItem, "queueStatus").text === "No upcoming songs", "queue shrink releases delegates and restores its empty state");
+            if (c.queue.liveDelegates !== 0) return;
+            check(findChild(c.queue.contentItem, "queueStatus").text === "Queue is empty", "queue shrink releases delegates and restores empty state");
             input.mouseClick(findChild(c.queue.contentItem, "queueCloseButton"));
             stage = 15; break;
         case 15:
@@ -809,7 +817,7 @@ QtObject {
         case 164: {
             const pane = findChild(window.contentItem, "demoPlaylistPane");
             const card = findChild(pane, "playlistList").itemAtIndex(0);
-            check(pane.message.includes("offline gallery"), "Add to queue dispatches the offline action");
+            check(JSON.parse(mock.stateJson).queue.entries.length > 5 && JSON.parse(mock.stateJson).queue.mode === "paused", "Add to queue appends in memory without starting music");
             check(findChild(card, "playlistActionsButton").activeFocus, "menu restores focus to three dots");
             card.forceActiveFocus();
             input.keyClick(Qt.Key_F10, Qt.ShiftModifier, 0);
@@ -893,6 +901,7 @@ QtObject {
             const cardOrigin = card.mapToItem(window.contentItem, 0, 0);
             check(Math.abs(menuOrigin.x - cardOrigin.x) < 20, "keyboard removal menu is anchored to its card");
             check(contained(menu.contentItem, window.activeFocusItem), "removal menu receives keyboard focus");
+            findChild(card, "removePlaylistTrack").forceActiveFocus();
             input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
             stage = 21;
             break;
@@ -1343,91 +1352,428 @@ QtObject {
             finish(); break;
         }
     }
+    function queueCards(panel: var): var {
+        return panel.mediaDelegates.filter(row => row.inViewport);
+    }
+    function queueReady(panel: var): bool {
+        const rows = queueCards(panel).filter(row => row.audioId >= 0);
+        return rows.length > 0 && rows.every(row => row.artworkUrl.length > 0 && row.durationLabel !== "--:--");
+    }
     function queueProbe(): void {
         if (!bridge.connected || bridge.library.libraryLoading) return;
         const next = findChild(window.contentItem, "nextTrackButton");
         const previous = findChild(window.contentItem, "previousTrackButton");
         const queueButton = findChild(window.contentItem, "queueButton");
         const panel = findChild(window.contentItem, "queuePanel");
+        const list = findChild(panel.contentItem, "queueScroll");
         switch (stage) {
         case 0:
             if (bridge.player.currentAudioId !== 7 || !next.enabled || !previous.enabled) return;
-            check(bridge.player.selectedAudioId === 7 && !bridge.player.selectedIsPlaying, "restored queue selects current and stays paused");
-            const queueOrigin = queueButton.mapToItem(window.contentItem, 0, 0);
-            check(queueOrigin.y === 0 && queueButton.height === 50 && queueOrigin.x + queueButton.width === window.width - 3 * 46,
-                "queue button is in the title bar immediately before window controls");
-            queueButton.forceActiveFocus();
-            input.mouseClick(queueButton, queueButton.width / 2, queueButton.height / 2, Qt.LeftButton, Qt.NoModifier, 0);
-            stage = 10; break;
+            check(bridge.player.selectedAudioId !== 7 && !bridge.player.selectedIsPlaying && bridge.player.loadingAudioId === -1, "paused recovery preserves selection and starts no download");
+            queueButton.forceActiveFocus(); queueButton.clicked(); stage = 10; break;
         case 10:
             if (!panel.opened || bridge.queue.queueLoading || !bridge.queue.queueMessage.includes("fixture queue unavailable")) return;
-            check(panel.width === 430 && panel.x + panel.width === findChild(window.contentItem, "playerPane").width,
-                "queue panel aligns with the player right edge");
-            findChild(window.contentItem, "queueRetryButton").clicked(); stage = 11; break;
+            check(panel.width === 430 && panel.x + panel.width === findChild(window.contentItem, "playerPane").width, "queue aligns with player");
+            findChild(panel.contentItem, "queueRetryButton").clicked(); stage = 11; break;
         case 11:
-            if (bridge.queue.queueLoading || bridge.queue.queueTracks.length !== 2) return;
-            if (bridge.queue.queueTracks.some(track => track.artworkUrl.length === 0 || track.durationLabel !== "02:05")) return;
-            check(bridge.queue.queueTracks[0].audioId === 42 && bridge.queue.queueTracks[1].audioId === 103, "queue excludes current track and preserves order");
-            check(contained(panel.contentItem, window.activeFocusItem), "queue opens with keyboard focus");
-            for (let i = 0; i < 4; ++i) {
+            if (bridge.queue.queueLoading || list.count !== 3 || !queueReady(panel)) return;
+            check(bridge.queue.tracks.entryIdAt(0) === "1" && list.itemAtIndex(0).model.isCurrent, "full queue includes current");
+            for (let i = 0; i < 6; ++i) {
                 input.keyClick(Qt.Key_Tab, Qt.NoModifier, 0);
                 check(contained(panel.contentItem, window.activeFocusItem), "queue contains Tab focus");
+                input.keyClick(Qt.Key_Backtab, Qt.ShiftModifier, 0);
+                check(contained(panel.contentItem, window.activeFocusItem), "queue contains Shift Tab focus");
             }
-            panel.tracks = Array.from({length: 16}, (_, i) => bridge.queue.queueTracks[i % 2]);
-            stage = 18; break;
-        case 18: {
-            const scroll = findChild(window.contentItem, "queueScroll").contentItem;
-            check(scroll.contentHeight > scroll.height, "long queues require vertical scrolling");
-            input.mouseWheel(scroll, 100, scroll.height / 2, 0, -120, Qt.NoButton, Qt.NoModifier, 0);
-            stage = 19; break;
-        }
-        case 19: {
-            const scroll = findChild(window.contentItem, "queueScroll").contentItem;
-            check(scroll.contentY > 0, "queue wheel scrolls to later songs");
-            scroll.contentY = 0;
-            panel.tracks = Qt.binding(() => bridge.queue.queueTracks);
             bridge.player.nextTrack(); stage = 1; break;
-        }
         case 1:
-            if (bridge.player.currentAudioId !== 42) return;
-            check(bridge.player.selectedAudioId === 42 && !bridge.player.selectedIsPlaying, "Next changes current and preserves pause");
-            if (bridge.queue.queueLoading || bridge.queue.queueTracks.length !== 1 || bridge.queue.queueTracks[0].audioId !== 103) return;
+            if (bridge.player.currentAudioId !== 42 || bridge.queue.queueLoading) return;
+            check(list.count === 3 && list.itemAtIndex(0).model.isPast, "Next preserves history");
             input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0); stage = 12; break;
         case 12:
             if (panel.visible) return;
-            check(queueButton.activeFocus, "queue Escape restores opener focus");
+            check(queueButton.activeFocus, "Escape restores opener focus");
             previous.clicked(); stage = 2; break;
         case 2:
             if (bridge.player.currentAudioId !== 7) return;
-            check(bridge.player.selectedAudioId === 7 && !bridge.player.selectedIsPlaying, "Previous changes current and preserves pause");
+            check(!bridge.player.selectedIsPlaying, "Previous preserves pause");
             next.clicked(); stage = 3; break;
         case 3:
             if (bridge.player.currentAudioId !== 42) return;
             bridge.library.searchLibrary("missing"); stage = 4; break;
         case 4:
-            if ((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 0 || bridge.library.libraryLoading || bridge.player.selectedArtworkUrl.length === 0) return;
-            check(bridge.player.currentAudioId === 42 && bridge.player.selectedAudioId === 42, "search does not discard current selection");
-            check(bridge.player.selectedTitle === "Track 42" && bridge.player.selectedDurationLabel === "02:05", "current metadata survives empty search");
-            check(next.enabled && previous.enabled && !bridge.player.selectedIsPlaying, "queue controls survive empty search on pause");
+            if (bridge.library.tracks.trackCount !== 0 || bridge.library.libraryLoading || bridge.player.selectedArtworkUrl.length === 0) return;
+            check(bridge.player.selectedTitle === "Track 42", "current metadata survives empty search");
             queueButton.forceActiveFocus(); queueButton.clicked(); stage = 13; break;
         case 13:
-            if (!panel.opened || bridge.queue.queueLoading || bridge.queue.queueTracks.length !== 1) return;
-            if (bridge.queue.queueTracks[0].artworkUrl.length === 0 || bridge.queue.queueTracks[0].durationLabel !== "02:05") return;
-            check(bridge.queue.queueTracks[0].audioId === 103 && (window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) === 0, "queue media works outside Songs search");
+            if (!panel.opened || bridge.queue.queueLoading || !queueReady(panel)) return;
+            check(list.count === 3 && list.currentIndex === 1, "reopening positions once on current outside library search");
             bridge.player.nextTrack(); stage = 14; break;
         case 14:
-            if (bridge.player.currentAudioId !== 103 || bridge.queue.queueLoading || bridge.queue.queueTracks.length !== 0) return;
-            check(findChild(window.contentItem, "queueStatus").text === "No upcoming songs", "exhausted upcoming list has an empty state");
+            if (bridge.player.currentAudioId !== 103 || bridge.queue.queueLoading) return;
+            check(list.count === 3, "last track retains history");
             input.mouseClick(window.contentItem, 490, 150, Qt.LeftButton, Qt.NoModifier, 0); stage = 15; break;
         case 15:
             if (panel.visible) return;
-            check(bridge.player.selectedAudioId === 103, "outside click closes queue without selecting a track");
+            check(bridge.player.selectedAudioId === 103, "backdrop closes without selecting");
             queueButton.clicked(); stage = 16; break;
         case 16:
             if (!panel.opened) return;
-            findChild(window.contentItem, "queueCloseButton").clicked(); stage = 17; break;
-        case 17:
+            findChild(panel.contentItem, "queueCloseButton").clicked(); stage = 17; break;
+        case 17: if (!panel.visible) finish(); break;
+        }
+    }
+    property var queueDemand: []
+    property int queueSnapshots: 0
+    property int queueResets: 0
+    property int queueInitialCreated: 0
+    property real queueSavedY: 0
+    property var queueRetained: null
+    property string queueRetainedArtwork: ""
+    property var queueDemandTarget: null
+    readonly property Connections queueDemandConnection: Connections {
+        target: probe.queueDemandTarget
+        function onVisibleEntriesChanged(ids: var): void { probe.queueDemand = ids; probe.queueSnapshots++; }
+    }
+    readonly property Connections queueModelConnection: Connections {
+        target: probe.bridge ? probe.bridge.queue.tracks : null
+        function onModelReset(): void { probe.queueResets++; }
+    }
+    function galleryQueueProbe(): void {
+        const panel = findChild(window.contentItem, "galleryQueuePanel");
+        const list = findChild(panel.contentItem, "queueScroll");
+        const store = window.galleryStore;
+        switch (stage) {
+        case 0:
+            findChild(window.contentItem, "galleryQueueButton").forceActiveFocus();
+            findChild(window.contentItem, "galleryQueueButton").clicked(); stage = 1; break;
+        case 1:
+            if (!panel.opened || list.count !== 5) return;
+            check(list.itemAtIndex(0).model.isPast && list.itemAtIndex(1).model.isCurrent, "offline model shows history/current");
+            check(list.itemAtIndex(0).audioId === list.itemAtIndex(2).audioId && list.itemAtIndex(0).entryId !== list.itemAtIndex(2).entryId, "offline duplicates have independent IDs");
+            list.itemAtIndex(0).forceActiveFocus(); input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
+            check(store.state.queue.current_entry_id === "1" && list.count === 5, "offline Play past reuses entry");
+            list.itemAtIndex(3).forceActiveFocus(); input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
+            check(store.state.queue.waiting_for_check, "offline checking waits");
+            store.send("queuePlay", "5");
+            check(panel.message.length > 0 && list.count === 5, "offline errors retain confirmed list");
+            findChild(panel.contentItem, "queueRetryButton").clicked();
+            check(panel.message.length === 0 && store.state.queue.current_entry_id === "4", "offline refresh clears error without Play");
+            findChild(list.itemAtIndex(4), "queueRemoveEntry").clicked();
+            check(list.count === 4 && store.state.queue.current_entry_id === "4", "offline unavailable removal keeps current");
+            list.itemAtIndex(2).forceActiveFocus(); input.keyClick(Qt.Key_Up, Qt.ControlModifier, 0);
+            check(store.queueModel.entryIdAt(1) === "3", "offline keyboard move by ID");
+            findChild(panel.contentItem, "queueClearUpcoming").clicked();
+            findChild(panel.contentItem, "queueClearAll").clicked();
+            check(list.count === 0, "offline clears use same panel");
+            panel.close(); stage = 2; break;
+        case 2:
             if (panel.visible) return;
+            check(findChild(window.contentItem, "galleryQueueButton").activeFocus, "offline focus returns");
+            finish(); break;
+        }
+    }
+    property int galleryInsertion: 0
+    function galleryInsertionProbe(): void {
+        const store = window.galleryStore;
+        const pane = findChild(window.contentItem, "demoPlaylistPane");
+        switch (stage) {
+        case 0:
+            if (galleryInsertion === 4) {
+                window.selectedTab = 1;
+                store.send("playlistSelect", 1);
+            }
+            stage = 1; break;
+        case 1:
+            insertionCard = galleryInsertion < 4 ? findChild(window.contentItem, "galleryQueueSource" + Math.floor(galleryInsertion / 2)) : pane.tracksList.itemAtIndex(2);
+            if (!insertionCard) return;
+            if (galleryInsertion < 4) {
+                const scroll = findChild(window.contentItem, "galleryScroll");
+                scroll.contentItem.contentY += insertionCard.mapToItem(scroll, 0, 0).y - 150;
+            }
+            insertionCard.forceActiveFocus();
+            input.keyClick(galleryInsertion % 2 ? Qt.Key_F10 : Qt.Key_Menu, galleryInsertion % 2 ? Qt.ShiftModifier : Qt.NoModifier, 0);
+            stage = 2; break;
+        case 2: {
+            const menu = findChild(insertionCard, galleryInsertion < 4 ? "songQueueMenu" : "playlistItemMenu");
+            if (!menu.opened) return;
+            const before = store.state.queue;
+            const selected = store.state.selected;
+            const playlistSelected = store.state.playlists.selected_item_id;
+            const command = findChild(insertionCard, galleryInsertion % 2 ? "insertQueueTrackNext" : "appendQueueTrack");
+            command.forceActiveFocus();
+            input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
+            check(store.state.queue.entries.length === before.entries.length + 1, "gallery source uses structured insertion");
+            check(store.state.queue.mode === before.mode && store.state.queue.current_entry_id === before.current_entry_id && store.state.queue.playback_token === before.playback_token, "gallery insertion preserves transport");
+            check(store.state.selected === selected && store.state.playlists.selected_item_id === playlistSelected, "gallery insertion preserves selection");
+            if (galleryInsertion >= 4) {
+                const row = store.state.queue.entries.find(row => Number(row.id) > 9);
+                check(row && row.playlist_item_id === 3 && row.availability === "unavailable", "gallery unavailable item identity survives");
+            }
+            stage = 3; break;
+        }
+        case 3:
+            if (!insertionCard.activeFocus) return;
+            galleryInsertion++;
+            if (galleryInsertion < 6) { stage = 0; break; }
+            const menu = findChild(insertionCard, "playlistItemMenu");
+            insertionCard.canInsert = false;
+            menu.openAt(Qt.point(0, insertionCard.height));
+            stage = 4; break;
+        case 4: {
+            const menu = findChild(insertionCard, "playlistItemMenu");
+            if (!menu.opened) return;
+            check(!findChild(insertionCard, "appendQueueTrack").enabled && !findChild(insertionCard, "insertQueueTrackNext").enabled, "disconnected/busy gate disables both commands");
+            insertionCard.canInsert = true;
+            insertionCard.busy = true;
+            check(!findChild(insertionCard, "appendQueueTrack").enabled && !findChild(insertionCard, "insertQueueTrackNext").enabled, "playlist busy gates both row insertions");
+            insertionCard.busy = false;
+            check(findChild(insertionCard, "appendQueueTrack").enabled && findChild(insertionCard, "insertQueueTrackNext").enabled, "idle row insertions recover");
+            input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0);
+            stage = 5; break;
+        }
+        case 5:
+            if (!insertionCard.activeFocus) return;
+            finish(); break;
+        }
+    }
+    property int insertionStep: 0
+    property var insertionCard: null
+    property bool insertionBusySeen: false
+    function insertionProbe(): void {
+        if (!bridge.connected || bridge.library.libraryLoading || bridge.playlists.playlistLoading) return;
+        const songs = findChild(window.contentItem, "songList");
+        const pane = findChild(window.contentItem, "playlistsPane");
+        switch (stage) {
+        case 0:
+            if (songs.count !== 3) return;
+            bridge.library.selectTrack(42);
+            bridge.queue.setQueueVisible(true);
+            insertionCard = songs.itemAtIndex(0);
+            insertionCard.forceActiveFocus();
+            input.keyClick(Qt.Key_Menu, Qt.NoModifier, 0);
+            stage = 1; break;
+        case 1: {
+            const menu = findChild(insertionCard, "songQueueMenu");
+            if (!menu.opened) return;
+            check(contained(menu.contentItem, window.activeFocusItem), "Menu key focuses insertion menu");
+            input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0);
+            stage = 2; break;
+        }
+        case 2:
+            if (findChild(insertionCard, "songQueueMenu").visible) return;
+            check(insertionCard.activeFocus && bridge.library.selectedAudioId === 42, "Escape returns focus without selection");
+            stage = 10; break;
+        case 10:
+            if (bridge.queue.queueBusy || bridge.queue.queueLoading || bridge.playlists.playlistBusy) return;
+            if (insertionStep === 2 && songs.count !== 2) {
+                findChild(window.contentItem, "songSearch").text = "Track 103";
+                return;
+            }
+            if (insertionStep === 4 && window.selectedTab !== 1) {
+                findChild(window.contentItem, "playlistsTabButton").clicked();
+                bridge.playlists.selectPlaylist(1);
+                return;
+            }
+            if (insertionStep >= 4 && (pane.tracksList.count !== 3 || !pane.tracksList.itemAtIndex(2))) return;
+            insertionCard = null;
+            if (insertionStep < 4) {
+                for (let i = 0; i < songs.count; ++i) {
+                    const card = songs.itemAtIndex(i);
+                    if (card && card.audioId === (insertionStep < 2 ? 7 : 103)) insertionCard = card;
+                }
+            } else insertionCard = pane.tracksList.itemAtIndex(insertionStep - 4);
+            if (!insertionCard) return;
+            if (insertionStep % 2 === 0) input.mouseClick(insertionCard, 30, 30, Qt.RightButton, Qt.NoModifier, 0);
+            else {
+                insertionCard.forceActiveFocus();
+                input.keyClick(Qt.Key_F10, Qt.ShiftModifier, 0);
+            }
+            stage = 11; break;
+        case 11: {
+            const menu = findChild(insertionCard, insertionStep < 4 ? "songQueueMenu" : "playlistItemMenu");
+            if (!menu.opened) return;
+            const name = insertionStep % 2 === 1 ? "insertQueueTrackNext" : "appendQueueTrack";
+            const command = findChild(insertionCard, name);
+            check(command.enabled && command.Accessible.name.length > 0, "insertion command has accessible name");
+            check(bridge.library.selectedAudioId === 42 && bridge.playlists.selectedPlaylistItemId === (insertionStep < 4 ? -1 : 11), "context menu never selects its row");
+            command.forceActiveFocus();
+            input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
+            stage = 12; break;
+        }
+        case 12:
+            if (bridge.queue.queueBusy) {
+                insertionBusySeen = true;
+                check(!findChild(insertionCard, "appendQueueTrack").enabled && !findChild(insertionCard, "insertQueueTrackNext").enabled, "both insertions disabled while queue busy");
+                return;
+            }
+            if (bridge.queue.queueLoading || bridge.queue.tracks.trackCount !== 3 + insertionStep) return;
+            check(insertionCard.activeFocus, "command returns focus to source row");
+            check(bridge.library.selectedAudioId === 42 && bridge.playlists.selectedPlaylistItemId === (insertionStep < 4 ? -1 : 11), "insertions preserve independent selections");
+            check(bridge.player.currentAudioId === 7 && !bridge.player.selectedIsPlaying, "insertions preserve paused current");
+            insertionStep++;
+            if (insertionStep < 7) { stage = 10; break; }
+            check(insertionBusySeen, "Qt projects queue busy");
+            bridge.playlists.selectPlaylist(-1);
+            stage = 20; break;
+        case 20: {
+            const card = findChild(pane, "playlistList").itemAtIndex(0);
+            if (!card || bridge.playlists.activePlaylistId >= 0) return;
+            card.forceActiveFocus();
+            input.keyClick(Qt.Key_Menu, Qt.NoModifier, 0);
+            stage = 21; break;
+        }
+        case 21: {
+            const menu = findChild(findChild(pane, "playlistList").itemAtIndex(0), "playlistActionsMenu");
+            if (!menu.opened) return;
+            input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
+            stage = 22; break;
+        }
+        case 22:
+            if (bridge.queue.queueBusy || bridge.queue.queueLoading || bridge.queue.tracks.trackCount !== 12) return;
+            bridge.library.insertTrack(999, false);
+            stage = 23; break;
+        case 23:
+            if (bridge.queue.queueBusy || !bridge.queue.queueMessage.includes("fixture insert rejected")) return;
+            check(bridge.queue.tracks.trackCount === 12, "failed insertion retains confirmed rows");
+            check(bridge.library.selectedAudioId === 42 && bridge.player.currentAudioId === 7, "whole playlist and failure preserve selection/current");
+            finish(); break;
+        }
+    }
+    function managedQueueProbe(): void {
+        if (!bridge.connected || bridge.library.libraryLoading) return;
+        const panel = findChild(window.contentItem, "queuePanel");
+        const list = findChild(panel.contentItem, "queueScroll");
+        const history = testCase === "queue-managed-small" ? 20 : 5000;
+        const count = history + 5;
+        const maximum = "9223372036854775807";
+        const current = "9007199254740993";
+        const duplicate = "9007199254740995";
+        const checking = "9007199254740997";
+        const unavailable = "9007199254740999";
+        switch (stage) {
+        case 0: {
+            // Start after library delivery so startup decoding cannot overlap queue demand.
+            const songs = findChild(window.contentItem, "songList");
+            if (songs.count !== 3) return;
+            for (let i = 0; i < songs.count; ++i) {
+                const row = songs.itemAtIndex(i);
+                if (!row || !row.artworkUrl.length) return;
+            }
+            queueDemandTarget = panel;
+            findChild(window.contentItem, "queueButton").forceActiveFocus();
+            findChild(window.contentItem, "queueButton").clicked(); stage = 1; break;
+        }
+        case 1:
+            if (!panel.opened || bridge.queue.queueLoading || panel.positionPending || list.count !== count || !queueReady(panel)) return;
+            check(list.currentIndex === history && bridge.queue.tracks.entryIdAt(history) === current, "opening positions on current exact ID: " + list.currentIndex + "/" + bridge.queue.startIndex + "/" + bridge.queue.tracks.entryIdAt(history));
+            check(bridge.player.currentAudioId === 7 && !bridge.player.selectedIsPlaying, "opening does not Play");
+            check(list.itemAtIndex(history + 3).model.availability === "checking", "checking row remains visible");
+            check(list.itemAtIndex(history + 4).model.availability === "unavailable", "unavailable snapshot remains visible");
+            check(!findChild(list.itemAtIndex(history + 4), "queuePlayEntry").enabled, "unavailable Play is disabled");
+            input.mouseClick(list.itemAtIndex(history + 4));
+            check(queueDemand.length > 0 && queueDemand.length <= Math.ceil(list.height / 96) + 1, "only viewport entries request media");
+            queueInitialCreated = panel.createdDelegates;
+            check(panel.liveDelegates < 24 && panel.createdDelegates < 32, "delegate creation is bounded on opening");
+            queueRetained = list.itemAtIndex(history + 1);
+            queueRetainedArtwork = queueRetained.artworkUrl;
+            queueSavedY = list.contentY;
+            bridge.queue.moveEntry(checking, maximum); stage = 2; break;
+        case 2:
+            if (!bridge.queue.queueMessage.includes("fixture move rejected")) return;
+            check(bridge.queue.tracks.entryIdAt(history + 1) === maximum && list.count === count, "rejected move preserves confirmed order");
+            check(list.contentY === queueSavedY && list.itemAtIndex(history + 1) === queueRetained && queueRetained.artworkUrl === queueRetainedArtwork, "error and media updates preserve scrolling, delegate and image");
+            bridge.queue.moveEntry(maximum, duplicate); stage = 21; break;
+        case 21:
+            if (bridge.queue.queueLoading || bridge.queue.queueMessage.length) return;
+            // Hide the error before measuring role updates at a fixed viewport height.
+            list.forceLayout();
+            list.positionViewAtIndex(0, ListView.Beginning); stage = 3; break;
+        case 3:
+            if (!queueReady(panel) || !queueDemand.includes("100000")) return;
+            check(panel.liveDelegates < 24, "history scroll remains virtualized");
+            list.positionViewAtIndex(history, ListView.Beginning); stage = 4; break;
+        case 4:
+            if (!queueDemand.includes(maximum) || !queueReady(panel)) return;
+            console.info("Queue metrics", JSON.stringify({history: history, initialCreated: queueInitialCreated, created: panel.createdDelegates, live: panel.liveDelegates, viewport: list.height, demand: queueDemand.length}));
+            queueSavedY = list.contentY;
+            queueRetained = list.itemAtIndex(history + 1);
+            queueRetainedArtwork = queueRetained.artworkUrl;
+            const handle = findChild(queueRetained, "queueDragHandle");
+            input.mousePress(handle, 16, 20, Qt.LeftButton, Qt.NoModifier, 0);
+            input.mouseMove(handle, 16, 8, 0);
+            check(panel.dragging && findChild(panel.contentItem, "queueInsertionIndicator").visible, "handle drag shows insertion indicator");
+            input.mouseRelease(handle, 16, 8, Qt.LeftButton, Qt.NoModifier, 0);
+            stage = 41; break;
+        case 41:
+            if (bridge.queue.queueLoading || bridge.queue.queueMessage.length) return;
+            if (!list.itemAtIndex(history - 1) || list.itemAtIndex(history - 1).model.availability !== "checking") return;
+            check(list.contentY === queueSavedY && list.itemAtIndex(history + 1) === queueRetained && queueRetained.artworkUrl === queueRetainedArtwork, "availability update after scrolling preserves position, delegate and artwork: " + list.contentY + "/" + queueSavedY + "/" + (list.itemAtIndex(history + 1) === queueRetained) + "/" + (queueRetained.artworkUrl === queueRetainedArtwork));
+            check(!panel.dragging && bridge.player.currentAudioId === 7, "drop submits one move without Play");
+            // Cancel another drag before release; it must not submit an operation.
+            const cancelHandle = findChild(list.itemAtIndex(history + 1), "queueDragHandle");
+            input.mousePress(cancelHandle, 16, 20, Qt.LeftButton, Qt.NoModifier, 0);
+            const edge = list.mapToItem(cancelHandle, list.width - 16, 1);
+            queueSavedY = list.contentY;
+            input.mouseMove(cancelHandle, edge.x, edge.y, 0); stage = 42; break;
+        case 42:
+            if (list.contentY >= queueSavedY) return;
+            check(panel.dragging, "drag auto-scrolls at viewport edge");
+            const releaseHandle = findChild(list.itemAtIndex(history + 1), "queueDragHandle");
+            input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0);
+            input.mouseRelease(releaseHandle, 16, 8, Qt.LeftButton, Qt.NoModifier, 0);
+            check(!panel.dragging && panel.visible, "Escape cancels drag and preserves panel");
+            list.positionViewAtIndex(history, ListView.Beginning);
+            panel.focusRow(history + 1);
+            input.keyClick(Qt.Key_Down, Qt.NoModifier, 0);
+            check(list.itemAtIndex(history + 2).activeFocus, "Down moves focus without Play");
+            input.keyClick(Qt.Key_Up, Qt.NoModifier, 0);
+            check(list.itemAtIndex(history + 1).activeFocus, "Up returns focus without Play");
+            input.keyClick(Qt.Key_Down, Qt.ControlModifier, 0); stage = 5; break;
+        case 5:
+            if (bridge.queue.queueLoading || bridge.queue.tracks.entryIdAt(history + 2) !== maximum) return;
+            check(bridge.queue.tracks.entryIdAt(history + 1) === duplicate, "keyboard move distinguishes duplicate audio/item");
+            list.forceLayout();
+            const duplicateRow = list.itemAtIndex(history + 1);
+            if (!duplicateRow || duplicateRow.entryId !== duplicate) return;
+            duplicateRow.forceActiveFocus();
+            input.keyClick(Qt.Key_Delete, Qt.NoModifier, 0); stage = 6; break;
+        case 6:
+            if (bridge.queue.queueLoading || list.count !== count - 1) return;
+            check(bridge.queue.tracks.entryIdAt(history + 1) === maximum, "Delete removes only one duplicate");
+            // A no-op with the maximum ID proves QML null reaches HTTP unchanged.
+            bridge.queue.moveEntry(maximum, null); stage = 7; break;
+        case 7:
+            if (bridge.queue.queueLoading || bridge.queue.tracks.entryIdAt(count - 2) !== maximum) return;
+            bridge.queue.moveEntry(maximum, checking); stage = 8; break;
+        case 8:
+            if (bridge.queue.queueLoading || bridge.queue.tracks.entryIdAt(history + 1) !== maximum) return;
+            list.forceLayout();
+            const checkingRow = list.itemAtIndex(history + 2);
+            if (!checkingRow || checkingRow.entryId !== checking) return;
+            input.mouseClick(findChild(checkingRow, "queuePlayEntry")); stage = 9; break;
+        case 9:
+            if (bridge.player.currentAudioId !== 103 || bridge.queue.queueLoading) return;
+            check(list.count === count - 1, "Play checking does not insert a copy");
+            bridge.queue.playEntry("100000"); stage = 10; break;
+        case 10:
+            if (bridge.player.currentAudioId !== 10000 || bridge.queue.queueLoading) return;
+            check(list.count === count - 1 && bridge.queue.startIndex === 0, "Play past preserves entry and list length");
+            findChild(list.itemAtIndex(history + 3), "queueRemoveEntry").clicked(); stage = 101; break;
+        case 101:
+            if (bridge.queue.queueLoading || list.count !== count - 2) return;
+            check(bridge.player.currentAudioId === 10000, "unavailable removal does not Play");
+            findChild(panel.contentItem, "queueClearUpcoming").clicked(); stage = 11; break;
+        case 11:
+            if (bridge.queue.queueLoading || list.count !== 1) return;
+            check(bridge.queue.tracks.entryIdAt(0) === "100000", "clear upcoming keeps current past entry");
+            findChild(panel.contentItem, "queueClearAll").clicked(); stage = 12; break;
+        case 12:
+            if (bridge.queue.queueLoading || list.count !== 0) return;
+            check(queueResets === 0, "queue never resets model");
+            panel.close(); stage = 13; break;
+        case 13:
+            if (panel.visible || queueDemand.length !== 0) return;
+            check(findChild(window.contentItem, "queueButton").activeFocus, "managed queue restores opener focus");
             finish(); break;
         }
     }
@@ -1664,6 +2010,7 @@ QtObject {
             const menu = findChild(card, "playlistItemMenu");
             if (!menu.opened) return;
             check(contained(menu.contentItem, window.activeFocusItem), "keyboard context menu receives focus");
+            findChild(card, "removePlaylistTrack").forceActiveFocus();
             input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
             stage = 12;
             break;
@@ -1978,12 +2325,85 @@ QtObject {
             finish();
         }
     }
+    property int realQueueSelection: -1
+    function realQueueProbe(): void {
+        if (!bridge.connected || bridge.library.libraryLoading || bridge.queue.queueBusy || bridge.queue.queueLoading) return;
+        const panel = findChild(window.contentItem, "queuePanel");
+        const list = panel ? findChild(panel.contentItem, "queueScroll") : null;
+        const ids = () => Array.from({length: bridge.queue.tracks.trackCount}, (_, i) => bridge.queue.tracks.entryIdAt(i));
+        switch (stage) {
+        case 0:
+            if (bridge.library.tracks.trackCount !== 4 || bridge.player.selectedAudioId < 0) return;
+            realQueueSelection = bridge.player.selectedAudioId;
+            findChild(window.contentItem, "queueButton").clicked(); stage = 1; break;
+        case 1:
+            if (!panel || !panel.opened || !list || list.count !== 4 || !list.itemAtIndex(3)) return;
+            check(JSON.stringify(ids()) === JSON.stringify(["9007199254740993", "9007199254740994", "9007199254740995", "9007199254740996"]), "real BIGINT IDs survive server, client and QML");
+            check(list.itemAtIndex(0).model.isPast && list.itemAtIndex(1).model.isCurrent && !list.itemAtIndex(2).model.isPast, "real recovered history/current/future");
+            check(list.itemAtIndex(3).model.availability === "unavailable", "real worker rejects missing WAV and retains its row");
+            check(bridge.player.selectedAudioId === realQueueSelection && !bridge.player.selectedIsPlaying && !bridge.player.canSeek && bridge.player.playbackPosition === 0, "opening recovered pause preserves selection and opens no engine");
+            if (testCase === "queue-real-recovery") { finish(); return; }
+            bridge.queue.moveEntry("9007199254740994", "9007199254740993"); stage = 2; break;
+        case 2:
+            if (ids()[0] !== "9007199254740994") return;
+            list.forceLayout();
+            if (!list.itemAtIndex(0) || list.itemAtIndex(0).entryId !== "9007199254740994") return;
+            check(bridge.queue.startIndex === 0 && list.itemAtIndex(0).model.isCurrent, "real move follows current identity");
+            bridge.queue.removeEntry("9007199254740993"); stage = 3; break;
+        case 3:
+            if (list.count !== 3) return;
+            check(ids()[0] === "9007199254740994", "removing duplicate keeps current occurrence");
+            bridge.queue.removeEntry("9007199254740994"); stage = 4; break;
+        case 4:
+            if (list.count !== 2 || ids()[0] !== "9007199254740995") return;
+            list.forceLayout();
+            if (!list.itemAtIndex(0) || list.itemAtIndex(0).entryId !== "9007199254740995") return;
+            check(list.itemAtIndex(0).model.isCurrent && !bridge.player.selectedIsPlaying && !bridge.player.canSeek && bridge.player.playbackPosition === 0, "removing paused current selects next without opening engine");
+            panel.close();
+            findChild(window.contentItem, "songSearch").text = "C"; stage = 5; break;
+        case 5:
+            if (bridge.library.tracks.trackCount !== 1) return;
+            insertionCard = findChild(window.contentItem, "songList").itemAtIndex(0);
+            if (!insertionCard || insertionCard.title !== "C") return;
+            insertionCard.forceActiveFocus(); input.keyClick(Qt.Key_Menu, Qt.NoModifier, 0); stage = 6; break;
+        case 6:
+            if (!findChild(insertionCard, "songQueueMenu").opened) return;
+            findChild(insertionCard, "insertQueueTrackNext").forceActiveFocus();
+            input.keyClick(Qt.Key_Return, Qt.NoModifier, 0); stage = 7; break;
+        case 7:
+            findChild(window.contentItem, "queueButton").clicked(); stage = 8; break;
+        case 8:
+            if (!panel.opened || list.count !== 3 || !list.itemAtIndex(1)) return;
+            if (list.itemAtIndex(1).model.availability !== "available") return;
+            check(list.itemAtIndex(1).model.title === "C" && ids()[2] === "9007199254740996", "search Next inserts into real queue and worker checks the file");
+            bridge.playlists.addPlaylistToQueue(1); stage = 9; break;
+        case 9:
+            if (list.count !== 7) return;
+            list.positionViewAtIndex(6, ListView.Contain);
+            if (!list.itemAtIndex(6)) return;
+            if (list.itemAtIndex(6).model.availability !== "unavailable") return;
+            check(!bridge.player.selectedIsPlaying && !bridge.player.canSeek && bridge.player.playbackPosition === 0, "whole playlist append retains unavailable and pause");
+            findChild(panel.contentItem, "queueClearUpcoming").clicked(); stage = 10; break;
+        case 10:
+            if (list.count !== 1) return;
+            list.positionViewAtBeginning();
+            if (!list.itemAtIndex(0)) return;
+            check(ids()[0] === "9007199254740995" && list.itemAtIndex(0).model.isCurrent, "real clear upcoming keeps current");
+            findChild(panel.contentItem, "queueClearAll").clicked(); stage = 11; break;
+        case 11:
+            if (list.count !== 0) return;
+            check(!bridge.player.selectedIsPlaying && !bridge.player.canSeek && bridge.player.playbackPosition === 0 && bridge.queue.queueMessage === "", "real clear all stops without errors");
+            finish(); break;
+        }
+    }
     function step(): void {
         if (passed) return;
         if (testCase === "controls") { controlsProbe(); return; }
         if (testCase === "controls-popups") { menuModalProbe(); return; }
         if (testCase === "controls-window") { windowProbe(); return; }
         if (testCase === "controls-panels") { panelProbe(); return; }
+        if (testCase === "gallery-insert") { galleryInsertionProbe(); return; }
+        if (testCase === "gallery-queue") { galleryQueueProbe(); return; }
         if (gallery) { galleryModalProbe(); return; }
         if (testCase.startsWith("discord-")) { discordPreferenceProbe(); return; }
         if (testCase.startsWith("names-")) { trackNamePreferencesProbe(); return; }
@@ -1992,6 +2412,9 @@ QtObject {
         if (testCase === "settings-search") { settingsSearchProbe(); return; }
         if (testCase === "playback") { playbackProbe(); return; }
         if (testCase === "queue") { queueProbe(); return; }
+        if (testCase === "queue-insert") { insertionProbe(); return; }
+        if (testCase.startsWith("queue-real")) { realQueueProbe(); return; }
+        if (testCase.startsWith("queue-managed")) { managedQueueProbe(); return; }
         if (testCase === "volume") { volumeProbe(); return; }
         if (testCase === "playlists") { playlistsProbe(); return; }
         if (testCase === "playlist-covers") { playlistCoversProbe(); return; }
@@ -2137,6 +2560,6 @@ QtObject {
         onTriggered: { probe.step(); if (!probe.passed) restart(); }
     }
     Component.onCompleted: {
-        if (gallery && !testCase.startsWith("controls")) galleryProbe();
+        if (gallery && !testCase.startsWith("controls") && testCase !== "gallery-queue" && testCase !== "gallery-insert") galleryProbe();
     }
 }

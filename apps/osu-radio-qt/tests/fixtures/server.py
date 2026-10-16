@@ -58,6 +58,15 @@ if case == "visual-flicker":
     playlist_covers[1] = make_png(512, 512, (80, 100, 120), True)
 flicker_covers = {}
 
+if case == "queue-insert":
+    playlists[1] = {"id": 1, "name": "Insertion identity", "items": [
+        {"id": identifier, "playlist_id": 1, "source_kind": "stable", "beatmap_hash": str(identifier),
+         "title": "Saved " + name, "artist": "Fixture artist", "difficulty_name": name,
+         "beatmap_id": identifier if audio else None, "beatmap_set_id": 1 if audio else None,
+         "audio_source_id": audio, "cover_beatmap_id": 42 if audio else None}
+        for identifier, name, audio in [(11, "Easy", 42), (12, "Hard", 42), (13, "Missing", None)]
+    ]}
+
 def playlist_summary(identifier):
     playlist = playlists[identifier]
     return {"id": identifier, "name": playlist["name"], "item_count": len(playlist["items"]),
@@ -115,8 +124,22 @@ def library(ids):
 
 queue = ([1] + list(range(101, 117))) if case == "visual-flicker" else [7, 42, 103] if case in ("queue", "volume", "visual-queue") else []
 queue_index = 0
+queue_ids = [str(i + 1) for i in range(len(queue))]
+queue_availability = {}
+queue_items = {}
+queue_move_failures = 0
+history_count = 20 if case == "queue-managed-small" else 5000
+if case.startswith("queue-managed"):
+    queue = list(range(10000, 10000 + history_count)) + [7, 42, 42, 103, None]
+    queue_ids = [str(i + 100000) for i in range(history_count)] + ["9007199254740993", "9223372036854775807", "9007199254740995", "9007199254740997", "9007199254740999"]
+    queue_index = history_count
+    queue_availability = {"9007199254740997": "checking", "9007199254740999": "unavailable"}
+if case == "queue-insert":
+    queue, queue_ids = [7, 103], ["1", "2"]
 playback_condition = threading.Condition()
-playback = {"current_audio_source_id": 7 if queue else None,
+playback = {"current_entry_id": queue_ids[queue_index] if queue else None,
+            "availability": "available" if queue else None, "waiting_for_check": False,
+            "current_audio_source_id": 7 if queue else None,
             "track": library([7])[0] if queue else None,
             "duration_ms": 125000 if queue else None,
             "mode": "paused" if queue else "stopped", "revision": 1 if queue else 0,
@@ -134,6 +157,7 @@ def playback_command(body):
         if command == "play":
             identifier = body.get("audio_source_id", playback["current_audio_source_id"])
             if identifier is not None and identifier != playback["current_audio_source_id"]:
+                queue_ids.insert(min(queue_index + 1, len(queue)), str(max(map(int, queue_ids), default=0) + 1))
                 queue.insert(min(queue_index + 1, len(queue)), identifier)
                 queue_index = queue.index(identifier)
                 playback["playback_token"] += 1
@@ -150,6 +174,8 @@ def playback_command(body):
             queue_index += 1
             playback["playback_token"] += 1
         identifier = queue[queue_index] if queue_index < len(queue) else None
+        playback["current_entry_id"] = queue_ids[queue_index] if identifier is not None else None
+        playback["availability"] = "available" if identifier is not None else None
         playback["current_audio_source_id"] = identifier
         playback["track"] = library([identifier])[0] if identifier is not None else None
         playback["duration_ms"] = 125000 if identifier is not None else None
@@ -160,6 +186,103 @@ def playback_command(body):
         playback["revision"] += 1
         playback_condition.notify_all()
         return dict(playback)
+
+
+def queue_operation(method, path, body):
+    global queue_index, queue_move_failures
+    with playback_condition:
+        before = list(queue_ids)
+        current = playback["current_entry_id"]
+        status, error = 200, None
+        parts = path.split("/")
+        identifier = parts[4] if len(parts) > 4 else None
+        insertion = method == "POST" and (path == "/api/queue/items" or path.endswith("/queue"))
+        if insertion:
+            # Leave the current assignment/token untouched, including when the queue is empty.
+            time.sleep(0.15)
+            refs = body.get("items", []) if path == "/api/queue/items" else [
+                {"type": "playlist_item", "playlist_id": int(parts[3]), "item_id": item["id"]}
+                for item in playlists[int(parts[3])]["items"]]
+            rows = []
+            for ref in refs:
+                if ref["type"] == "audio":
+                    if ref["audio_source_id"] not in (7, 42, 103):
+                        status, error = 409, "fixture insert rejected"
+                        break
+                    row = library([ref["audio_source_id"]])[0]
+                else:
+                    row = next(item for item in playlists[ref["playlist_id"]]["items"] if item["id"] == ref["item_id"])
+                rows.append(row)
+            if status == 200:
+                index = min(queue_index + int(current is not None), len(queue)) if body.get("placement") == "next" else len(queue)
+                for row in rows:
+                    entry = str(max(map(int, queue_ids), default=0) + 1)
+                    queue_ids.insert(index, entry)
+                    queue.insert(index, row["audio_source_id"])
+                    queue_items[entry] = dict(row, playlist_item_id=row.get("id"))
+                    queue_availability[entry] = "available" if row["audio_source_id"] else "unavailable"
+                    index += 1
+        elif identifier and identifier not in queue_ids:
+            status, error = 404, "Queue entry no longer exists"
+        elif method == "PATCH" and body.get("before_entry_id") is not None and body["before_entry_id"] not in queue_ids:
+            status, error = 404, "Anchor no longer exists"
+        elif method == "PATCH" and identifier == "9007199254740997" and queue_move_failures == 0:
+            queue_move_failures += 1
+            status, error = 409, "fixture move rejected"
+        elif method == "POST":
+            if queue_availability.get(identifier) == "unavailable":
+                status, error = 409, "Unavailable"
+            else:
+                current = identifier
+                queue_index = queue_ids.index(identifier)
+                playback["mode"] = "playing"
+                playback["playback_token"] += 1
+        elif method == "PATCH":
+            anchor = body.get("before_entry_id")
+            if anchor != identifier:
+                index = queue_ids.index(identifier)
+                audio = queue.pop(index)
+                queue_ids.pop(index)
+                index = queue_ids.index(anchor) if anchor else len(queue_ids)
+                queue_ids.insert(index, identifier)
+                queue.insert(index, audio)
+        elif method == "DELETE":
+            if identifier:
+                index = queue_ids.index(identifier)
+                queue_ids.pop(index)
+                queue.pop(index)
+                if identifier == current:
+                    current = queue_ids[index] if index < len(queue_ids) else None
+                    playback["playback_token"] += 1
+            else:
+                start = (queue_ids.index(current) + 1 if current in queue_ids else min(queue_index, len(queue))) if path.endswith("/upcoming") else 0
+                del queue[start:]
+                del queue_ids[start:]
+                if current not in queue_ids:
+                    current = None
+        if status == 200:
+            if case.startswith("queue-managed") and method == "PATCH" and body.get("before_entry_id") == identifier:
+                checkpoint = root / "queue_viewport_requests"
+                if not checkpoint.exists():
+                    # End the equal viewport route before timing-dependent edge scrolling.
+                    checkpoint.write_text((root / "requests").read_text())
+                # A committed no-op also delivers a server availability update.
+                queue_availability[str(100000 + history_count - 1)] = "checking"
+            queue_index = queue_ids.index(current) if current in queue_ids else min(queue_index, len(queue))
+            audio = queue[queue_index] if current is not None else None
+            availability = queue_availability.get(current, "available") if current else None
+            playback.update(current_entry_id=current, current_audio_source_id=audio,
+                            track=library([audio])[0] if audio is not None else None,
+                            availability=availability, waiting_for_check=availability == "checking",
+                            can_next=queue_index + 1 < len(queue), can_previous=bool(queue))
+            if current is None:
+                playback["mode"] = "stopped"
+            playback["revision"] += 1
+            playback_condition.notify_all()
+        with (root / "queue_operations").open("a") as log:
+            log.write(json.dumps({"method": method, "path": path, "body": body, "status": status,
+                                  "before_ids": before, "after_ids": queue_ids}) + "\n")
+        return status, {"error": error} if error else dict(playback)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -183,7 +306,11 @@ class Handler(BaseHTTPRequestHandler):
         marker = body.get("marker_path", "")
         with (root / "requests").open("a") as log:
             log.write("POST " + self.path + " " + marker + "\n")
-        if self.path == "/api/playback/commands":
+        if self.path.startswith("/api/queue/"):
+            self.reply(*queue_operation("POST", self.path, body))
+        elif self.path.startswith("/api/playlists/") and self.path.endswith("/queue"):
+            self.reply(*queue_operation("POST", self.path, body))
+        elif self.path == "/api/playback/commands":
             with (root / "playback_commands").open("a") as log:
                 log.write(json.dumps(body) + "\n")
             self.reply(200, playback_command(body))
@@ -248,6 +375,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PATCH(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
+        if self.path.startswith("/api/queue/"):
+            self.reply(*queue_operation("PATCH", self.path, body))
+            return
         if self.path == "/api/user-data/audio-settings":
             audio_settings.update(body)
             (root / "audio-settings.json").write_text(json.dumps(audio_settings))
@@ -290,6 +420,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         with (root / "requests").open("a") as log:
             log.write("DELETE " + self.path + "\n")
+        if self.path == "/api/queue" or self.path.startswith("/api/queue/"):
+            self.reply(*queue_operation("DELETE", self.path, {}))
+            return
         if self.path.startswith("/api/playlists/"):
             identifier = int(self.path.split("/")[3])
             if self.path.endswith("/cover"):
@@ -353,9 +486,19 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(500, {"error": "fixture queue unavailable"})
                 return
             with playback_condition:
-                payload = {"audio_source_ids": list(queue), "playlist_item_ids": [None] * len(queue),
-                           "current_index": queue_index if queue else None,
-                           "upcoming_tracks": library(queue[queue_index + 1:]),
+                entries = []
+                for position, audio in enumerate(queue):
+                    track = library([audio])[0] if audio is not None else {"title": "Retained unavailable title", "artist": "Retained artist"}
+                    difficulty = track.get("difficulties", [{}])[0]
+                    entries.append({key: track.get(key) for key in ("audio_source_id", "title", "title_unicode", "artist", "artist_unicode", "cover_beatmap_id", "last_played_at_ms", "volume_percent")})
+                    entries[-1].update(id=queue_ids[position], position=position, playlist_item_id=88 if audio == 42 else None,
+                                       beatmap_id=difficulty.get("beatmap_id"), beatmap_set_id=difficulty.get("beatmap_set_id"),
+                                       difficulty_name=difficulty.get("difficulty_name"), availability=queue_availability.get(queue_ids[position], "available"))
+                    if queue_ids[position] in queue_items:
+                        row = queue_items[queue_ids[position]]
+                        entries[-1].update({key: row.get(key) for key in ("playlist_item_id", "title", "artist", "difficulty_name", "beatmap_id", "beatmap_set_id")})
+                payload = {"entries": entries, "current_entry_id": playback["current_entry_id"],
+                           "history_len": min(queue_index, len(queue)), "waiting_for_check": playback["waiting_for_check"],
                            "mode": playback["mode"], "revision": playback["revision"],
                            "playback_token": playback["playback_token"]}
         elif self.path == "/api/playback":
@@ -387,7 +530,10 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Event().wait(60)
             counts["library"] += 1
             n = counts["library"]
-            if case == "queue":
+            if case == "queue-insert":
+                query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
+                payload = library([42, 103] if query else [7, 42, 103])
+            elif case == "queue" or case.startswith("queue-managed"):
                 query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
                 payload = library([] if query == "missing" else [7, 42, 103])
             elif case == "visual-flicker":
@@ -423,7 +569,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 payload = [folder(31), folder(52)]
         elif self.path.endswith("/audio"):
-            time.sleep(0.3)
+            time.sleep(5 if case.startswith("queue-managed") else 0.3)
             status, payload = 404, {"error": "fixture audio unavailable"}
         elif self.path.endswith("/duration"):
             if case == "visual-flicker":

@@ -12,3 +12,5 @@ pub(crate) mod listening_history;
 pub(crate) mod playlist;
 pub(crate) mod playlist_item;
 pub(crate) mod queue;
+
+pub(crate) mod queue_entry;

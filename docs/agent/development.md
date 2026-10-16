@@ -186,6 +186,7 @@ playback.
 | Local audio engine | `cargo test -p osu-radio-player --locked` | MP3 CBR/VBR, Ogg/Vorbis and WAV decoding/seek with controlled mixer consumption; no physical device. |
 | Persisted individual/global volume | Repository/service checks on SQLite/PostgreSQL, both server router variants, client mock off/on and Qt offscreen/lint | Verify defaults, upgrade/reimport, shared audio, A/B selection, debounce/retry/stale replies, volume before play and shutdown flush. Physical output and Linux/Windows slider checks remain manual. |
 | Persisted playback queue and assignment protocol | Repository/service tests on each backend, server tests with and without `docs`, client tests with and without `mock`, Qt tests and QML lint below | Use disposable databases; verify recovery, duplicates, stale callbacks/downloads, reconnect and current metadata outside search. Physical output and Windows remain separate. |
+| Queue integration with the real embedded server | Build SQLite server, then run the two opt-in queue probes below | Private SQLite/WAV/NDJSON fixtures; Qt on pause and client with a fake engine. No physical output or native desktop acceptance. |
 | Client formatting, state, readiness parsing | `cargo test -p osu-radio-client --lib --locked` | [Client tests](../../crates/osu-radio-client/src/lib.rs), [Track tests](../../crates/osu-radio-client/src/view_models/track.rs), [readiness tests](../../crates/osu-radio-client/src/server.rs) and controller tests; process fixtures are isolated. |
 | Server changes, default docs | `cargo clippy -p osu-radio-server --all-targets --locked` | Compiles the documentation-enabled router; does not launch the server. |
 | Server changes, docs disabled | `cargo clippy -p osu-radio-server --no-default-features --features sqlite --all-targets --locked` | Compiles the other router and checks OpenAPI annotations remain optional. |
@@ -195,6 +196,19 @@ playback.
 Do not use Cargo `--all-features`: the workspace includes mutually exclusive
 database backend features. Feature compatibility is a build constraint here;
 select the backend explicitly when disabling default features.
+
+Queue-rework opt-in integration probes require Python 3 and Unix. They create their
+own directories and never open the configured application database. The fake Realm
+producer is scoped to each child server; a real helper is unnecessary for these probes.
+
+```sh
+cargo build -p osu-radio-server -p osu-radio-qt --locked
+cargo test -p osu-radio-qt --locked --test launch_smoke real_backend_queue_survives_restart_and_preserves_exact_entry_actions -- --ignored
+cargo test -p osu-radio-client --lib --locked real_server_queue_and_fake_engine_preserve_launches_across_edits_and_reimport -- --ignored
+```
+
+Executed results, R1–R11 evidence and manual Linux/Windows steps are recorded in
+[T10](../impl/queue-rework/T10.md#отчёт-о-выполнении), separately from this check matrix.
 
 ### Repository and backend checks
 

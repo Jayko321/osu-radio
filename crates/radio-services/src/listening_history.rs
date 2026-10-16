@@ -30,6 +30,13 @@ impl ListeningHistoryService<'_> {
             .await
     }
 
+    pub(crate) async fn for_sources_in(
+        transaction: &Transaction,
+        sources: &[radio_db::model::SourceType],
+    ) -> Result<std::collections::HashMap<(String, String), i64>> {
+        transaction.listening_history().for_sources(sources).await
+    }
+
     pub(crate) async fn fill_tracks(
         transaction: &Transaction,
         tracks: &mut [LibraryTrack],

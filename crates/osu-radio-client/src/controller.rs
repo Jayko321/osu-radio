@@ -48,6 +48,7 @@ pub struct MediaTicket {
 }
 #[derive(Debug)]
 pub enum AppCommand {
+    Queue(crate::view_models::QueueAction),
     Playlist(PlaylistAction),
     Connect,
     RefreshLibrary,
@@ -98,6 +99,7 @@ pub enum AppCommand {
         artwork_missing: bool,
     },
     SetVisibleMedia(Vec<(i32, bool)>),
+    SetVisibleQueueMedia(Vec<(crate::models::QueueEntryId, bool)>),
     MediaInstalled {
         ticket: MediaTicket,
         available: bool,
@@ -369,6 +371,8 @@ impl Controller {
                     self.settings.preferences.clone(),
                 ));
             }
+            AppCommand::Queue(action) => self.queue_action(action),
+            AppCommand::SetVisibleQueueMedia(visible) => self.set_visible_queue_media(visible),
             AppCommand::TogglePlayback => self.toggle_playback(),
             AppCommand::SetQueueVisible(visible) => self.set_queue_visible(visible),
             AppCommand::Playlist(action) => self.playlist_action(action),
@@ -447,6 +451,7 @@ impl Controller {
                     .selected_track
                     .as_ref()
                     .map(|track| track.audio_source_id),
+                &self.upcoming.view,
             ),
 
             AppCommand::Shutdown => {}
@@ -549,6 +554,16 @@ pub(crate) mod tests {
             },
             updates,
         )
+    }
+    pub(crate) fn queue_row(track: Track, id: i64) -> crate::view_models::QueueRow {
+        crate::view_models::QueueRow {
+            id: crate::models::QueueEntryId::new(id).unwrap(),
+            position: usize::try_from(id.saturating_sub(1)).unwrap(),
+            audio_source_id: Some(track.audio_source_id),
+            playlist_item_id: None,
+            availability: crate::models::QueueAvailability::Available,
+            track,
+        }
     }
     pub(crate) fn track(id: i32) -> Track {
         Track {
@@ -1131,7 +1146,11 @@ mod media_tests {
             state.request_media(1, true);
             state.set_visible_media(vec![(1, true)]);
             state.upcoming.open = true;
-            state.media.queue_media.insert(1, true);
+            state.upcoming.view.entries = vec![super::tests::queue_row(track(1), 1)];
+            state.set_visible_queue_media(vec![(
+                crate::models::QueueEntryId::new(1).unwrap(),
+                true,
+            )]);
             let ticket = pipeline(&mut state, 1, 1);
             updates.lock().unwrap().clear();
             state.artwork_completed(ticket, Some(vec![1, 2, 3]));

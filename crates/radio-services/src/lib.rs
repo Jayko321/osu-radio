@@ -28,7 +28,9 @@ pub use playlist::{
 mod tag;
 mod user_data;
 pub use queue::{
-    PlaybackAssignment, PlaybackCommand, PlaybackMode, QueueError, QueueService, QueueState,
+    PlaybackAssignment, PlaybackCommand, PlaybackMode, QueueAvailability, QueueCheck, QueueEntry,
+    QueueEntryId, QueueError, QueueItemRef, QueueLaunchSource, QueuePlacement, QueuePlaylistSource,
+    QueueService, QueueSnapshot, QueueSnapshotEntry, QueueState,
 };
 pub use tag::TagService;
 

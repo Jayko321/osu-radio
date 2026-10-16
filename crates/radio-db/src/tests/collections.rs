@@ -26,7 +26,9 @@ pub(super) async fn migration_contracts(database: &Database) {
     )
     .await;
     sql(database, "INSERT INTO playlist_items (id,playlist_id,source_kind,beatmap_hash) VALUES (801,801,'lazer','beatmap-Easy')").await;
-    database.migrate().await.unwrap();
+    crate::migrations::Migrator::up(&database.connection, Some(1))
+        .await
+        .unwrap();
     assert_eq!(database.beatmaps().get(map.id).await.unwrap(), Some(map));
     let row = database
         .connection
@@ -48,7 +50,9 @@ pub(super) async fn migration_contracts(database: &Database) {
             .await
             .unwrap()
     );
-    database.migrate().await.unwrap();
+    crate::migrations::Migrator::up(&database.connection, Some(1))
+        .await
+        .unwrap();
     sql(database, "UPDATE playlists SET origin_source = '/encoded/source', origin_collection = 'guid' WHERE id = 801").await;
     assert!(database.connection.execute_unprepared("INSERT INTO playlists(name,origin_source,origin_collection) VALUES ('duplicate','/encoded/source','guid')").await.is_err());
     assert!(
@@ -94,6 +98,8 @@ pub(super) async fn migration_contracts(database: &Database) {
     crate::migrations::Migrator::down(&database.connection, Some(1))
         .await
         .unwrap();
-    database.migrate().await.unwrap();
+    crate::migrations::Migrator::up(&database.connection, Some(1))
+        .await
+        .unwrap();
     drop_application_tables(database).await;
 }

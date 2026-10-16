@@ -6,7 +6,9 @@
 use crate::view_models::TrackSort;
 use serde::Serialize;
 mod playlists;
+mod queue;
 pub use playlists::MockPlaylists;
+pub use queue::MockQueue;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MockTrack {
@@ -20,6 +22,8 @@ pub struct MockTrack {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MockState {
+    #[serde(skip)]
+    pub queue: MockQueue,
     pub tracks: Vec<MockTrack>,
     pub track_sort: TrackSort,
     pub selected: usize,
@@ -89,6 +93,12 @@ fn folder_rows() -> Vec<MockFolderRow> {
 /// Frontends translate their events to these toolkit-independent actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    Queue(crate::view_models::QueueAction),
+    QueueChecked {
+        id: crate::models::QueueEntryId,
+        available: bool,
+    },
+    QueuePause,
     Playlist(crate::view_models::PlaylistAction),
     FolderReset,
     FolderToggle(String),
@@ -116,6 +126,7 @@ pub enum Action {
 impl Default for MockState {
     fn default() -> Self {
         let mut state = Self {
+            queue: MockQueue::default(),
             tracks: [
                 (1, "Karakara", "Kessoku Band", "結束バンド", 265),
                 (2, "Alice", "FELT", "Bundled sample", 238),
@@ -257,6 +268,7 @@ impl MockState {
     /// Invalid selections, unchanged values and disabled gallery actions are no-ops.
     /// Songs remain interactive when gallery controls are disabled. Song search only
     /// stores the entered text; it deliberately does not filter the sample list.
+    #[allow(clippy::too_many_lines)] // Keep the memory-only action routing in one place.
     pub fn apply(&mut self, action: Action) -> bool {
         match action {
             Action::SelectTrack(index) => {
@@ -272,6 +284,22 @@ impl MockState {
             Action::Search(value) => replace(&mut self.search, value),
             Action::GalleryDisabled(value) => replace(&mut self.gallery.disabled, value),
             _ if self.gallery.disabled => false,
+            Action::Queue(action) => {
+                self.queue.apply(action, &self.gallery.playlists);
+                true
+            }
+            Action::QueueChecked { id, available } => {
+                self.queue.checked(id, available);
+                true
+            }
+            Action::QueuePause => {
+                self.queue.pause();
+                true
+            }
+            Action::Playlist(crate::view_models::PlaylistAction::AddToQueue(id)) => {
+                self.queue.append_playlist(id, &self.gallery.playlists);
+                true
+            }
             Action::Playlist(action) => self.gallery.playlists.apply(action),
             Action::FolderReset => {
                 self.gallery.folder_rows = folder_rows();

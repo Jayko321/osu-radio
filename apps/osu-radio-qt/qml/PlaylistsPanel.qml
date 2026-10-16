@@ -16,6 +16,7 @@ PlaylistPane {
     connected: playlistsPane.bridge.connected
     loading: playlistsPane.bridge.playlists.playlistLoading
     busy: playlistsPane.bridge.playlists.playlistBusy
+    queueBusy: playlistsPane.bridge.queue.queueBusy
     coverPreparing: playlistsPane.bridge.playlists.playlistCoverPreparing
     message: playlistsPane.bridge.playlists.playlistMessage
     editorOpen: playlistsPane.bridge.playlists.playlistEditorOpen
@@ -51,6 +52,8 @@ PlaylistPane {
         width: playlistsPane.tracksList.width
         selected: playlistsPane.bridge.playlists.selectedPlaylistItemId === playlistItemId
         busy: playlistsPane.bridge.playlists.playlistBusy
+        canInsert: playlistsPane.bridge.connected && !playlistsPane.bridge.queue.queueBusy
+        onInsertRequested: next => playlistsPane.bridge.playlists.insertPlaylistItem(playlistItemId, next)
         onClicked: playlistsPane.bridge.playlists.selectPlaylistItem(playlistItemId)
         onRemoveRequested: itemId => playlistsPane.bridge.playlists.removePlaylistItem(itemId)
     }

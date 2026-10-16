@@ -23,15 +23,18 @@ Item {
         id: queuePanel
         objectName: "queuePanel"
         host: player
-        tracks: player.bridge.queue.queueTracks
+        tracks: player.bridge.queue.tracks
+        startIndex: player.bridge.queue.startIndex
         loading: player.bridge.queue.queueLoading
         message: player.bridge.queue.queueMessage
         onOpened: player.bridge.queue.setQueueVisible(true)
         onClosed: player.bridge.queue.setQueueVisible(false)
-        onMediaRequested: id => player.bridge.requestMedia(id)
-        onMediaDelegateAdded: row => player.shell.addMediaDelegate(row)
-        onMediaDelegateRemoved: row => player.shell.removeMediaDelegate(row)
-        onVisibleMediaChanged: player.shell.scheduleVisibleMedia()
+        onPlayRequested: id => player.bridge.queue.playEntry(id)
+        onRemoveRequested: id => player.bridge.queue.removeEntry(id)
+        onMoveRequested: (id, before) => player.bridge.queue.moveEntry(id, before)
+        onClearUpcomingRequested: player.bridge.queue.clearUpcoming()
+        onClearAllRequested: player.bridge.queue.clearAll()
+        onVisibleEntriesChanged: ids => player.bridge.queue.setVisibleQueueMedia(ids)
         onRetryRequested: player.bridge.queue.setQueueVisible(true)
     }
 

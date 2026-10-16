@@ -273,8 +273,8 @@ pub(crate) async fn remove_item(
         .map_err(playlist_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
-#[cfg_attr(feature = "docs", utoipa::path(post, path = "/api/playlists/{id}/play", tag = "playlists", params(("id" = i32, Path)), request_body = PlayRequest,
-    responses((status = OK, body = PlaybackResponse), (status = NOT_FOUND), (status = BAD_REQUEST))))]
+#[cfg_attr(feature = "docs", utoipa::path(post, path = "/api/playlists/{id}/play", tag = "playlists", params(("id" = i32, Path)), request_body = Option<PlayRequest>,
+    responses((status = OK, body = PlaybackResponse), (status = NOT_FOUND), (status = BAD_REQUEST), (status = UNPROCESSABLE_ENTITY), (status = INTERNAL_SERVER_ERROR, body = crate::error::ApiErrorBody))))]
 pub(crate) async fn play(
     State(state): State<AppState>,
     Path(id): Path<i32>,
@@ -284,6 +284,22 @@ pub(crate) async fn play(
         .services()
         .playlists()
         .play(id, body.and_then(|body| body.start_item_id))
+        .await
+        .map_err(playlist_error)?;
+    committed_response(&state, assignment).await
+}
+
+#[cfg_attr(feature = "docs", utoipa::path(post, path = "/api/playlists/{id}/queue", tag = "playlists", params(("id" = i32, Path)),
+    responses((status = OK, body = PlaybackResponse), (status = NOT_FOUND, body = crate::error::ApiErrorBody),
+    (status = INTERNAL_SERVER_ERROR, body = crate::error::ApiErrorBody))))]
+pub(crate) async fn append_queue(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<Json<PlaybackResponse>, ApiError> {
+    let assignment = state
+        .services()
+        .playlists()
+        .append_to_queue(id)
         .await
         .map_err(playlist_error)?;
     committed_response(&state, assignment).await

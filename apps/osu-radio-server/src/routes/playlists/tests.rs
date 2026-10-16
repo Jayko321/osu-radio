@@ -95,7 +95,7 @@ async fn client_playlist_http_roundtrip_matches_the_server_contract() {
     api.play_playlist(created.id, Some(added.items[0].id))
         .await
         .unwrap();
-    let pending = api.queue().await.unwrap().upcoming_tracks;
+    let pending = api.queue().await.unwrap().entries;
     assert_eq!(pending[0].title_unicode.as_deref(), Some("曲名"));
     assert_eq!(pending[0].artist_unicode.as_deref(), Some("歌手"));
     let item = added.items[1].id;
@@ -105,10 +105,15 @@ async fn client_playlist_http_roundtrip_matches_the_server_contract() {
     assert_eq!(track.title_unicode.as_deref(), Some("曲名"));
     assert_eq!(track.artist_unicode.as_deref(), Some("歌手"));
     assert_eq!(
-        api.queue().await.unwrap().playlist_item_ids,
-        added
-            .items
-            .iter()
+        api.queue()
+            .await
+            .unwrap()
+            .entries
+            .into_iter()
+            .map(|e| e.playlist_item_id)
+            .collect::<Vec<_>>(),
+        std::iter::once(&added.items[0])
+            .chain(added.items.iter())
             .map(|item| Some(item.id))
             .collect::<Vec<_>>()
     );
@@ -333,7 +338,9 @@ async fn playlist_routes_cover_crud_validation_and_distinct_playback_items() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(playing["current_playlist_item_id"], item);
-    assert!(playing["duration_ms"].as_u64().unwrap() > 0);
+    assert_eq!(playing["duration_ms"], Value::Null);
+    assert_eq!(playing["availability"], "checking");
+    assert_eq!(playing["waiting_for_check"], true);
     let (status, _) = request(&state, "POST", &format!("{path}/play"), None).await;
     assert_eq!(status, StatusCode::OK);
     let (status, next) = request(
@@ -348,7 +355,21 @@ async fn playlist_routes_cover_crud_validation_and_distinct_playback_items() {
     let (status, _) = request(&state, "DELETE", &format!("{path}/items/{item}"), None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     let (_, queue) = request(&state, "GET", "/api/queue", None).await;
-    assert_eq!(queue["playlist_item_ids"].as_array().unwrap().len(), 2);
+    let item_ids: Vec<_> = playlist["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].clone())
+        .collect();
+    assert_eq!(
+        queue["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["playlist_item_id"].clone())
+            .collect::<Value>(),
+        json!([item_ids[0], item_ids[1], item_ids[0], item_ids[1]])
+    );
     let (status, _) = request(&state, "DELETE", &path, None).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     for (method, body) in [

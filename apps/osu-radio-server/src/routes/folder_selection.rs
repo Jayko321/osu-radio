@@ -138,6 +138,7 @@ pub(crate) async fn import(
         .await
         .map_err(registration_error)?
         .into_installation();
+    state.wake_queue_checks();
     Ok(Json(folder.into()))
 }
 
@@ -158,6 +159,7 @@ pub(crate) async fn reimport(
         .ok_or_else(|| {
             ApiError::not_found(format!("No osu! folder is registered with id {id}."))
         })?;
+    state.wake_queue_checks();
     Ok(Json(folder.into()))
 }
 

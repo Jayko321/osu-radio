@@ -8,6 +8,9 @@ use crate::models::{LibraryTrack, PlaybackMode};
 
 fn assignment(id: i32, percent: Option<u8>, revision: u64) -> PlaybackAssignment {
     PlaybackAssignment {
+        current_entry_id: None,
+        availability: None,
+        waiting_for_check: false,
         volume_percent: percent,
         current_audio_source_id: Some(id),
         current_playlist_item_id: None,

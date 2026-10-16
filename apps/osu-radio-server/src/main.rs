@@ -8,10 +8,12 @@
     )
 )]
 
+pub(crate) mod audio_file;
 pub(crate) mod config;
 #[cfg(feature = "docs")]
 pub(crate) mod docs;
 pub(crate) mod error;
+pub(crate) mod queue_check;
 pub(crate) mod routes;
 pub(crate) mod state;
 #[cfg(all(test, feature = "sqlite"))]
@@ -55,7 +57,10 @@ async fn serve() -> Result<()> {
         docs::SCALAR_PATH
     );
 
-    axum::serve(listener, routes::router(state))
+    let checks = queue_check::QueueCheckWorker::start(state.clone());
+    let result = axum::serve(listener, routes::router(state))
         .await
-        .context("The server stopped unexpectedly")
+        .context("The server stopped unexpectedly");
+    checks.shutdown().await?;
+    result
 }

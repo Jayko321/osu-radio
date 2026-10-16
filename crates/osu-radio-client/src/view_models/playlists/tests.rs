@@ -239,6 +239,9 @@ async fn playback_uses_item_identity_and_mutations_ignore_a_different_open_playl
     state.session = Some(session);
     install(&mut state, 7);
     state.player.assignment = Some(PlaybackAssignment {
+        current_entry_id: None,
+        availability: None,
+        waiting_for_check: false,
         volume_percent: None,
         current_audio_source_id: Some(20),
         current_playlist_item_id: Some(1),

@@ -17,7 +17,7 @@ pub use player::{PlayerPresentation, PlayerViewModel};
 pub use playlists::{
     PlaylistAction, PlaylistCandidate, PlaylistTrack, PlaylistsState, PlaylistsViewModel,
 };
-pub use queue::{QueueView, QueueViewModel};
+pub use queue::{QueueAction, QueueRow, QueueView, QueueViewModel};
 pub use settings::{SettingsGroup, SettingsPreferences, SettingsViewModel};
 pub use sorting::TrackSort;
 pub use track::{Track, TrackNamePreferences, library_tracks, selection_after_refresh};

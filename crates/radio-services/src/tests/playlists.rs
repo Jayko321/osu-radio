@@ -247,7 +247,7 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
     let first = database.playlists().play(playlist.id, None).await.unwrap();
     assert_eq!(first.current_playlist_item_id, Some(populated.items[0].id));
     assert_eq!(
-        database.queue().get().await.unwrap().audio_source_ids,
+        database.queue().get().await.unwrap().audio_source_ids(),
         [audio, audio]
     );
     let second = database
@@ -357,6 +357,19 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
         before,
         "editing retains the queue snapshot"
     );
+    assert_eq!(
+        database.queue().playback().await.unwrap(),
+        restored,
+        "removed items retain their queue caption and difficulty snapshot"
+    );
+    assert_eq!(
+        before.entries[0]
+            .playlist_source
+            .as_ref()
+            .unwrap()
+            .hash_kind,
+        populated.items[0].hash_kind
+    );
     database
         .playlists()
         .add_items(playlist.id, &[ids[1]])
@@ -425,8 +438,20 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
     );
     assert_eq!(unavailable.items[0].title.as_deref(), Some("Playlist song"));
     let before = database.queue().get().await.unwrap();
-    assert!(database.playlists().play(playlist.id, None).await.is_err());
-    assert_eq!(database.queue().get().await.unwrap(), before);
+    let stopped = database.playlists().play(playlist.id, None).await.unwrap();
+    assert_eq!(stopped.mode, PlaybackMode::Stopped);
+    assert_eq!(stopped.current_entry_id, None);
+    let after = database.queue().get().await.unwrap();
+    assert_eq!(
+        after.history_len,
+        before
+            .current_index()
+            .map_or(before.history_len, |i| i.checked_add(1).unwrap())
+    );
+    assert_eq!(
+        after.entries.len(),
+        after.history_len.checked_add(2).unwrap()
+    );
     let returned = register(database, "playlist-returned").await;
     database
         .osu_installations()
@@ -699,6 +724,10 @@ async fn copy_resolution_and_batches(database: &TestDatabase) {
             .collect::<Vec<_>>(),
         ids
     );
+    let before_launch = database.queue().get().await.unwrap();
+    let retained = before_launch
+        .current_index()
+        .map_or(before_launch.history_len, |i| i.checked_add(1).unwrap());
     let last = saved.items.last().unwrap().id;
     assert_eq!(
         database
@@ -715,9 +744,9 @@ async fn copy_resolution_and_batches(database: &TestDatabase) {
             .get()
             .await
             .unwrap()
-            .playlist_item_ids
+            .playlist_item_ids()
             .len(),
-        503
+        retained.checked_add(503).unwrap()
     );
     database.playlists().delete(playlist.id).await.unwrap();
     database.osu_installations().delete(large).await.unwrap();

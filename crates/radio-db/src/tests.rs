@@ -433,6 +433,7 @@ async fn background_migration_preserves_existing_rows() {
 
 async fn drop_application_tables(database: &Database) {
     for table in [
+        "queue_entries",
         "audio_volume",
         "listening_history",
         "playlist_items",
@@ -471,7 +472,7 @@ async fn concurrent_schema_changes(database: &Database, url: &str) {
                 .await
                 .unwrap()
                 .len(),
-            11
+            14
         );
         let (reset, migrate) = tokio::join!(database.reset(), other.migrate());
         reset.unwrap();

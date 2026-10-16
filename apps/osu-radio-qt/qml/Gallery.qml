@@ -28,6 +28,20 @@ Basic.ApplicationWindow {
     Store { id: store }
     readonly property alias galleryStore: store
 
+    QueuePanel {
+        id: demoQueue
+        objectName: "galleryQueuePanel"
+        host: applicationScene
+        tracks: store.queueModel
+        startIndex: store.state.queue.history_len
+        message: store.state.queue.operation_error || ""
+        onPlayRequested: id => store.send("queuePlay", id)
+        onRemoveRequested: id => store.send("queueRemove", id)
+        onMoveRequested: (id, before) => store.send("queueMove", {id: id, before_entry_id: before})
+        onClearUpcomingRequested: store.send("queueClearUpcoming")
+        onClearAllRequested: store.send("queueClearAll")
+        onRetryRequested: store.send("queueRefresh")
+    }
     component Heading: Text {
         color: Theme.text
         font.family: Theme.fontFamily
@@ -187,6 +201,31 @@ Basic.ApplicationWindow {
 
                     DemoSection {
                         Heading { text: "Menus" }
+                        Repeater {
+                            model: ["Library track", "Search result"]
+                            AppButton {
+                                id: demoTrack
+                                required property int index
+                                required property string modelData
+                                objectName: "galleryQueueSource" + index
+                                text: modelData
+                                Accessible.name: modelData
+                                Keys.onPressed: event => demoTrackMenu.handleKey(event)
+                                TapHandler {
+                                    acceptedButtons: Qt.RightButton
+                                    onTapped: demoTrackMenu.openAt(point.position)
+                                }
+                                TrackQueueMenu {
+                                    id: demoTrackMenu
+                                    objectName: "songQueueMenu"
+                                    row: demoTrack
+                                    onInsertRequested: next => store.send("queueInsert", {
+                                        items: [{type: "audio", audio_source_id: demoTrack.index + 1}],
+                                        placement: next ? "next" : "end"
+                                    })
+                                }
+                            }
+                        }
                         AppMenu {
                             objectName: "demoTrackSortMenu"
                             width: 172
@@ -326,6 +365,11 @@ Basic.ApplicationWindow {
                 }
 
                 DemoSection {
+                    Heading { text: "Queue" }
+                    AppButton { objectName: "galleryQueueButton"; text: "Queue · history, duplicates and availability"; onClicked: demoQueue.open() }
+                    AppButton { objectName: "galleryQueueError"; text: "Queue operation error"; onClicked: { store.send("queuePlay", "5"); demoQueue.open(); } }
+                }
+                DemoSection {
                     Heading { text: "Lucide icons" }
                     Flow {
                         width: parent.width
@@ -402,6 +446,10 @@ Basic.ApplicationWindow {
                     durationLabel: "--:--"
                     artworkUrl: ""
                     selected: root.playlistView.selected_item_id === playlistItemId
+                    onInsertRequested: next => store.send("queueInsert", {
+                        items: [{type: "playlist_item", playlist_id: root.playlistView.active_id, item_id: playlistItemId}],
+                        placement: next ? "next" : "end"
+                    })
                     onClicked: store.send("playlistItemSelect", playlistItemId)
                     onRemoveRequested: itemId => store.send("playlistRemoveItem", itemId)
                 }
@@ -412,7 +460,7 @@ Basic.ApplicationWindow {
                 width: Math.max(0, parent.width - x - 40)
                 spacing: 16
                 Heading { width: parent.width; text: "Playlist presentation"; elide: Text.ElideRight }
-                Caption { width: parent.width; text: "Open Evening to compare shared-audio difficulties and an unavailable entry. Use + to test the inline editor, its cover preview and reset. Right click a track, or press Menu / Shift+F10, to remove it." }
+                Caption { width: parent.width; text: "Open Evening to compare shared-audio difficulties and an unavailable entry. Use + to test the inline editor, its cover preview and reset. Right click a track, or press Menu / Shift+F10, to add it to the queue or remove it from the playlist." }
                 AppButton { objectName: "galleryAddDifficulties"; text: "Add difficulties"; onClicked: store.send("playlistAddOpen") }
             }
         }

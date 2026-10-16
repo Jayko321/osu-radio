@@ -23,6 +23,7 @@ pub(crate) enum Effect {
         audio_id: i32,
         percent: Option<u8>,
     },
+    QueueAction(crate::view_models::QueueAction),
     QueueClosed,
     QueueChanged,
     ReconcileMedia,

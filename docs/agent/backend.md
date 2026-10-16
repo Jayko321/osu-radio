@@ -52,7 +52,7 @@ the start. Queue transitions and revision/token rules belong to
 [`QueueService`](../../crates/radio-services/src/queue.rs), not HTTP handlers.
 
 `serve` prepares application state, binds the TCP listener, reads the actual
-bound address, prints its startup messages, then enters `axum::serve`. This is
+bound address, prints its startup messages, starts the queue check worker, then enters `axum::serve`. This is
 the current order in source, not a separate HTTP health-check protocol.
 
 ## Embedded readiness and lifecycle
@@ -164,9 +164,13 @@ continues to use its own [API DTOs](../../crates/osu-radio-client/src/api.rs).
 | `PATCH /api/user-data/audio-settings` | Optional fields update atomically; percentages are integers 0–100. Omitted fields are retained; null/wrong types fail validation. |
 | `PUT /api/audio-sources/{id}/volume` | `{volume_percent}` stores an absolute 0–100 integer by durable audio identity; 204, 400 for range, 404 for unknown ID. |
 | `DELETE /api/audio-sources/{id}/volume` | 204 removes an override; repeating for a known source is harmless. Unknown ID is 404. |
-| `GET /api/queue` | Persisted `{audio_source_ids, playlist_item_ids, current_index, mode, revision, playback_token}` plus `upcoming_tracks` (`TrackResponse` audio summaries). Pending playable entries follow current, preserve order/duplicates and omit deleted/Online IDs. State and metadata come from one read snapshot; viewing does not change playback. Parallel item IDs are nullable; played history remains; an exhausted index equals list length. |
-| `POST /api/queue/items` | `{audio_source_ids:[...]}` appends atomically after validating every ID as Local/Copied. Unknown/Online IDs return 400 without changes. An empty/exhausted queue starts the first added item; paused playback stays paused. Returns the current assignment. |
-| `DELETE /api/queue` | Clears the queue, stops playback and invalidates the launch token. Returns the current assignment. |
+| `GET /api/queue` | Full `{entries, current_entry_id, history_len, mode, waiting_for_check, revision, playback_token}` from one service read snapshot, including past/current/future, duplicates and unavailable entries. No checks, writes or history trimming. Entry IDs are positive decimal i64 strings, through `9223372036854775807`. |
+| `POST /api/queue/items` | Required `{items, placement:"end"\|"next"}`. Items are `{type:"audio", audio_source_id}` or `{type:"playlist_item", playlist_id, item_id}`. Atomic validation; missing/Online audio and unknown/foreign playlist items return 404. Append never starts playback. Returns the committed assignment. |
+| `POST /api/queue/items/{entry_id}/play` | Starts the existing entry without copying it; checking saves waiting intent. Unknown entry is 404, existing unavailable entry is 400. |
+| `PATCH /api/queue/items/{entry_id}` | Required `{before_entry_id:"decimal ID"\|null}`; null moves to end, omission fails extraction. Unknown entry/anchor is 404. Current ID/token are retained. |
+| `DELETE /api/queue/items/{entry_id}` | Removes that occurrence, applying current-entry transition rules; 404 if absent. Returns the committed assignment. |
+| `DELETE /api/queue/upcoming` | Clears future entries, retaining past/current and launch token. Returns the assignment. |
+| `DELETE /api/queue` | Clears the whole queue, stops playback and invalidates the launch token. Returns the assignment. |
 | `GET /api/playback` | Current assignment with metadata and duration independent of Songs search; the queue list is omitted. |
 | `GET /api/playback/events` | Current assignment immediately, followed by increasing committed revisions as NDJSON. Blank-line heartbeat every 15 seconds. Client uses a separate one-hour timeout and reconnects to synchronize. |
 | `POST /api/playback/commands` | Tagged `{command:...}`: `play` with optional `audio_source_id`, `pause`, `stop`, `next`, `previous`, `started`, `finished` or `failed`. Start/completion/error commands require `playback_token`; internal device pauses include it too. Stale callbacks return the current assignment without transitioning. |
@@ -177,7 +181,8 @@ continues to use its own [API DTOs](../../crates/osu-radio-client/src/api.rs).
 | `DELETE /api/playlists/{id}` | 204 and membership cascade; 404 if absent. Does not change the queue. |
 | `POST /api/playlists/{id}/items` | `{beatmap_ids:[...]}` atomically adds current difficulties and returns the full playlist. Repeated source keys are idempotent. Missing beatmap/hash is 400 with no partial additions. |
 | `DELETE /api/playlists/{id}/items/{item_id}` | 204 for a member of this playlist, otherwise 404. Does not change the queue. |
-| `POST /api/playlists/{id}/play` | Optional JSON `{start_item_id}` (or empty body). Resolves availability, replaces the queue and starts the requested/first available entry atomically. Returns an assignment. Empty/unavailable playlist or unavailable start is 400 without changing the queue; unknown playlist/item is 404. |
+| `POST /api/playlists/{id}/queue` | Appends the whole playlist including unavailable items in one service operation; does not launch. Empty append preserves revision/token; unknown playlist is 404. |
+| `POST /api/playlists/{id}/play` | Optional JSON `{start_item_id}` (or empty body). Retains history through current inclusive and replaces the future with every playlist item, selecting the requested/first resolved item with checking wait. Returns an assignment. A wholly unavailable nonempty playlist becomes stopped future with no current. Empty playlist or unavailable explicit start is 400 without queue changes; unknown playlist/item is 404. |
 | `GET /api/playlists/{id}/cover` | Custom PNG bytes with `image/png`; 404 for an absent playlist or automatic cover. |
 | `PUT /api/playlists/{id}/cover` | Raw 512×512 PNG up to 2 MiB; 200 with updated summary/revision, 400 for corrupt/wrong-size images, 413 for oversized uploads, 404 if absent. |
 | `DELETE /api/playlists/{id}/cover` | 204 clears custom artwork and enables automatic fallback, including repeated reset; 404 for an absent playlist. |
@@ -217,8 +222,78 @@ exercise public URLs, field validation, projections and idempotent removal.
 
 The [playback routes](../../apps/osu-radio-server/src/routes/playback.rs) use
 `Services::queue()` exclusively. Each assignment contains
-`{current_audio_source_id, current_playlist_item_id, track, volume_percent, duration_ms, mode, revision, playback_token,
-can_next, can_previous}`; `track` uses the existing `/api/tracks` record shape.
+`{current_entry_id, availability, waiting_for_check, current_audio_source_id,
+current_playlist_item_id, track, volume_percent, duration_ms, mode, revision,
+playback_token, can_next, can_previous}` in REST and NDJSON. `current_entry_id` is
+a nullable decimal string; availability is null or `checking|available|unavailable`.
+`waiting_for_check` is persisted intent, not inferred from availability: an assigned
+old source may keep playing while its entry's new binding is checking. Duration is
+probed only for available assignments without waiting; checking returns null.
+`track` uses the existing `/api/tracks` shape. Client waiting behavior is implemented in the shared player/worker; see [frontend](frontend.md#local-audio-playback).
+Existing route fixtures complete checks explicitly unless a test starts a worker.
+
+Each queue entry exposes `id`, `position`, saved `title`, `title_unicode`, `artist`,
+`artist_unicode`, `difficulty_name`, nullable `audio_source_id`, `playlist_item_id`,
+`beatmap_id`, `beatmap_set_id`, `cover_beatmap_id`, `availability`, nullable
+`last_played_at_ms` and `volume_percent`. Paths, source keys, check generations,
+launch sources and migration evidence stay internal. Nullable response properties
+are always present and documented as required/nullable.
+
+T04 reconciles queue links in the library transaction after cleanup, before commit.
+Assigned playback retains its original audio ID/source/generation and token while the
+full queue entries can point to a new checking source. Assignment dates and volume use
+the retained source even after library cleanup. A late Failed changes entry availability
+only when its binding and generation still match, then follows the existing transition.
+A waiting Play whose source disappears advances with playing/paused intent; source
+restoration without Play stays stopped. These service contracts and rollback/visibility
+checks are in [queue T04 tests](../../crates/radio-services/src/tests/queue_t04.rs).
+The worker selects checks from entries, not launch bindings. Import/reimport and folder
+deletion wake it after commit; the client preserves an unchanged entry/token engine across these updates.
+
+### Queue availability worker
+
+[`QueueCheckWorker`](../../apps/osu-radio-server/src/queue_check.rs) belongs to
+`serve`, which starts it only after state recovery and listener preparation and awaits
+`shutdown` when serving returns. `AppState` holds only the shared `Notify` wakeup;
+it never owns the worker handle. Tests start workers explicitly. Dropping a handle
+signals stop; the supervisor drains its blocking file tasks without applying late
+results. Awaited shutdown also joins the supervisor, leaving no worker tasks or
+later writes. An already executing apply transaction finishes before this acknowledgement.
+There is no forced file-I/O cancellation or new OS-signal protocol: abrupt child
+termination still uses the existing embedded-server lifecycle above.
+
+Startup, wakeup, slot completion and a one-second interval select saved `checking`
+entries through `pending_checks()`. Each refill reads current priorities; only a
+current launch with `waiting_for_check` receives priority. At most four blocking
+operations run, with no duplicate `QueueCheck` in flight. Already available or
+unavailable entries are not reopened on restart. A task panic or apply failure
+releases its slot, logs to stderr and defers that check until the next interval.
+File errors yield unavailable rather than a retry loop.
+
+The worker and audio route share
+[`open_audio_file`](../../apps/osu-radio-server/src/audio_file.rs): check a regular
+file before opening for read, then check its opened descriptor. Local/Copied checks
+do not decode media and perform no write transaction. Sequential `apply_check()`
+retains the service guards on entry ID, generation and source binding. It never
+reports Started or records a listening date. Checked waiting launches preserve
+playing/paused intent; append and restored unavailable playlists stay stopped.
+
+Committed revisions use the existing monotone watch/NDJSON path. Every scan reads
+and publishes the stored revision even if no checks remain, recovering lost
+post-commit library notifications. Queue changes and playlist Play use
+`committed_response`; imports and folder deletion call `AppState::wake_queue_checks`
+after successful commit. T06 routes reuse that hook through `committed_response`, with
+immediate `publish_playback(revision)` when a committed revision is already available.
+No new HTTP DTO or service contract was added in T05.
+
+The [worker tests](../../apps/osu-radio-server/src/queue_check/tests.rs) use real
+temporary SQLite state with controlled blocking operations, plus actual regular,
+missing, directory and Unix FIFO paths. They exercise the four-slot limit, priority,
+deduplication, restart, lost wakeups/revisions, panic retry, awaited/drop shutdown,
+late removal/clear/reimport results, retained active launch bindings, playing/paused
+waiting, no automatic playback/Started/date, and existing HTTP/NDJSON delivery.
+These tests do not establish Windows file behavior or physical playback.
+
 Modes are `stopped`, `paused` and `playing`. Track/ID are null after exhaustion
 or clearing. Metadata includes the cover ID and every difficulty even when the
 current audio falls outside the active search. Duration reuses the content-based
@@ -232,8 +307,8 @@ pausing a newer assignment committed by another API writer.
 
 After successfully starting its audio engine, the client sends
 `{"command":"started","playback_token":T}`. The service checks the current
-token, a playable source and Playing/Paused mode, allowing confirmation after
-a pause of that launch. The first confirmation updates source-keyed history and
+token, its retained launch source, cleared waiting and Playing/Paused mode, allowing confirmation after
+a pause or library removal of that launch. The first confirmation updates source-keyed history and
 increments revision without changing mode or token. Duplicate and stale starts
 are no-ops. The resulting assignment carries `track.last_played_at_ms` and uses
 the existing event stream, so clients update dates without restarting audio.
@@ -251,26 +326,41 @@ reflects a committed snapshot. The body directly owns its receiver and read
 stream, so dropping it releases the subscription without a detached task or an
 open transaction waiting for an event.
 
-Malformed or incomplete JSON commands follow Axum's 422 rejection; typed invalid
-audio IDs use the deliberate 400 error body. Unexpected database/probe-task
+Malformed JSON follows Axum's syntax rejection (400); wrong types, variants and
+missing required body fields follow its 422 rejection. Invalid path entry IDs are
+400; unknown entries/anchors/playlists and invalid audio/item references are 404.
+Playing an existing unavailable entry is 400. Validation failures retain queue,
+revision/token and issued IDs and publish no notification. Unexpected database/probe-task
 failures retain the safe 500 boundary. Both router variants and OpenAPI register
-all six endpoints. [Route tests](../../apps/osu-radio-server/src/routes/playback_tests.rs)
+all queue/playback endpoints. [Route tests](../../apps/osu-radio-server/src/routes/playback_tests.rs)
 cover wire transitions, atomic validation, metadata/duration, repeated callbacks,
 initial/reconnected snapshots, duplicate-ID tokens, notification ordering,
 heartbeat detection and subscriber cancellation. The
 [media tests](../../apps/osu-radio-server/src/routes/media.rs) additionally check
 that duration probing rejects FIFO sources before opening them.
 
+[T06 transport tests](../../apps/osu-radio-server/src/routes/queue_transport_tests.rs)
+exercise actual ApiClient/server roundtrips, atomic 404/extraction failures, exact
+BIGINT strings, full snapshots, worker NDJSON, reimport launch-source retention,
+late callbacks, and required/nullable OpenAPI fields. Executed checks and limits
+are recorded in [T06](../impl/queue-rework/T06.md#отчёт-о-выполнении).
+
 ### User playlists
 
 The [playlist routes](../../apps/osu-radio-server/src/routes/playlists.rs) use
 `Services::playlists()` and publish committed playback revisions through the same
 response path. Ordinary audio queue entries have a null playlist-item assignment;
-playlist entries distinguish difficulties sharing one audio ID. While the item
-exists, its assignment and pending queue tracks contain that single difficulty and
-saved `title`, `title_unicode`, `artist` and `artist_unicode` variants. Nullable
+playlist entries distinguish difficulties sharing one audio ID. Their assignment
+and pending queue tracks use the entry's saved single difficulty and `title`,
+`title_unicode`, `artist` and `artist_unicode` variants, including after item deletion.
+Storage and migration are described in [the database guide](database.md#playback-queue). Nullable
 Unicode fields are additive; clients accept older responses that omit them. Queue
-content is fixed at launch and survives subsequent playlist edits. All eleven playlist
+snapshots are fixed at insertion and survive subsequent playlist edits. Whole-playlist
+Play retains history and every new item; `PlaylistService::append_to_queue` provides
+the same snapshots without launching through `POST /api/playlists/{id}/queue`. An empty
+append is a revision/token-preserving no-op. Checking is completed explicitly in
+service tests and by the T05 worker in the server; client waiting support is implemented in the shared worker.
+All twelve playlist
 operations are registered in both router configurations and OpenAPI.
 Cover upload decodes the complete PNG through `radio-services`, bounded to
 512×512 and 2 MiB. The persisted image is independent of the selected source
@@ -279,7 +369,7 @@ by the image endpoint. Reset retains the revision counter for future uploads.
 [HTTP checks](../../apps/osu-radio-server/src/routes/playlists/tests.rs) verify
 CRUD/statuses, PNG replacement/reset, corrupt/oversized uploads, summary fields,
 atomic validation, Unicode playlist/playback/pending queue field roundtrips, queue
-replacement/item IDs, documentation and the real `ApiClient` roundtrip on an isolated loopback server.
+history/item IDs, documentation and the real `ApiClient` roundtrip on an isolated loopback server.
 
 ### Folder discovery and selection
 
@@ -402,3 +492,12 @@ and physical-output limits.
 All behavior above is source-confirmed. Recommended checks and actual validation
 results must be reported separately; a source review or compile check is not a
 successful server launch or end-to-end playback test.
+
+Queue-rework integration evidence is recorded in [T10](../impl/queue-rework/T10.md#отчёт-о-выполнении).
+The opt-in real-backend Qt probe and [private fixture](../../apps/osu-radio-qt/tests/fixtures/queue_backend.py)
+use a built SQLite server, actual import routes, real availability worker and
+HTTP-created entries above 2^53. The companion [client engine probe](../../crates/osu-radio-client/src/playback/tests/real_backend.rs)
+uses the same server with the existing private fake engine; it follows retained
+launch identity through HTTP reimport and late callbacks. Only the Realm producer
+is synthetic. These probes do not establish real Realm compatibility, physical
+audio output or native desktop interaction.

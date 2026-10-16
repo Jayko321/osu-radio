@@ -10,8 +10,10 @@ use cxx_qt_lib::{
 use osu_radio_client::{
     Track, TrackNamePreferences,
     controller::{AppCommand, AppController, OperationStatus},
+    models::{QueueAvailability, QueueEntryId, QueueItemRef, QueuePlacement},
     view_models::{
-        FolderAction, FolderSelection, PlaylistAction, PlaylistTrack, PlaylistsState, QueueView,
+        FolderAction, FolderSelection, PlaylistAction, PlaylistTrack, PlaylistsState, QueueAction,
+        QueueView,
     },
 };
 use std::{collections::HashMap, pin::Pin, time::Duration};
@@ -60,6 +62,9 @@ pub mod ffi {
         #[qinvokable]
         #[cxx_name = "selectTrack"]
         fn select_track(self: Pin<&mut LibraryViewModel>, id: i32);
+        #[qinvokable]
+        #[cxx_name = "insertTrack"]
+        fn insert_track(self: Pin<&mut LibraryViewModel>, id: i32, next: bool);
         #[qobject]
         #[qml_element]
         #[qproperty(
@@ -207,6 +212,9 @@ pub mod ffi {
         #[qinvokable]
         #[cxx_name = "addPlaylistToQueue"]
         fn add_playlist_to_queue(self: Pin<&mut PlaylistsViewModel>, id: i32);
+        #[qinvokable]
+        #[cxx_name = "insertPlaylistItem"]
+        fn insert_playlist_item(self: Pin<&mut PlaylistsViewModel>, item_id: i32, next: bool);
         #[qinvokable]
         #[cxx_name = "selectPlaylist"]
         fn select_playlist(self: Pin<&mut PlaylistsViewModel>, id: i32);
@@ -489,10 +497,31 @@ pub mod ffi {
         fn seek_playback(self: Pin<&mut PlayerViewModel>, seconds: f64);
         #[qobject]
         #[qml_element]
-        #[qproperty(QVariantList, queue_tracks, cxx_name = "queueTracks", READ, NOTIFY)]
+        #[qproperty(*mut TrackListModel, tracks, READ = tracks_pointer, CONSTANT)]
+        #[qproperty(i32, start_index, cxx_name = "startIndex", READ, NOTIFY)]
         #[qproperty(bool, queue_loading, cxx_name = "queueLoading", READ, NOTIFY)]
+        #[qproperty(bool, queue_busy, cxx_name = "queueBusy", READ, NOTIFY)]
         #[qproperty(QString, queue_message, cxx_name = "queueMessage", READ, NOTIFY)]
         type QueueViewModel = super::QueueViewModelRust;
+        fn tracks_pointer(self: &QueueViewModel) -> *mut TrackListModel;
+        #[qinvokable]
+        #[cxx_name = "playEntry"]
+        fn play_entry(self: Pin<&mut QueueViewModel>, id: &QString);
+        #[qinvokable]
+        #[cxx_name = "removeEntry"]
+        fn remove_entry(self: Pin<&mut QueueViewModel>, id: &QString);
+        #[qinvokable]
+        #[cxx_name = "moveEntry"]
+        fn move_entry(self: Pin<&mut QueueViewModel>, id: &QString, before: &QVariant);
+        #[qinvokable]
+        #[cxx_name = "clearUpcoming"]
+        fn clear_upcoming(self: Pin<&mut QueueViewModel>);
+        #[qinvokable]
+        #[cxx_name = "clearAll"]
+        fn clear_all(self: Pin<&mut QueueViewModel>);
+        #[qinvokable]
+        #[cxx_name = "setVisibleQueueMedia"]
+        fn set_visible_queue_media(self: Pin<&mut QueueViewModel>, ids: &QVariantList);
         #[qinvokable]
         #[cxx_name = "setQueueVisible"]
         fn set_queue_visible(self: Pin<&mut QueueViewModel>, visible: bool);
@@ -501,6 +530,9 @@ pub mod ffi {
         #[base = QAbstractListModel]
         #[qproperty(i32, track_count, cxx_name = "trackCount", READ, NOTIFY)]
         type TrackListModel = super::TrackListModelRust;
+        #[qinvokable]
+        #[cxx_name = "entryIdAt"]
+        fn entry_id_at(self: &TrackListModel, row: i32) -> QString;
         #[qinvokable]
         #[cxx_override]
         fn data(self: &TrackListModel, index: &QModelIndex, role: i32) -> QVariant;
@@ -512,6 +544,41 @@ pub mod ffi {
         #[cxx_override]
         #[cxx_name = "roleNames"]
         fn role_names(self: &TrackListModel) -> QHash_i32_QByteArray;
+        #[inherit]
+        #[cxx_name = "beginInsertRows"]
+        unsafe fn begin_insert_rows(
+            self: Pin<&mut TrackListModel>,
+            parent: &QModelIndex,
+            first: i32,
+            last: i32,
+        );
+        #[inherit]
+        #[cxx_name = "endInsertRows"]
+        unsafe fn end_insert_rows(self: Pin<&mut TrackListModel>);
+        #[inherit]
+        #[cxx_name = "beginRemoveRows"]
+        unsafe fn begin_remove_rows(
+            self: Pin<&mut TrackListModel>,
+            parent: &QModelIndex,
+            first: i32,
+            last: i32,
+        );
+        #[inherit]
+        #[cxx_name = "endRemoveRows"]
+        unsafe fn end_remove_rows(self: Pin<&mut TrackListModel>);
+        #[inherit]
+        #[cxx_name = "beginMoveRows"]
+        unsafe fn begin_move_rows(
+            self: Pin<&mut TrackListModel>,
+            source: &QModelIndex,
+            first: i32,
+            last: i32,
+            destination: &QModelIndex,
+            before: i32,
+        ) -> bool;
+        #[inherit]
+        #[cxx_name = "endMoveRows"]
+        unsafe fn end_move_rows(self: Pin<&mut TrackListModel>);
         #[inherit]
         #[cxx_name = "beginResetModel"]
         unsafe fn begin_reset_model(self: Pin<&mut TrackListModel>);
@@ -640,6 +707,16 @@ impl ffi::LibraryViewModel {
     }
     pub fn select_track(self: Pin<&mut Self>, id: i32) {
         self.command(AppCommand::SelectTrack((id >= 0).then_some(id)));
+    }
+    pub fn insert_track(self: Pin<&mut Self>, id: i32, next: bool) {
+        if id > 0 {
+            self.command(insert_item(
+                QueueItemRef::Audio {
+                    audio_source_id: id,
+                },
+                next,
+            ));
+        }
     }
 }
 #[allow(clippy::struct_excessive_bools)]
@@ -1150,6 +1227,17 @@ impl ffi::PlaylistsViewModel {
     }
     pub fn add_playlist_to_queue(self: Pin<&mut Self>, id: i32) {
         self.playlist_command(PlaylistAction::AddToQueue(id));
+    }
+    pub fn insert_playlist_item(self: Pin<&mut Self>, item_id: i32, next: bool) {
+        if self.active_playlist_id > 0 && item_id > 0 {
+            self.command(insert_item(
+                QueueItemRef::PlaylistItem {
+                    playlist_id: self.active_playlist_id,
+                    item_id,
+                },
+                next,
+            ));
+        }
     }
     pub fn select_playlist(self: Pin<&mut Self>, id: i32) {
         self.playlist_command(PlaylistAction::Select((id >= 0).then_some(id)));
@@ -1900,65 +1988,99 @@ impl ffi::PlayerViewModel {
         }
     }
 }
-#[derive(Default)]
 pub struct QueueViewModelRust {
     pub(crate) cache_epoch: u64,
-    pub(crate) queue_tracks: VariantList,
+    pub(crate) model: cxx::UniquePtr<ffi::TrackListModel>,
+    pub(crate) start_index: i32,
     pub(crate) queue_loading: bool,
+    pub(crate) queue_busy: bool,
     pub(crate) queue_message: QString,
     pub(crate) queue_state: QueueView,
-    pub(crate) queue_artwork: HashMap<i32, (Option<i32>, QString)>,
     pub(crate) controller: Option<AppController>,
 }
+impl Default for QueueViewModelRust {
+    fn default() -> Self {
+        Self {
+            cache_epoch: 0,
+            model: native::new_track_list_model(),
+            start_index: 0,
+            queue_loading: false,
+            queue_busy: false,
+            queue_message: QString::default(),
+            queue_state: QueueView::default(),
+            controller: None,
+        }
+    }
+}
+fn insert_item(item: QueueItemRef, next: bool) -> AppCommand {
+    AppCommand::Queue(QueueAction::Insert {
+        items: vec![item],
+        placement: if next {
+            QueuePlacement::Next
+        } else {
+            QueuePlacement::End
+        },
+    })
+}
+pub(crate) fn queue_start_index(view: &QueueView) -> i32 {
+    i32::try_from(
+        view.entries
+            .iter()
+            .position(|row| Some(row.id) == view.current_entry_id)
+            .unwrap_or_else(|| view.history_len.min(view.entries.len().saturating_sub(1))),
+    )
+    .unwrap_or(i32::MAX)
+}
+pub(crate) fn parse_entry_id(value: &QString) -> Option<QueueEntryId> {
+    QueueEntryId::try_from(String::from(value)).ok()
+}
+pub(crate) fn queue_move(id: &QString, before: &QVariant) -> Option<QueueAction> {
+    let id = parse_entry_id(id)?;
+    let before_entry_id = if before.is_null() || !before.is_valid() {
+        None
+    } else {
+        if before.type_name() != "QString" {
+            return None;
+        }
+        Some(parse_entry_id(&before.value::<QString>()?)?)
+    };
+    Some(QueueAction::Move {
+        id,
+        before_entry_id,
+    })
+}
 impl ffi::QueueViewModel {
+    pub fn tracks_pointer(&self) -> *mut ffi::TrackListModel {
+        std::ptr::from_ref(&*self.model).cast_mut()
+    }
     pub(crate) fn replace_queue(mut self: Pin<&mut Self>, state: QueueView) {
         self.as_mut().rust_mut().queue_state = state;
         self.project_queue();
     }
-
     pub(crate) fn project_queue(mut self: Pin<&mut Self>) {
-        let previous = std::mem::take(&mut self.as_mut().rust_mut().queue_artwork);
-        let mut artwork_urls = HashMap::new();
-        let rows = self
-            .queue_state
-            .tracks
-            .iter()
-            .map(|track| {
-                let mut map = QMap::<QMapPair_QString_QVariant>::default();
-                map.insert(
-                    QString::from("audioId"),
-                    QVariant::from(&track.audio_source_id),
-                );
-                let mut artwork = track
-                    .cover_beatmap_id
-                    .map(|id| native::artwork_url(self.cache_epoch, id))
-                    .unwrap_or_default();
-                if artwork.is_empty()
-                    && let Some((cover, url)) = previous.get(&track.audio_source_id)
-                    && *cover == track.cover_beatmap_id
-                {
-                    artwork = url.clone();
-                }
-                artwork_urls.insert(
-                    track.audio_source_id,
-                    (track.cover_beatmap_id, artwork.clone()),
-                );
-                for (key, value) in [
-                    ("title", QString::from(track.title.as_str())),
-                    ("artist", QString::from(track.artist.as_str())),
-                    ("durationLabel", QString::from(track.duration_label())),
-                    ("artworkUrl", artwork),
-                ] {
-                    map.insert(QString::from(key), QVariant::from(&value));
-                }
-                QVariant::from(&map)
-            })
-            .collect();
-        let loading = self.queue_state.loading;
-        let message = QString::from(self.queue_state.message.as_str());
-        self.as_mut().set_queue_tracks(rows);
-        self.as_mut().rust_mut().queue_artwork = artwork_urls;
+        let (start, loading, busy, message) = {
+            let mut pinned = self.as_mut().rust_mut();
+            let state = &mut *pinned;
+            state
+                .model
+                .pin_mut()
+                .replace_queue_rows(&state.queue_state, state.cache_epoch);
+            (
+                queue_start_index(&state.queue_state),
+                state.queue_state.loading,
+                state.queue_state.busy,
+                QString::from(
+                    state
+                        .queue_state
+                        .operation_error
+                        .as_deref()
+                        .unwrap_or(&state.queue_state.message),
+                ),
+            )
+        };
+        self.as_mut().set_start_index(start);
         self.as_mut().set_queue_loading(loading);
+        self.as_mut().set_queue_busy(busy);
         self.set_queue_message(message);
     }
     pub(crate) fn command(&self, command: AppCommand) {
@@ -1966,12 +2088,45 @@ impl ffi::QueueViewModel {
             controller.send(command);
         }
     }
-    property_setter!(
-        set_queue_tracks,
-        queue_tracks,
-        queue_tracks_changed,
-        VariantList
-    );
+    pub fn play_entry(self: Pin<&mut Self>, id: &QString) {
+        if let Some(id) = parse_entry_id(id) {
+            self.command(AppCommand::Queue(QueueAction::Play(id)));
+        }
+    }
+    pub fn remove_entry(self: Pin<&mut Self>, id: &QString) {
+        if let Some(id) = parse_entry_id(id) {
+            self.command(AppCommand::Queue(QueueAction::Remove(id)));
+        }
+    }
+    pub fn move_entry(self: Pin<&mut Self>, id: &QString, before: &QVariant) {
+        if let Some(action) = queue_move(id, before) {
+            self.command(AppCommand::Queue(action));
+        }
+    }
+    pub fn clear_upcoming(self: Pin<&mut Self>) {
+        self.command(AppCommand::Queue(QueueAction::ClearUpcoming));
+    }
+    pub fn clear_all(self: Pin<&mut Self>) {
+        self.command(AppCommand::Queue(QueueAction::ClearAll));
+    }
+    pub fn set_visible_queue_media(self: Pin<&mut Self>, ids: &VariantList) {
+        let visible = ids
+            .0
+            .iter()
+            .filter_map(QVariant::value::<QString>)
+            .filter_map(|id| parse_entry_id(&id))
+            .filter_map(|id| {
+                self.model
+                    .rows
+                    .iter()
+                    .find(|row| row.queue.as_ref().is_some_and(|q| q.id == id))
+                    .map(|row| (id, row.artwork.is_empty()))
+            })
+            .collect();
+        self.command(AppCommand::SetVisibleQueueMedia(visible));
+    }
+    property_setter!(set_start_index, start_index, start_index_changed, i32);
+    property_setter!(set_queue_busy, queue_busy, queue_busy_changed, bool);
     property_setter!(
         set_queue_loading,
         queue_loading,
@@ -1984,16 +2139,28 @@ impl ffi::QueueViewModel {
         queue_message_changed,
         QString
     );
-    pub fn set_queue_visible(self: Pin<&mut Self>, visible: bool) {
+    pub fn set_queue_visible(mut self: Pin<&mut Self>, visible: bool) {
+        if visible {
+            self.as_mut().set_queue_loading(true);
+        }
         self.command(AppCommand::SetQueueVisible(visible));
     }
 }
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct QueueRoles {
+    pub(crate) id: QueueEntryId,
+    pub(crate) current: bool,
+    pub(crate) past: bool,
+    pub(crate) availability: QueueAvailability,
+}
+#[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Row {
+    pub(crate) queue: Option<QueueRoles>,
     pub(crate) playlist_item_id: Option<i32>,
     pub(crate) track: Track,
     pub(crate) artwork: QString,
 }
-pub(crate) const ROLES: [(i32, &str); 8] = [
+pub(crate) const ROLES: [(i32, &str); 12] = [
     (256, "audioId"),
     (257, "title"),
     (258, "artist"),
@@ -2002,6 +2169,10 @@ pub(crate) const ROLES: [(i32, &str); 8] = [
     (261, "artworkUrl"),
     (262, "playlistItemId"),
     (263, "available"),
+    (264, "entryId"),
+    (265, "isCurrent"),
+    (266, "isPast"),
+    (267, "availability"),
 ];
 #[derive(Default)]
 pub struct TrackListModelRust {
@@ -2011,6 +2182,123 @@ pub struct TrackListModelRust {
     pub(crate) track_count: i32,
 }
 impl ffi::TrackListModel {
+    pub(crate) fn replace_queue_rows(mut self: Pin<&mut Self>, view: &QueueView, epoch: u64) {
+        let ids: std::collections::HashSet<_> = view.entries.iter().map(|row| row.id).collect();
+        self.as_mut().retain_queue_rows(&ids);
+        let existing: std::collections::HashSet<_> = self
+            .rows
+            .iter()
+            .filter_map(|row| row.queue.as_ref().map(|q| q.id))
+            .collect();
+        for (i, entry) in view.entries.iter().enumerate() {
+            let Ok(index) = i32::try_from(i) else {
+                return;
+            };
+            let found = self
+                .rows
+                .get(i)
+                .filter(|row| row.queue.as_ref().is_some_and(|q| q.id == entry.id))
+                .map(|_| i)
+                .or_else(|| {
+                    if !existing.contains(&entry.id) {
+                        return None;
+                    }
+                    self.rows
+                        .iter()
+                        .position(|row| row.queue.as_ref().is_some_and(|q| q.id == entry.id))
+                });
+            if let Some(from) = found.filter(|from| *from != i) {
+                let Ok(source) = i32::try_from(from) else {
+                    return;
+                };
+                // Earlier positions are already reconciled, so this only moves upward.
+                if unsafe {
+                    self.as_mut().begin_move_rows(
+                        &QModelIndex::default(),
+                        source,
+                        source,
+                        &QModelIndex::default(),
+                        index,
+                    )
+                } {
+                    let row = self.as_mut().rust_mut().rows.remove(from);
+                    self.as_mut().rust_mut().rows.insert(i, row);
+                    unsafe {
+                        self.as_mut().end_move_rows();
+                    }
+                } else {
+                    return;
+                }
+            }
+            let artwork = entry
+                .track
+                .cover_beatmap_id
+                .map(|id| native::artwork_url(epoch, id))
+                .filter(|url| !url.is_empty())
+                .or_else(|| {
+                    found
+                        .and_then(|_| self.rows.get(i))
+                        .filter(|row| row.track.cover_beatmap_id == entry.track.cover_beatmap_id)
+                        .map(|row| row.artwork.clone())
+                })
+                .unwrap_or_default();
+            let row = Row {
+                queue: Some(QueueRoles {
+                    id: entry.id,
+                    current: Some(entry.id) == view.current_entry_id,
+                    past: i < view.history_len,
+                    availability: entry.availability,
+                }),
+                playlist_item_id: entry.playlist_item_id,
+                track: entry.track.clone(),
+                artwork,
+            };
+            if found.is_none() {
+                unsafe {
+                    self.as_mut()
+                        .begin_insert_rows(&QModelIndex::default(), index, index);
+                }
+                self.as_mut().rust_mut().rows.insert(i, row);
+                unsafe {
+                    self.as_mut().end_insert_rows();
+                }
+            } else if self.rows.get(i) != Some(&row) {
+                if let Some(existing) = self.as_mut().rust_mut().rows.get_mut(i) {
+                    *existing = row;
+                }
+                self.as_mut()
+                    .notify_row(i, &ROLES.iter().map(|(id, _)| *id).collect::<Vec<_>>());
+            }
+        }
+        self.as_mut().index_rows();
+        let count = i32::try_from(self.rows.len()).unwrap_or(i32::MAX);
+        if self.track_count != count {
+            self.as_mut().rust_mut().track_count = count;
+            self.track_count_changed();
+        }
+    }
+    fn retain_queue_rows(mut self: Pin<&mut Self>, ids: &std::collections::HashSet<QueueEntryId>) {
+        for i in (0..self.rows.len()).rev() {
+            let Ok(index) = i32::try_from(i) else {
+                return;
+            };
+            if !self
+                .rows
+                .get(i)
+                .and_then(|row| row.queue.as_ref())
+                .is_some_and(|q| ids.contains(&q.id))
+            {
+                unsafe {
+                    self.as_mut()
+                        .begin_remove_rows(&QModelIndex::default(), index, index);
+                }
+                self.as_mut().rust_mut().rows.remove(i);
+                unsafe {
+                    self.as_mut().end_remove_rows();
+                }
+            }
+        }
+    }
     pub(crate) fn replace_rows(
         mut self: Pin<&mut Self>,
         tracks: Vec<(Option<i32>, Track)>,
@@ -2038,6 +2326,7 @@ impl ffi::TrackListModel {
                     .map(|id| native::artwork_url(epoch, id))
                     .unwrap_or_default();
                 Row {
+                    queue: None,
                     playlist_item_id,
                     track,
                     artwork,
@@ -2073,6 +2362,7 @@ impl ffi::TrackListModel {
                         row.artwork
                     });
                 Row {
+                    queue: None,
                     playlist_item_id,
                     track,
                     artwork,
@@ -2115,6 +2405,20 @@ impl ffi::TrackListModel {
             self.as_mut().notify_row(i, &[257, 258, 259, 260]);
         }
     }
+    pub(crate) fn clear_artwork(mut self: Pin<&mut Self>) {
+        for row in &mut self.as_mut().rust_mut().rows {
+            row.artwork = QString::default();
+        }
+        if !self.rows.is_empty() {
+            let first = self.index(0, 0, &QModelIndex::default());
+            let last = self.index(
+                self.track_count.saturating_sub(1),
+                0,
+                &QModelIndex::default(),
+            );
+            self.data_changed(&first, &last, &std::iter::once(261).collect());
+        }
+    }
     pub(crate) fn update_artwork(mut self: Pin<&mut Self>, epoch: u64, affected: &[i32]) {
         for cover in affected {
             let url = native::artwork_url(epoch, *cover);
@@ -2130,6 +2434,16 @@ impl ffi::TrackListModel {
         }
     }
 
+    pub fn entry_id_at(&self, row: i32) -> QString {
+        QString::from(
+            usize::try_from(row)
+                .ok()
+                .and_then(|i| self.rows.get(i))
+                .and_then(|row| row.queue.as_ref())
+                .map(|q| q.id.to_string())
+                .unwrap_or_default(),
+        )
+    }
     pub fn data(&self, index: &QModelIndex, role: i32) -> QVariant {
         let Some(row) = usize::try_from(index.row())
             .ok()
@@ -2149,6 +2463,21 @@ impl ffi::TrackListModel {
             261 => QVariant::from(&row.artwork),
             262 => QVariant::from(&row.playlist_item_id.unwrap_or(-1)),
             263 => QVariant::from(&(row.track.audio_source_id >= 0)),
+            264 => QVariant::from(&QString::from(
+                row.queue
+                    .as_ref()
+                    .map(|q| q.id.to_string())
+                    .unwrap_or_default(),
+            )),
+            265 => QVariant::from(&row.queue.as_ref().is_some_and(|q| q.current)),
+            266 => QVariant::from(&row.queue.as_ref().is_some_and(|q| q.past)),
+            267 => QVariant::from(&QString::from(
+                match row.queue.as_ref().map(|q| q.availability) {
+                    Some(QueueAvailability::Checking) => "checking",
+                    Some(QueueAvailability::Unavailable) => "unavailable",
+                    _ => "available",
+                },
+            )),
             _ => QVariant::default(),
         }
     }

@@ -64,17 +64,21 @@ impl Controller {
             assignment.playback_token,
             assignment.mode,
         );
+        let entry_id = assignment.current_entry_id;
+        let waiting_for_check = assignment.waiting_for_check;
         if self.ensure_playback() {
             if let Some(worker) = &self.playback {
                 worker.send(crate::playback::Command::Assign {
                     generation: worker.generation(),
                     id,
                     playback_token: token,
+                    entry_id,
+                    waiting_for_check,
                     mode,
                     volume: self.assignment_volume(),
                 });
             }
-        } else if mode == PlaybackMode::Playing {
+        } else if mode == PlaybackMode::Playing && !waiting_for_check {
             self.player.device_failed(token);
         }
     }
@@ -262,9 +266,18 @@ impl Controller {
                     self.playlists.set_track_volume(audio_id, percent);
                     self.player.set_track_volume(audio_id, percent);
                 }
+                workflow::Effect::QueueAction(action) => {
+                    self.player.commands.push_back(PendingPlayback {
+                        command: PlaybackCommand::Play {
+                            audio_source_id: None,
+                        },
+                        playlist: None,
+                        queue: Some(action),
+                        expected_token: None,
+                    });
+                }
                 workflow::Effect::QueueClosed => self.media.close_queue_demand(),
                 workflow::Effect::QueueChanged => {
-                    self.media.retain_queue_demand(&self.upcoming.view.tracks);
                     self.reconcile_media();
                 }
                 workflow::Effect::ReconcileMedia => self.reconcile_media(),
@@ -402,6 +415,8 @@ impl Controller {
         let track = self.player.current_track.as_ref().filter(|_| {
             self.player.assignment.as_ref().is_some_and(|assignment| {
                 assignment.playback_token == self.player.playback.playback_token
+                    && assignment.current_entry_id == self.player.playback.current_entry_id
+                    && !assignment.waiting_for_check
                     && assignment.current_audio_source_id == self.player.playback.current_audio_id
             })
         });
@@ -550,9 +565,10 @@ impl Controller {
             .or_else(|| {
                 self.upcoming
                     .view
-                    .tracks
+                    .entries
                     .iter()
-                    .find(|track| track.audio_source_id == id)
+                    .find(|row| row.audio_source_id == Some(id))
+                    .map(|row| &row.track)
             })
             .or_else(|| {
                 self.player
@@ -703,6 +719,15 @@ impl Controller {
     pub(crate) fn emit_playlists(&self) {
         (self.emit)(AppUpdate::Playlists(self.playlists.view.clone()));
     }
+    pub(crate) fn set_visible_queue_media(
+        &mut self,
+        visible: Vec<(crate::models::QueueEntryId, bool)>,
+    ) {
+        self.media_work(|media, input, work| media.set_visible_queue_media(visible, input, work));
+    }
+    pub(crate) fn queue_action(&mut self, action: crate::view_models::QueueAction) {
+        self.queue_work(|queue, input, work| queue.action(action, input, work));
+    }
     pub(crate) fn set_visible_media(&mut self, visible: Vec<(i32, bool)>) {
         self.media_work(|media, input, work| media.set_visible_media(visible, input, work));
     }
@@ -844,6 +869,20 @@ impl Controller {
         self.player_work(|player, input, work| player.queue_playback(command, input, work));
     }
     pub(crate) fn queue_playlist(&mut self, playlist: PlaylistPlayback) {
+        if matches!(playlist, PlaylistPlayback::Append(_)) {
+            let connected = self.session.is_some();
+            self.queue_work(|queue, input, work| {
+                queue.operation_status(
+                    connected,
+                    (!connected).then(|| "Connect to the server to queue a playlist.".into()),
+                    input,
+                    work,
+                );
+            });
+            if !connected {
+                return;
+            }
+        }
         self.player_work(|player, input, work| player.queue_playlist(playlist, input, work));
     }
     pub(crate) fn start_playback_command(&mut self) {
@@ -854,9 +893,29 @@ impl Controller {
         pending: PendingPlayback,
         result: Result<PlaybackAssignment, String>,
     ) {
+        let queue_operation = pending.queue.is_some()
+            || matches!(pending.playlist, Some(PlaylistPlayback::Append(_)));
+        let previous_revision = self.player.assignment.as_ref().map(|state| state.revision);
+        let success = result.is_ok();
+        let operation_error = result.as_ref().err().cloned();
         self.player_work(|player, input, work| {
             player.playback_command_completed(pending, result, input, work);
         });
+        if queue_operation {
+            let busy = self.player.commands.iter().any(|pending| {
+                pending.queue.is_some()
+                    || matches!(pending.playlist, Some(PlaylistPlayback::Append(_)))
+            });
+            self.queue_work(|queue, input, work| {
+                queue.operation_status(busy, operation_error, input, work);
+            });
+        }
+        // Even a successful no-op must refresh the open panel.
+        if success
+            && previous_revision == self.player.assignment.as_ref().map(|state| state.revision)
+        {
+            self.refresh_queue();
+        }
     }
     pub(crate) fn start_playback_stream(&mut self) {
         self.player_work(|_player, input, work| {

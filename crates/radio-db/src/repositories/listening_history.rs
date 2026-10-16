@@ -52,6 +52,31 @@ impl ListeningHistoryRepository<'_> {
     }
 
     /// Resolve dates by the current source IDs without binding history to their lifetime.
+    pub async fn for_sources(
+        &self,
+        sources: &[SourceType],
+    ) -> Result<HashMap<(String, String), i64>> {
+        use sea_orm::{ColumnTrait, Condition, QueryFilter};
+        let mut values = HashMap::new();
+        for chunk in sources.chunks(250) {
+            let condition = chunk.iter().fold(Condition::any(), |condition, source| {
+                condition.add(
+                    Condition::all()
+                        .add(listening_history::Column::AudioKind.eq(source.kind()))
+                        .add(listening_history::Column::SourceLocation.eq(source.location())),
+                )
+            });
+            for row in listening_history::Entity::find()
+                .filter(condition)
+                .all(&self.connection)
+                .await?
+            {
+                values.insert((row.audio_kind, row.source_location), row.last_played_at_ms);
+            }
+        }
+        Ok(values)
+    }
+
     pub async fn for_audio_sources(&self, ids: &[i32]) -> Result<HashMap<i32, i64>> {
         let mut dates = HashMap::new();
         for chunk in ids.chunks(500) {

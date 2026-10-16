@@ -1,5 +1,5 @@
 use super::*;
-use crate::model::{PlaybackMode, QueueState};
+use crate::model::PlaybackMode;
 use sea_orm_migration::MigratorTrait;
 
 #[allow(clippy::too_many_lines)] // One populated upgrade checks metadata, cover versions and retained queue.
@@ -41,7 +41,6 @@ pub(super) async fn cover_migration_contracts(database: &Database, url: &str) {
     .await;
     sql(database, "INSERT INTO playlist_items (id, playlist_id, source_kind, beatmap_hash, title) VALUES (501, 501, 'lazer', 'missing-first', 'Unavailable first'), (502, 501, 'lazer', 'beatmap-Easy', 'Available second')").await;
     sql(database, "UPDATE playback_queue SET audio_source_ids = '[11]', playlist_item_ids = '[501]', current_index = 0, mode = 'paused', revision = 7, playback_token = 9").await;
-    let queue = database.queue().get().await.unwrap();
     let other = Database::connect(url).await.unwrap();
     let (first, second) = tokio::join!(database.migrate(), other.migrate());
     first.unwrap();
@@ -50,7 +49,10 @@ pub(super) async fn cover_migration_contracts(database: &Database, url: &str) {
         database.beatmaps().get(map.id).await.unwrap(),
         Some(map.clone())
     );
-    assert_eq!(database.queue().get().await.unwrap(), queue);
+    let queue = database.queue().get().await.unwrap();
+    assert_eq!(queue.audio_source_ids(), [11]);
+    assert_eq!(queue.playlist_item_ids(), [Some(501)]);
+    assert_eq!(queue.mode, PlaybackMode::Paused);
     let summaries = database.playlists().all().await.unwrap();
     assert_eq!(summaries[0].item_count, 2);
     assert_eq!(
@@ -168,15 +170,12 @@ pub(super) async fn migration_contracts(database: &Database, url: &str) {
         database.beatmaps().get(map.id).await.unwrap(),
         Some(map.clone())
     );
-    let before = QueueState {
-        audio_source_ids: vec![11, 11],
-        playlist_item_ids: vec![None, None],
-        current_index: Some(1),
-        mode: PlaybackMode::Paused,
-        revision: 7,
-        playback_token: 9,
-    };
-    assert_eq!(database.queue().get().await.unwrap(), before);
+    let before = database.queue().get().await.unwrap();
+    assert_eq!(before.audio_source_ids(), [11, 11]);
+    assert_eq!(before.current_index(), Some(1));
+    assert_eq!(before.mode, PlaybackMode::Paused);
+    assert_eq!(before.revision, 7);
+    assert_eq!(before.playback_token, 9);
     let playlist = database.playlists().create("Saved").await.unwrap();
     let projection = database
         .playlists()
@@ -214,8 +213,13 @@ pub(super) async fn migration_contracts(database: &Database, url: &str) {
         .items
         .remove(0);
     let mut queued = before.clone();
-    queued.playlist_item_ids = vec![Some(item.id), Some(item.id)];
-    database.queue().save(&queued).await.unwrap();
+    for entry in &mut queued.entries {
+        entry.playlist_item_id = Some(item.id);
+    }
+    let transaction = database.begin().await.unwrap();
+    transaction.user_data().lock().await.unwrap();
+    transaction.queue().save(&queued).await.unwrap();
+    transaction.commit().await.unwrap();
     database
         .osu_installations()
         .delete(installation.id)
@@ -243,7 +247,7 @@ pub(super) async fn migration_contracts(database: &Database, url: &str) {
         "queue keeps the launch snapshot even after playlist deletion"
     );
     let mut invalid = queued;
-    invalid.playlist_item_ids.clear();
+    invalid.entries[0].position = 1;
     assert!(database.queue().save(&invalid).await.is_err());
     assert!(database.playlists().create(" ").await.is_err());
     assert!(
@@ -329,8 +333,8 @@ pub(super) async fn unicode_migration_contracts(database: &Database) {
     )
     .await;
     sql(database, "INSERT INTO playlist_items (id, playlist_id, source_kind, beatmap_hash, title, artist, difficulty_name) VALUES (701, 701, 'lazer', 'beatmap-Easy', 'Saved title', 'Saved artist', 'Easy'), (702, 701, 'lazer', 'missing', 'Unavailable', NULL, NULL), (703, 701, 'stable', 'beatmap-Easy', 'Other kind', NULL, NULL)").await;
-    let queue = database.queue().get().await.unwrap();
     database.migrate().await.unwrap();
+    let queue = crate::model::QueueState::default();
     let saved = database.playlists().get(701).await.unwrap().unwrap();
     assert_eq!(saved.items[0].title.as_deref(), Some("Saved title"));
     assert_eq!(saved.items[0].artist.as_deref(), Some("Saved artist"));
@@ -371,7 +375,7 @@ pub(super) async fn unicode_migration_contracts(database: &Database) {
         database.playlists().get(701).await.unwrap(),
         Some(saved.clone())
     );
-    crate::migrations::Migrator::down(&database.connection, Some(2))
+    crate::migrations::Migrator::down(&database.connection, Some(5))
         .await
         .unwrap();
     assert!(

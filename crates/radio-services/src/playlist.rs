@@ -191,6 +191,20 @@ impl PlaylistService<'_> {
         transaction.commit().await
     }
 
+    /// Append a complete playlist snapshot without changing the current launch.
+    pub async fn append_to_queue(&self, id: i32) -> Result<PlaybackAssignment> {
+        let transaction = self.database.begin().await?;
+        transaction.user_data().lock().await?;
+        let playlist = transaction
+            .playlists()
+            .get(id)
+            .await?
+            .ok_or(PlaylistError::NotFound(id))?;
+        let result = QueueService::append_playlist_in(&transaction, playlist.items).await?;
+        transaction.commit().await?;
+        Ok(result)
+    }
+
     pub async fn play(&self, id: i32, start_item_id: Option<i32>) -> Result<PlaybackAssignment> {
         let transaction = self.database.begin().await?;
         transaction.user_data().lock().await?;
@@ -209,23 +223,13 @@ impl PlaylistService<'_> {
                 return Err(PlaylistError::UnavailableItem(item_id).into());
             }
         }
-        let available: Vec<_> = playlist
-            .items
-            .iter()
-            .filter(|item| item.audio_source_id.is_some())
-            .collect();
-        if available.is_empty() {
+        if playlist.items.is_empty() {
             return Err(PlaylistError::NoAvailableItems.into());
         }
-        let start = start_item_id
-            .and_then(|id| available.iter().position(|item| item.id == id))
-            .unwrap_or(0);
-        let ids = available
-            .iter()
-            .filter_map(|item| item.audio_source_id)
-            .collect();
-        let item_ids = available.iter().map(|item| Some(item.id)).collect();
-        let result = QueueService::replace_in(&transaction, ids, item_ids, start).await?;
+        let start = playlist.items.iter().position(|item| {
+            start_item_id.map_or_else(|| item.audio_source_id.is_some(), |id| item.id == id)
+        });
+        let result = QueueService::replace_in(&transaction, playlist.items, start).await?;
         transaction.commit().await?;
         Ok(result)
     }

@@ -113,7 +113,7 @@ QtObject {
     function rowsReady(rows: var, queue: bool): bool {
         if (rows.length === 0) return false;
         for (const row of rows) {
-            const data = queue ? row.modelData : row;
+            const data = row;
             const image = imageWithSource(row, data.artworkUrl, false);
             if (!data.artworkUrl || !image || image.status !== Image.Ready || data.durationLabel === "--:--") return false;
         }
@@ -458,9 +458,9 @@ QtObject {
             if (!bridge.connected || bridge.library.libraryLoading || !bridge.settings.audioSettingsLoaded) return;
             find(window.contentItem, "queueButton").clicked(); stage = 1; break;
         case 1:
-            if (!panel.opened || bridge.queue.queueLoading || bridge.queue.queueTracks.length !== 2) return;
-            if (bridge.queue.queueTracks.some(track => track.artworkUrl.length === 0 || track.durationLabel === "--:--")) return;
-            check(bridge.queue.queueTracks[0].audioId === 42 && bridge.queue.queueTracks[1].audioId === 103, "queue visual order");
+            if (!panel.opened || bridge.queue.queueLoading || bridge.queue.tracks.trackCount !== 3) return;
+            if (!rowsReady(panel.mediaDelegates.filter(row => row.inViewport), true)) return;
+            check(bridge.queue.tracks.entryIdAt(0) === "1" && bridge.queue.tracks.entryIdAt(2) === "3", "full queue visual order");
             stage = 2; break;
         case 2:
             stage = 4; break;
@@ -528,7 +528,7 @@ QtObject {
             if (window.height < 1200) window.height = 1200;
             find(window.contentItem, "queueButton").clicked(); stage = 11; break;
         case 11: {
-            if (!panel.opened || bridge.queue.queueLoading || bridge.queue.queueTracks.length !== 16) return;
+            if (!panel.opened || bridge.queue.queueLoading || bridge.queue.tracks.trackCount !== 17) return;
             const rows = []; queueRows(panel.contentItem, rows);
             if (rows.length === 0) return;
             retainedQueueDelegate = rows[0]; stage = 12; break;

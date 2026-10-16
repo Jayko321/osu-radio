@@ -25,6 +25,7 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
         );
     }
     let [a, b, c, x] = <[i32; 4]>::try_from(ids).unwrap();
+    super::queue_t02::contracts(database, other, [a, b, c, x]).await;
     validation_is_atomic(database, a).await;
     upcoming_tracks_follow_queue_order(database, [a, b, c]).await;
     insertion_and_history(database, [a, b, c, x]).await;
@@ -42,12 +43,14 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
 }
 
 async fn command(database: &TestDatabase, command: Command) -> PlaybackAssignment {
-    database.queue().command(command).await.unwrap()
+    database.queue().command(command).await.unwrap();
+    complete_checks(database).await;
+    database.queue().playback().await.unwrap()
 }
 
 async fn counter_limits_preserve_the_persisted_assignment(database: &TestDatabase, audio: i32) {
     database.queue().clear().await.unwrap();
-    database.queue().append(vec![audio]).await.unwrap();
+    append_and_play(database, vec![audio]).await;
     let original = database.queue().get().await.unwrap();
     for (column, restore) in [
         ("revision", original.revision),
@@ -69,11 +72,32 @@ async fn counter_limits_preserve_the_persisted_assignment(database: &TestDatabas
         )
         .await;
     }
+    sql(
+        database,
+        &format!("UPDATE playback_queue SET last_entry_id = {}", i64::MAX),
+    )
+    .await;
+    let before = database.queue().get().await.unwrap();
+    assert!(database.queue().append(vec![audio]).await.is_err());
+    assert_eq!(database.queue().get().await.unwrap(), before);
     database.queue().clear().await.unwrap();
+    let cleared = database.queue().get().await.unwrap();
+    assert_eq!(cleared.last_entry_id, i64::MAX);
+    assert!(database.queue().append(vec![audio]).await.is_err());
+    assert_eq!(database.queue().get().await.unwrap(), cleared);
+    // Restore only this disposable counter fixture so later independent contracts can allocate.
+    sql(
+        database,
+        &format!(
+            "UPDATE playback_queue SET last_entry_id = {}",
+            original.last_entry_id
+        ),
+    )
+    .await;
 }
 
 async fn upcoming_tracks_follow_queue_order(database: &TestDatabase, [a, b, c]: [i32; 3]) {
-    database.queue().append(vec![a, c, b, c]).await.unwrap();
+    append_and_play(database, vec![a, c, b, c]).await;
     let before = database.queue().get().await.unwrap();
     let (queue, tracks) = database.queue().upcoming().await.unwrap();
     assert_eq!(queue, before, "viewing the queue must not change playback");
@@ -143,11 +167,8 @@ async fn validation_is_atomic(database: &TestDatabase, a: i32) {
         .unwrap()
         .id;
     assert_eq!(
-        database
-            .queue()
-            .append(vec![copied])
+        append_and_play(database, vec![copied])
             .await
-            .unwrap()
             .current_audio_source_id,
         Some(copied)
     );
@@ -156,7 +177,7 @@ async fn validation_is_atomic(database: &TestDatabase, a: i32) {
 
 #[allow(clippy::too_many_lines)]
 async fn insertion_and_history(database: &TestDatabase, [a, b, c, x]: [i32; 4]) {
-    let first = database.queue().append(vec![a, b, c]).await.unwrap();
+    let first = append_and_play(database, vec![a, b, c]).await;
     assert_eq!(first.current_audio_source_id, Some(a));
     assert_eq!(first.mode, Mode::Playing);
     assert!(first.can_next && first.can_previous);
@@ -178,8 +199,8 @@ async fn insertion_and_history(database: &TestDatabase, [a, b, c, x]: [i32; 4]) 
     assert_eq!(inserted.current_audio_source_id, Some(x));
     assert!(inserted.playback_token > first.playback_token);
     let queue = database.queue().get().await.unwrap();
-    assert_eq!(queue.audio_source_ids, [a, x, b, c]);
-    assert_eq!(queue.current_index, Some(1));
+    assert_eq!(queue.audio_source_ids(), [a, x, b, c]);
+    assert_eq!(queue.current_index(), Some(1));
     let stale = command(
         database,
         Command::Finished {
@@ -232,11 +253,15 @@ async fn insertion_and_history(database: &TestDatabase, [a, b, c, x]: [i32; 4]) 
     assert_eq!(exhausted.mode, Mode::Stopped);
     assert_eq!(exhausted.current_audio_source_id, None);
     assert!(exhausted.can_previous);
-    assert_eq!(database.queue().get().await.unwrap().current_index, Some(4));
+    assert_eq!(database.queue().get().await.unwrap().history_len, 4);
+    assert_eq!(database.queue().get().await.unwrap().current_entry_id, None);
     assert_eq!(command(database, Command::Next).await, exhausted);
-    let appended = database.queue().append(vec![a, a]).await.unwrap();
+    let appended = append_and_play(database, vec![a, a]).await;
     assert_eq!(appended.mode, Mode::Playing);
-    assert_eq!(database.queue().get().await.unwrap().current_index, Some(4));
+    assert_eq!(
+        database.queue().get().await.unwrap().current_index(),
+        Some(4)
+    );
     let duplicate = command(
         database,
         Command::Finished {
@@ -255,7 +280,10 @@ async fn insertion_and_history(database: &TestDatabase, [a, b, c, x]: [i32; 4]) 
     )
     .await;
     assert_eq!(replay.current_audio_source_id, Some(a));
-    assert_eq!(database.queue().get().await.unwrap().current_index, Some(0));
+    assert_eq!(
+        database.queue().get().await.unwrap().current_index(),
+        Some(0)
+    );
     let cleared = database.queue().clear().await.unwrap();
     assert_eq!(cleared.mode, Mode::Stopped);
     assert!(cleared.playback_token > replay.playback_token);
@@ -265,7 +293,7 @@ async fn insertion_and_history(database: &TestDatabase, [a, b, c, x]: [i32; 4]) 
 }
 
 async fn pause_stop_failures(database: &TestDatabase, [a, b, c]: [i32; 3]) {
-    let first = database.queue().append(vec![a, b]).await.unwrap();
+    let first = append_and_play(database, vec![a, b]).await;
     let paused = command(database, Command::Pause).await;
     assert_eq!(paused.mode, Mode::Paused);
     assert_eq!(paused.playback_token, first.playback_token);
@@ -352,17 +380,17 @@ async fn pause_stop_failures(database: &TestDatabase, [a, b, c]: [i32; 3]) {
         command(database, Command::Previous)
             .await
             .current_audio_source_id,
-        Some(c)
+        None
     );
     assert_eq!(
         database.queue().playback().await.unwrap().mode,
-        Mode::Paused
+        Mode::Stopped
     );
     database.queue().clear().await.unwrap();
 }
 
 async fn device_pause_is_bound_to_launch(database: &TestDatabase, [a, b]: [i32; 2]) {
-    let first = database.queue().append(vec![a, b]).await.unwrap();
+    let first = append_and_play(database, vec![a, b]).await;
     let pause = Command::PauseIfCurrent {
         playback_token: first.playback_token,
     };
@@ -390,7 +418,7 @@ async fn concurrent_callbacks_and_writes(
     other: &TestDatabase,
     [a, b, c, x]: [i32; 4],
 ) {
-    let first = database.queue().append(vec![a, b, c]).await.unwrap();
+    let first = append_and_play(database, vec![a, b, c]).await;
     let left = database.queue();
     let right = other.queue();
     let finished = Command::Finished {
@@ -407,8 +435,8 @@ async fn concurrent_callbacks_and_writes(
     two.unwrap();
     let queue = left.get().await.unwrap();
     assert!(
-        queue.audio_source_ids == [a, b, c, a, x, c, b]
-            || queue.audio_source_ids == [a, b, c, c, b, a, x]
+        queue.audio_source_ids() == [a, b, c, a, x, c, b]
+            || queue.audio_source_ids() == [a, b, c, c, b, a, x]
     );
     assert_eq!(queue.revision, first.revision.checked_add(3).unwrap());
     let (one, two) = tokio::join!(
@@ -419,12 +447,12 @@ async fn concurrent_callbacks_and_writes(
     );
     one.unwrap();
     two.unwrap();
-    assert!(left.get().await.unwrap().audio_source_ids.is_empty());
+    assert!(left.get().await.unwrap().audio_source_ids().is_empty());
     assert_eq!(left.playback().await.unwrap().mode, Mode::Stopped);
 }
 
 async fn recovery_and_reopen(database: &TestDatabase, url: &str, a: i32) {
-    let playing = database.queue().append(vec![a, a]).await.unwrap();
+    let playing = append_and_play(database, vec![a, a]).await;
     let old = database.queue().get().await.unwrap();
     let reopened = Services::connect(url).await.unwrap();
     reopened.migrate().await.unwrap();
@@ -434,8 +462,8 @@ async fn recovery_and_reopen(database: &TestDatabase, url: &str, a: i32) {
     assert_eq!(paused.mode, Mode::Paused);
     assert!(paused.playback_token > playing.playback_token);
     assert_eq!(
-        reopened.queue().get().await.unwrap().audio_source_ids,
-        old.audio_source_ids
+        reopened.queue().get().await.unwrap().audio_source_ids(),
+        old.audio_source_ids()
     );
     assert_eq!(
         reopened
@@ -477,7 +505,7 @@ async fn missing_sources_are_skipped(
     [a, b, c]: [i32; 3],
     installations: &[i32],
 ) {
-    database.queue().append(vec![a, b, c, a]).await.unwrap();
+    append_and_play(database, vec![a, b, c, a]).await;
     database
         .osu_installations()
         .delete(installations[1])
@@ -506,14 +534,20 @@ async fn missing_sources_are_skipped(
             .current_audio_source_id,
         Some(a)
     );
-    assert_eq!(database.queue().get().await.unwrap().current_index, Some(3));
+    assert_eq!(
+        database.queue().get().await.unwrap().current_index(),
+        Some(3)
+    );
     assert_eq!(
         command(database, Command::Previous)
             .await
             .current_audio_source_id,
         Some(a)
     );
-    assert_eq!(database.queue().get().await.unwrap().current_index, Some(0));
+    assert_eq!(
+        database.queue().get().await.unwrap().current_index(),
+        Some(0)
+    );
     assert!(database.queue().playback().await.unwrap().can_next);
     database.queue().clear().await.unwrap();
     sql(
@@ -560,7 +594,7 @@ async fn assignment_metadata(database: &TestDatabase, a: i32, installation: i32)
     );
     assert!(expected.cover_beatmap_id.is_some());
     assert_eq!(
-        database.queue().append(vec![a]).await.unwrap().track,
+        append_and_play(database, vec![a]).await.track,
         Some(expected)
     );
     assert!(
@@ -582,4 +616,20 @@ async fn assignment_metadata(database: &TestDatabase, a: i32, installation: i32)
             .audio_source_id,
         a
     );
+}
+
+pub(super) async fn complete_checks(database: &Services) {
+    for check in database.queue().pending_checks().await.unwrap() {
+        database.queue().apply_check(check, true).await.unwrap();
+    }
+}
+async fn append_and_play(database: &TestDatabase, ids: Vec<i32>) -> PlaybackAssignment {
+    database.queue().append(ids).await.unwrap();
+    command(
+        database,
+        Command::Play {
+            audio_source_id: None,
+        },
+    )
+    .await
 }

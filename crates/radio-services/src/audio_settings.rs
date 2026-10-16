@@ -64,6 +64,13 @@ impl AudioSettingsService<'_> {
         }
         transaction.commit().await
     }
+    pub(crate) async fn for_sources_in(
+        transaction: &Transaction,
+        sources: &[radio_db::model::SourceType],
+    ) -> Result<std::collections::HashMap<(String, String), u8>> {
+        transaction.audio_volume().for_sources(sources).await
+    }
+
     pub(crate) async fn fill_tracks(
         transaction: &Transaction,
         tracks: &mut [LibraryTrack],

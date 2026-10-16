@@ -112,6 +112,7 @@ impl OsuInstallationService<'_> {
         }
         .cleanup()
         .await?;
+        crate::QueueService::reconcile_sources_in(&transaction).await?;
         transaction.commit().await?;
         Ok(deleted)
     }
@@ -241,6 +242,7 @@ impl OsuInstallationService<'_> {
         tags.cleanup().await?;
         metadata.cleanup().await?;
         audio.cleanup().await?;
+        crate::QueueService::reconcile_sources_in(transaction).await?;
         installations.mark_scanned(id).await?;
         summary.audio_sources = audio_ids.len();
         Ok(summary)

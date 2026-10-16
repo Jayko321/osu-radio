@@ -35,6 +35,34 @@ impl AudioVolumeRepository<'_> {
         .await?;
         Ok(())
     }
+    pub async fn for_sources(
+        &self,
+        sources: &[SourceType],
+    ) -> Result<HashMap<(String, String), u8>> {
+        use sea_orm::{ColumnTrait, Condition, QueryFilter};
+        let mut values = HashMap::new();
+        for chunk in sources.chunks(250) {
+            let condition = chunk.iter().fold(Condition::any(), |condition, source| {
+                condition.add(
+                    Condition::all()
+                        .add(audio_volume::Column::AudioKind.eq(source.kind()))
+                        .add(audio_volume::Column::SourceLocation.eq(source.location())),
+                )
+            });
+            for row in audio_volume::Entity::find()
+                .filter(condition)
+                .all(&self.connection)
+                .await?
+            {
+                values.insert(
+                    (row.audio_kind, row.source_location),
+                    u8::try_from(row.volume_percent)?,
+                );
+            }
+        }
+        Ok(values)
+    }
+
     pub async fn for_audio_sources(&self, ids: &[i32]) -> Result<HashMap<i32, u8>> {
         let mut volumes = HashMap::new();
         for chunk in ids.chunks(500) {

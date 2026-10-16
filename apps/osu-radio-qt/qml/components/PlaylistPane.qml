@@ -14,6 +14,7 @@ Item {
     property int trackCount: 0
     property int sortIndex: 0
     property bool busy: false
+    property bool queueBusy: false
     property bool coverPreparing: false
     property bool loading: false
     property bool connected: true
@@ -253,7 +254,7 @@ Item {
                         ActionItem {
                             text: "Add to queue"
                             iconName: "add-to-queue"
-                            enabled: root.connected && !root.busy && card.modelData.itemCount > 0
+                            enabled: root.connected && !root.busy && !root.queueBusy && card.modelData.itemCount > 0
                             onTriggered: root.queueRequested(card.modelData.id)
                         }
                         ActionItem { text: "Edit"; iconName: "playlist-edit"; onTriggered: root.editRequested(card.modelData.id) }

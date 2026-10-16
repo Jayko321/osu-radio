@@ -3,11 +3,11 @@ use std::time::Duration;
 use axum::{
     Json,
     body::Body,
-    extract::State,
+    extract::{Path, State},
     http::header,
     response::{IntoResponse, Response},
 };
-use radio_services::{PlaybackAssignment, PlaybackCommand, QueueError, QueueState};
+use radio_services::{PlaybackAssignment, PlaybackCommand, QueueError, QueueSnapshot};
 use serde::{Deserialize, Serialize};
 
 use super::{media::probe_source_duration, tracks::TrackResponse};
@@ -34,26 +34,125 @@ impl From<radio_services::PlaybackMode> for PlaybackMode {
     }
 }
 
+/// A positive BIGINT carried as a decimal string, never a JSON number.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+#[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "docs", schema(value_type = String, pattern = "^0*[1-9][0-9]*$", example = "9223372036854775807"))]
+pub(crate) struct EntryId(radio_services::QueueEntryId);
+
+impl TryFrom<String> for EntryId {
+    type Error = &'static str;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+            return Err("Expected a positive decimal i64 string");
+        }
+        value
+            .parse::<i64>()
+            .ok()
+            .and_then(|id| radio_services::QueueEntryId::new(id).ok())
+            .map(Self)
+            .ok_or("Expected a positive decimal i64 string")
+    }
+}
+impl From<EntryId> for String {
+    fn from(id: EntryId) -> Self {
+        id.0.to_string()
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
+pub(crate) enum Availability {
+    Checking,
+    Available,
+    Unavailable,
+}
+impl From<radio_services::QueueAvailability> for Availability {
+    fn from(value: radio_services::QueueAvailability) -> Self {
+        match value {
+            radio_services::QueueAvailability::Checking => Self::Checking,
+            radio_services::QueueAvailability::Available => Self::Available,
+            radio_services::QueueAvailability::Unavailable => Self::Unavailable,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
+pub(crate) struct QueueEntryResponse {
+    id: EntryId,
+    position: usize,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    audio_source_id: Option<i32>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    playlist_item_id: Option<i32>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    title: Option<String>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    title_unicode: Option<String>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    artist: Option<String>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    artist_unicode: Option<String>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    difficulty_name: Option<String>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    beatmap_id: Option<i32>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    beatmap_set_id: Option<i32>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    cover_beatmap_id: Option<i32>,
+    availability: Availability,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    last_played_at_ms: Option<i64>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    volume_percent: Option<u8>,
+}
+impl From<radio_services::QueueSnapshotEntry> for QueueEntryResponse {
+    fn from(snapshot: radio_services::QueueSnapshotEntry) -> Self {
+        let entry = snapshot.entry;
+        Self {
+            id: EntryId(entry.id),
+            position: entry.position,
+            audio_source_id: entry.audio_source_id,
+            playlist_item_id: entry.playlist_item_id,
+            title: entry.title,
+            title_unicode: entry.title_unicode,
+            artist: entry.artist,
+            artist_unicode: entry.artist_unicode,
+            difficulty_name: entry.difficulty_name,
+            beatmap_id: entry.beatmap_id,
+            beatmap_set_id: entry.beatmap_set_id,
+            cover_beatmap_id: entry.cover_beatmap_id,
+            availability: entry.availability.into(),
+            last_played_at_ms: snapshot.last_played_at_ms,
+            volume_percent: snapshot.volume_percent,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
 pub(crate) struct QueueResponse {
-    upcoming_tracks: Vec<TrackResponse>,
-    audio_source_ids: Vec<i32>,
-    playlist_item_ids: Vec<Option<i32>>,
-    current_index: Option<usize>,
+    entries: Vec<QueueEntryResponse>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    current_entry_id: Option<EntryId>,
+    history_len: usize,
     mode: PlaybackMode,
+    waiting_for_check: bool,
     revision: u64,
     playback_token: u64,
 }
-
-impl From<QueueState> for QueueResponse {
-    fn from(queue: QueueState) -> Self {
+impl From<QueueSnapshot> for QueueResponse {
+    fn from(queue: QueueSnapshot) -> Self {
         Self {
-            upcoming_tracks: Vec::new(),
-            audio_source_ids: queue.audio_source_ids,
-            playlist_item_ids: queue.playlist_item_ids,
-            current_index: queue.current_index,
+            entries: queue.entries.into_iter().map(Into::into).collect(),
+            current_entry_id: queue.current_entry_id.map(EntryId),
+            history_len: queue.history_len,
             mode: queue.mode.into(),
+            waiting_for_check: queue.waiting_for_check,
             revision: queue.revision,
             playback_token: queue.playback_token,
         }
@@ -63,10 +162,20 @@ impl From<QueueState> for QueueResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
 pub(crate) struct PlaybackResponse {
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    current_entry_id: Option<EntryId>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    availability: Option<Availability>,
+    waiting_for_check: bool,
+    #[cfg_attr(feature = "docs", schema(required = true))]
     volume_percent: Option<u8>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
     current_audio_source_id: Option<i32>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
     current_playlist_item_id: Option<i32>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
     track: Option<TrackResponse>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
     duration_ms: Option<u64>,
     mode: PlaybackMode,
     revision: u64,
@@ -80,7 +189,11 @@ impl PlaybackResponse {
         state: &AppState,
         assignment: PlaybackAssignment,
     ) -> Result<Self, ApiError> {
-        let duration_ms = if let Some(id) = assignment.current_audio_source_id {
+        let duration_ms = if assignment.availability
+            == Some(radio_services::QueueAvailability::Available)
+            && !assignment.waiting_for_check
+            && let Some(id) = assignment.current_audio_source_id
+        {
             if let Some(source) = state.services().audio_sources().get(id).await? {
                 probe_source_duration(source.s_type).await?
             } else {
@@ -90,6 +203,9 @@ impl PlaybackResponse {
             None
         };
         Ok(Self {
+            current_entry_id: assignment.current_entry_id.map(EntryId),
+            availability: assignment.availability.map(Into::into),
+            waiting_for_check: assignment.waiting_for_check,
             volume_percent: assignment.volume_percent,
             current_audio_source_id: assignment.current_audio_source_id,
             current_playlist_item_id: assignment.current_playlist_item_id,
@@ -108,7 +224,56 @@ impl PlaybackResponse {
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
 pub(crate) struct AppendRequest {
-    audio_source_ids: Vec<i32>,
+    items: Vec<QueueItem>,
+    placement: Placement,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
+pub(crate) enum QueueItem {
+    Audio { audio_source_id: i32 },
+    PlaylistItem { playlist_id: i32, item_id: i32 },
+}
+impl From<QueueItem> for radio_services::QueueItemRef {
+    fn from(item: QueueItem) -> Self {
+        match item {
+            QueueItem::Audio { audio_source_id } => Self::Audio(audio_source_id),
+            QueueItem::PlaylistItem {
+                playlist_id,
+                item_id,
+            } => Self::PlaylistItem {
+                playlist_id,
+                item_id,
+            },
+        }
+    }
+}
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
+pub(crate) enum Placement {
+    End,
+    Next,
+}
+impl From<Placement> for radio_services::QueuePlacement {
+    fn from(placement: Placement) -> Self {
+        match placement {
+            Placement::End => Self::End,
+            Placement::Next => Self::Next,
+        }
+    }
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
+pub(crate) struct MoveRequest {
+    #[serde(deserialize_with = "required_anchor")]
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    before_entry_id: Option<EntryId>,
+}
+fn required_anchor<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<EntryId>, D::Error> {
+    Option::deserialize(d)
 }
 
 #[derive(Debug, Deserialize)]
@@ -146,8 +311,11 @@ impl From<CommandRequest> for PlaybackCommand {
 }
 
 fn queue_error(error: anyhow::Error) -> ApiError {
-    if let Some(QueueError::InvalidAudioSource(id)) = error.downcast_ref::<QueueError>() {
-        return ApiError::bad_request(format!("Audio source {id} is unavailable or unsupported."));
+    if let Some(reason) = error.downcast_ref::<QueueError>() {
+        return match reason {
+            QueueError::UnavailableEntry(_) => ApiError::bad_request(reason.to_string()),
+            _ => ApiError::not_found(reason.to_string()),
+        };
     }
     error.into()
 }
@@ -158,6 +326,7 @@ pub(super) async fn committed_response(
 ) -> Result<Json<PlaybackResponse>, ApiError> {
     // Notify immediately after commit, before duration probing can fail or be cancelled.
     state.publish_playback(assignment.revision);
+    state.wake_queue_checks();
     Ok(Json(
         PlaybackResponse::from_assignment(state, assignment).await?,
     ))
@@ -168,15 +337,12 @@ pub(super) async fn committed_response(
 pub(crate) async fn get_queue(
     State(state): State<AppState>,
 ) -> Result<Json<QueueResponse>, ApiError> {
-    let (queue, tracks) = state.services().queue().upcoming().await?;
-    let mut response = QueueResponse::from(queue);
-    response.upcoming_tracks = tracks.into_iter().map(TrackResponse::from).collect();
-    Ok(Json(response))
+    Ok(Json(state.services().queue().snapshot().await?.into()))
 }
 
 #[cfg_attr(feature = "docs", utoipa::path(post, path = "/api/queue/items", tag = "playback",
     request_body = AppendRequest, responses((status = OK, body = PlaybackResponse),
-    (status = BAD_REQUEST, body = crate::error::ApiErrorBody), (status = INTERNAL_SERVER_ERROR, body = crate::error::ApiErrorBody))))]
+    (status = BAD_REQUEST, body = crate::error::ApiErrorBody), (status = NOT_FOUND, body = crate::error::ApiErrorBody), (status = UNPROCESSABLE_ENTITY), (status = INTERNAL_SERVER_ERROR, body = crate::error::ApiErrorBody))))]
 pub(crate) async fn append_items(
     State(state): State<AppState>,
     Json(request): Json<AppendRequest>,
@@ -184,7 +350,10 @@ pub(crate) async fn append_items(
     let assignment = state
         .services()
         .queue()
-        .append(request.audio_source_ids)
+        .insert(
+            request.items.into_iter().map(Into::into).collect(),
+            request.placement.into(),
+        )
         .await
         .map_err(queue_error)?;
     committed_response(&state, assignment).await
@@ -196,6 +365,72 @@ pub(crate) async fn clear_queue(
     State(state): State<AppState>,
 ) -> Result<Json<PlaybackResponse>, ApiError> {
     let assignment = state.services().queue().clear().await?;
+    committed_response(&state, assignment).await
+}
+
+#[cfg_attr(feature = "docs", utoipa::path(post, path = "/api/queue/items/{entry_id}/play", tag = "playback",
+    params(("entry_id" = EntryId, Path)), responses((status = OK, body = PlaybackResponse),
+    (status = BAD_REQUEST, body = crate::error::ApiErrorBody), (status = NOT_FOUND, body = crate::error::ApiErrorBody),
+    (status = INTERNAL_SERVER_ERROR, body = crate::error::ApiErrorBody))))]
+pub(crate) async fn play_entry(
+    State(state): State<AppState>,
+    Path(entry_id): Path<EntryId>,
+) -> Result<Json<PlaybackResponse>, ApiError> {
+    let assignment = state
+        .services()
+        .queue()
+        .play_entry(entry_id.0)
+        .await
+        .map_err(queue_error)?;
+    committed_response(&state, assignment).await
+}
+
+#[cfg_attr(feature = "docs", utoipa::path(patch, path = "/api/queue/items/{entry_id}", tag = "playback",
+    params(("entry_id" = EntryId, Path)), request_body = MoveRequest, responses((status = OK, body = PlaybackResponse),
+    (status = BAD_REQUEST, body = crate::error::ApiErrorBody), (status = NOT_FOUND, body = crate::error::ApiErrorBody),
+    (status = UNPROCESSABLE_ENTITY), (status = INTERNAL_SERVER_ERROR, body = crate::error::ApiErrorBody))))]
+pub(crate) async fn move_entry(
+    State(state): State<AppState>,
+    Path(entry_id): Path<EntryId>,
+    Json(request): Json<MoveRequest>,
+) -> Result<Json<PlaybackResponse>, ApiError> {
+    let assignment = state
+        .services()
+        .queue()
+        .move_entry(entry_id.0, request.before_entry_id.map(|id| id.0))
+        .await
+        .map_err(queue_error)?;
+    committed_response(&state, assignment).await
+}
+
+#[cfg_attr(feature = "docs", utoipa::path(delete, path = "/api/queue/items/{entry_id}", tag = "playback",
+    params(("entry_id" = EntryId, Path)), responses((status = OK, body = PlaybackResponse),
+    (status = BAD_REQUEST, body = crate::error::ApiErrorBody), (status = NOT_FOUND, body = crate::error::ApiErrorBody),
+    (status = INTERNAL_SERVER_ERROR, body = crate::error::ApiErrorBody))))]
+pub(crate) async fn remove_entry(
+    State(state): State<AppState>,
+    Path(entry_id): Path<EntryId>,
+) -> Result<Json<PlaybackResponse>, ApiError> {
+    let assignment = state
+        .services()
+        .queue()
+        .remove_entry(entry_id.0)
+        .await
+        .map_err(queue_error)?;
+    committed_response(&state, assignment).await
+}
+
+#[cfg_attr(feature = "docs", utoipa::path(delete, path = "/api/queue/upcoming", tag = "playback",
+    responses((status = OK, body = PlaybackResponse), (status = INTERNAL_SERVER_ERROR, body = crate::error::ApiErrorBody))))]
+pub(crate) async fn clear_upcoming(
+    State(state): State<AppState>,
+) -> Result<Json<PlaybackResponse>, ApiError> {
+    let assignment = state
+        .services()
+        .queue()
+        .clear_upcoming()
+        .await
+        .map_err(queue_error)?;
     committed_response(&state, assignment).await
 }
 
@@ -212,7 +447,7 @@ pub(crate) async fn get_playback(
 
 #[cfg_attr(feature = "docs", utoipa::path(post, path = "/api/playback/commands", tag = "playback",
     request_body = CommandRequest, responses((status = OK, body = PlaybackResponse),
-    (status = BAD_REQUEST, body = crate::error::ApiErrorBody), (status = INTERNAL_SERVER_ERROR, body = crate::error::ApiErrorBody))))]
+    (status = BAD_REQUEST, body = crate::error::ApiErrorBody), (status = NOT_FOUND, body = crate::error::ApiErrorBody), (status = UNPROCESSABLE_ENTITY), (status = INTERNAL_SERVER_ERROR, body = crate::error::ApiErrorBody))))]
 pub(crate) async fn command(
     State(state): State<AppState>,
     Json(request): Json<CommandRequest>,

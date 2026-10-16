@@ -1,5 +1,4 @@
 use super::*;
-use crate::model::{PlaybackMode, QueueState};
 use sea_orm_migration::MigratorTrait;
 
 #[allow(clippy::too_many_lines)] // Upgrade preserves populated models, then verifies durable source identity and reset.
@@ -42,15 +41,7 @@ pub(super) async fn migration_contracts(database: &Database, url: &str) {
     )
     .await;
     sql(database, "INSERT INTO playlist_items (id, playlist_id, source_kind, beatmap_hash, difficulty_name) VALUES (601, 601, 'lazer', 'beatmap-Easy', 'Easy')").await;
-    let queue = QueueState {
-        audio_source_ids: vec![audio.id],
-        playlist_item_ids: vec![Some(601)],
-        current_index: Some(0),
-        mode: PlaybackMode::Playing,
-        revision: 3,
-        playback_token: 7,
-    };
-    database.queue().save(&queue).await.unwrap();
+    sql(database, &format!("UPDATE playback_queue SET audio_source_ids = '[{}]', playlist_item_ids = '[601]', current_index = 0, mode = 'playing', revision = 3, playback_token = 7", audio.id)).await;
     let other = Database::connect(url).await.unwrap();
     let (one, two) = tokio::join!(database.migrate(), other.migrate());
     one.unwrap();
@@ -64,7 +55,12 @@ pub(super) async fn migration_contracts(database: &Database, url: &str) {
     assert_eq!(playlist.items[0].difficulty_name.as_deref(), Some("Easy"));
     assert_eq!(playlist.items[0].title_unicode, None);
     assert_eq!(playlist.items[0].artist_unicode, None);
-    assert_eq!(database.queue().get().await.unwrap(), queue);
+    let queue = database.queue().get().await.unwrap();
+    assert_eq!(queue.audio_source_ids(), [audio.id]);
+    assert_eq!(queue.playlist_item_ids(), [Some(601)]);
+    assert_eq!(queue.current_index(), Some(0));
+    assert_eq!(queue.revision, 3);
+    assert_eq!(queue.playback_token, 7);
     assert!(
         database
             .listening_history()

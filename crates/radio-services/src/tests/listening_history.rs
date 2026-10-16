@@ -49,7 +49,9 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
             .iter()
             .all(|item| item.last_played_at_ms.is_none())
     );
-    let launch = database.playlists().play(playlist.id, None).await.unwrap();
+    database.playlists().play(playlist.id, None).await.unwrap();
+    super::queue::complete_checks(database).await;
+    let launch = database.queue().playback().await.unwrap();
     assert_eq!(
         launch.track.as_ref().unwrap().last_played_at_ms,
         None,
@@ -204,21 +206,44 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
             .iter()
             .all(|item| item.last_played_at_ms == Some(latest))
     );
-    let removed_launch = database
+    database
         .queue()
         .append(vec![returned.audio_source_id])
         .await
         .unwrap();
+    let removed_launch = database
+        .queue()
+        .command(Command::Play {
+            audio_source_id: Some(returned.audio_source_id),
+        })
+        .await
+        .unwrap();
+    super::queue::complete_checks(database).await;
     database
         .osu_installations()
         .delete(installation)
         .await
         .unwrap();
     let missing = database.queue().playback().await.unwrap();
+    let acknowledged = started(database, removed_launch.playback_token).await;
     assert_eq!(
-        started(database, removed_launch.playback_token).await,
-        missing,
-        "removed current source cannot acknowledge playback"
+        acknowledged.current_audio_source_id,
+        missing.current_audio_source_id
+    );
+    assert_eq!(acknowledged.playback_token, missing.playback_token);
+    assert_eq!(
+        acknowledged.revision,
+        missing.revision.checked_add(1).unwrap()
+    );
+    let removed_latest = acknowledged
+        .track
+        .as_ref()
+        .unwrap()
+        .last_played_at_ms
+        .unwrap();
+    assert!(
+        removed_latest >= latest,
+        "the assigned removed source can still acknowledge playback"
     );
     let reinstallation = register(database, "listening-history-return").await;
     database
@@ -233,7 +258,7 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
             .await
             .unwrap()[0]
             .last_played_at_ms,
-        Some(latest)
+        Some(removed_latest)
     );
     let relocated = snapshot("History song", "/history/relocated");
     database
@@ -258,11 +283,19 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
         .await
         .unwrap()
         .remove(0);
-    let failed_launch = database
+    database
         .queue()
         .append(vec![unplayed.audio_source_id])
         .await
         .unwrap();
+    let failed_launch = database
+        .queue()
+        .command(Command::Play {
+            audio_source_id: None,
+        })
+        .await
+        .unwrap();
+    super::queue::complete_checks(database).await;
     database
         .queue()
         .command(Command::Failed {

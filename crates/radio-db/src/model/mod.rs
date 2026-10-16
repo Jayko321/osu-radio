@@ -17,6 +17,9 @@ mod tag;
 pub use tag::{SetTag, Tag};
 
 mod queue;
-pub use queue::{PlaybackMode, QueueState};
+pub use queue::{
+    PlaybackMode, QueueAvailability, QueueEntry, QueueEntryId, QueueLaunchSource,
+    QueuePlaylistSource, QueueState,
+};
 mod playlist;
 pub use playlist::{Playlist, PlaylistBeatmap, PlaylistItem, PlaylistSummary};

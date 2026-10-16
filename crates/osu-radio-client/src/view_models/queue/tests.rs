@@ -1,10 +1,19 @@
 use super::*;
 use crate::controller::AppCommand;
+use crate::controller::tests::queue_row;
 use crate::models::{LibraryTrack, TrackDifficulty};
 use std::sync::Arc;
 
-fn assignment(revision: u64, token: u64, id: i32, mode: PlaybackMode) -> PlaybackAssignment {
+pub(super) fn assignment(
+    revision: u64,
+    token: u64,
+    id: i32,
+    mode: PlaybackMode,
+) -> PlaybackAssignment {
     PlaybackAssignment {
+        current_entry_id: None,
+        availability: None,
+        waiting_for_check: false,
         volume_percent: None,
         current_audio_source_id: Some(id),
         current_playlist_item_id: None,
@@ -33,14 +42,40 @@ fn assignment(revision: u64, token: u64, id: i32, mode: PlaybackMode) -> Playbac
     }
 }
 
+pub(super) fn queue_entry(track: LibraryTrack, position: usize) -> crate::models::QueueEntry {
+    crate::models::QueueEntry {
+        id: crate::models::QueueEntryId::new(
+            i64::try_from(position).unwrap().checked_add(1).unwrap(),
+        )
+        .unwrap(),
+        position,
+        audio_source_id: Some(track.audio_source_id),
+        playlist_item_id: None,
+        title: track.title,
+        title_unicode: track.title_unicode,
+        artist: track.artist,
+        artist_unicode: track.artist_unicode,
+        difficulty_name: track
+            .difficulties
+            .first()
+            .and_then(|d| d.difficulty_name.clone()),
+        beatmap_id: track.difficulties.first().map(|d| d.beatmap_id),
+        beatmap_set_id: track.difficulties.first().map(|d| d.beatmap_set_id),
+        cover_beatmap_id: track.cover_beatmap_id,
+        availability: crate::models::QueueAvailability::Available,
+        last_played_at_ms: track.last_played_at_ms,
+        volume_percent: track.volume_percent,
+    }
+}
+
 #[tokio::test]
 async fn offline_queue_open_reports_connection_requirement_and_close_aborts_pending_work() {
     let (mut state, updates) = crate::controller::tests::controller();
     state
         .upcoming
         .view
-        .tracks
-        .push(crate::controller::tests::track(42));
+        .entries
+        .push(queue_row(crate::controller::tests::track(42), 1));
     state.upcoming.view.message = "old error".into();
     state.upcoming.request = u64::MAX;
     state.refresh_queue();
@@ -51,7 +86,7 @@ async fn offline_queue_open_reports_connection_requirement_and_close_aborts_pend
     );
     state.set_queue_visible(true);
     assert_eq!(state.upcoming.request, 0);
-    assert!(state.upcoming.state().tracks.is_empty());
+    assert_eq!(state.upcoming.state().entries.len(), 1);
     assert!(!state.upcoming.state().loading);
     assert_eq!(
         state.upcoming.state().message,
@@ -88,12 +123,15 @@ async fn queue_snapshot_older_than_assignment_is_refetched_before_replacing_rows
     state.session = Some(session);
     state.player.assignment = Some(assignment(5, 9, 7, PlaybackMode::Paused));
     state.upcoming.open = true;
-    state.upcoming.view.tracks = vec![crate::controller::tests::track(42)];
+    state.upcoming.view.entries = vec![queue_row(crate::controller::tests::track(42), 1)];
     let old_queue = crate::models::QueueState {
-        upcoming_tracks: vec![assignment(4, 8, 99, PlaybackMode::Paused).track.unwrap()],
-        audio_source_ids: vec![99],
-        playlist_item_ids: vec![None],
-        current_index: Some(0),
+        entries: vec![queue_entry(
+            assignment(4, 8, 99, PlaybackMode::Paused).track.unwrap(),
+            0,
+        )],
+        current_entry_id: None,
+        history_len: 0,
+        waiting_for_check: false,
         mode: PlaybackMode::Paused,
         revision: 4,
         playback_token: 8,
@@ -105,7 +143,7 @@ async fn queue_snapshot_older_than_assignment_is_refetched_before_replacing_rows
                 .await
                 .starts_with("GET /api/queue HTTP/1.1")
         );
-        let body = r#"{"upcoming_tracks":[{"audio_source_id":103,"title":"Fresh","difficulties":[]}],"audio_source_ids":[7,103],"playlist_item_ids":[null,null],"current_index":0,"mode":"paused","revision":5,"playback_token":9}"#;
+        let body = serde_json::json!({"entries": [queue_entry(LibraryTrack { title: Some("Fresh".into()), ..assignment(5, 9, 103, PlaybackMode::Paused).track.unwrap() }, 0)], "current_entry_id": null, "history_len": 0, "waiting_for_check": false, "mode": "paused", "revision": 5, "playback_token": 9}).to_string();
         stream
             .write_all(
                 format!(
@@ -124,11 +162,11 @@ async fn queue_snapshot_older_than_assignment_is_refetched_before_replacing_rows
         state
             .upcoming
             .state()
-            .tracks
+            .entries
             .first()
             .unwrap()
             .audio_source_id,
-        42
+        Some(42)
     );
     assert!(
         updates
@@ -136,7 +174,7 @@ async fn queue_snapshot_older_than_assignment_is_refetched_before_replacing_rows
             .unwrap()
             .iter()
             .all(|update| !matches!(update,
-        AppUpdate::Queue(view) if view.tracks.iter().any(|track| track.audio_source_id == 99)))
+        AppUpdate::Queue(view) if view.entries.iter().any(|track| track.audio_source_id == Some(99))))
     );
     let completed = tokio::time::timeout(Duration::from_secs(3), state.tasks.join_next())
         .await
@@ -149,11 +187,11 @@ async fn queue_snapshot_older_than_assignment_is_refetched_before_replacing_rows
         state
             .upcoming
             .state()
-            .tracks
+            .entries
             .first()
             .unwrap()
             .audio_source_id,
-        103
+        Some(103)
     );
     assert!(state.upcoming.state().message.is_empty());
     assert!(state.upcoming.task.is_none());
@@ -163,26 +201,33 @@ async fn queue_snapshot_older_than_assignment_is_refetched_before_replacing_rows
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // Projection, shared duration delivery and error retention form one scenario.
 async fn queue_view_preserves_order_duplicates_and_media_outside_search() {
     let (mut state, updates) = crate::controller::tests::controller();
     state.player.assignment = Some(assignment(5, 9, 7, PlaybackMode::Paused));
     state.upcoming.open = true;
     state.upcoming.request = 3;
     let queue = crate::models::QueueState {
-        upcoming_tracks: [42, 103, 42]
+        entries: [7, 42, 103, 42]
             .into_iter()
-            .map(|id| assignment(5, 9, id, PlaybackMode::Paused).track.unwrap())
+            .enumerate()
+            .map(|(pos, id)| {
+                queue_entry(
+                    assignment(5, 9, id, PlaybackMode::Paused).track.unwrap(),
+                    pos,
+                )
+            })
             .collect(),
-        audio_source_ids: vec![7, 42, 103, 42],
-        playlist_item_ids: vec![None; 4],
-        current_index: Some(0),
+        current_entry_id: Some(crate::models::QueueEntryId::new(1).unwrap()),
+        history_len: 0,
+        waiting_for_check: false,
         mode: PlaybackMode::Paused,
         revision: 5,
         playback_token: 9,
     };
     state.queue_loaded(2, Ok(queue.clone()));
     assert!(
-        state.upcoming.view.tracks.is_empty(),
+        state.upcoming.view.entries.is_empty(),
         "stale request ignored"
     );
     state.queue_loaded(3, Ok(queue.clone()));
@@ -190,17 +235,17 @@ async fn queue_view_preserves_order_duplicates_and_media_outside_search() {
         state
             .upcoming
             .view
-            .tracks
+            .entries
             .iter()
-            .map(|track| track.audio_source_id)
+            .map(|row| row.audio_source_id)
             .collect::<Vec<_>>(),
-        [42, 103, 42]
+        [Some(7), Some(42), Some(103), Some(42)]
     );
     assert!(
         state.library.tracks.is_empty(),
         "queue metadata does not populate Songs search"
     );
-    state.request_media(42, true);
+    state.set_visible_queue_media(vec![(crate::models::QueueEntryId::new(2).unwrap(), true)]);
     assert_eq!(state.media.queue.front(), Some(&(42, true)));
     let ticket = crate::controller::MediaTicket {
         generation: state.media.generation,
@@ -220,11 +265,25 @@ async fn queue_view_preserves_order_duplicates_and_media_outside_search() {
     );
     state.media_completed(ticket, None, Some(261_000), true);
     assert_eq!(
-        state.upcoming.view.tracks.first().unwrap().duration_label(),
+        state
+            .upcoming
+            .view
+            .entries
+            .get(1)
+            .unwrap()
+            .track
+            .duration_label(),
         "04:21"
     );
     assert_eq!(
-        state.upcoming.view.tracks.get(2).unwrap().duration_label(),
+        state
+            .upcoming
+            .view
+            .entries
+            .get(3)
+            .unwrap()
+            .track
+            .duration_label(),
         "04:21"
     );
     assert!(matches!(
@@ -232,11 +291,19 @@ async fn queue_view_preserves_order_duplicates_and_media_outside_search() {
         Some(AppUpdate::Queue(_))
     ));
     let mut empty = queue.clone();
-    empty.upcoming_tracks.clear();
+    empty.entries.clear();
+    empty.current_entry_id = None;
     state.queue_loaded(3, Ok(empty));
     state.queue_loaded(3, Ok(queue));
     assert_eq!(
-        state.upcoming.view.tracks.first().unwrap().duration_label(),
+        state
+            .upcoming
+            .view
+            .entries
+            .get(1)
+            .unwrap()
+            .track
+            .duration_label(),
         "04:21",
         "rewinding the queue restores probed duration outside search"
     );
@@ -248,7 +315,7 @@ async fn queue_view_preserves_order_duplicates_and_media_outside_search() {
     );
     state.upcoming.open = true;
     state.queue_loaded(state.upcoming.request, Err("queue unavailable".into()));
-    assert!(state.upcoming.view.tracks.is_empty());
+    assert_eq!(state.upcoming.view.entries.len(), 4);
     assert_eq!(state.upcoming.view.message, "queue unavailable");
 }
 
@@ -266,7 +333,7 @@ async fn assignments_order_reconnect_and_search_selection_are_independent() {
     state.playback = Some(worker);
     state.downloads = Some(downloads);
     state.apply_assignment(assignment(5, 9, 99, PlaybackMode::Paused));
-    assert_eq!(state.library.selected, Some(99));
+    assert_eq!(state.library.selected, Some(1));
     assert_eq!(
         state.track(99).unwrap().duration,
         Some(Duration::from_secs(100))
@@ -274,10 +341,16 @@ async fn assignments_order_reconnect_and_search_selection_are_independent() {
     assert_eq!(state.track(99).unwrap().cover_beatmap_id, Some(199));
     let generation = state.playback.as_ref().unwrap().generation();
     state.replace_tracks(vec![], true);
-    assert_eq!(state.library.selected, Some(99));
-    assert!(
-        matches!(updates.lock().unwrap().iter().rev().find(|event|matches!(event,AppUpdate::TrackSelected(_))), Some(AppUpdate::TrackSelected(Some(track))) if track.audio_source_id == 99)
-    );
+    assert_eq!(state.library.selected, None);
+    assert!(matches!(
+        updates
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|event| matches!(event, AppUpdate::TrackSelected(_))),
+        Some(AppUpdate::TrackSelected(None))
+    ));
     state.apply_assignment(assignment(5, 9, 99, PlaybackMode::Paused));
     state.apply_assignment(assignment(4, 7, 1, PlaybackMode::Playing));
     assert_eq!(state.playback.as_ref().unwrap().generation(), generation);
@@ -397,7 +470,7 @@ async fn started_assignment_updates_recent_dates_without_restart_or_selection_ch
             .library
             .tracks
             .iter()
-            .map(|track| track.audio_source_id)
+            .map(|row| row.audio_source_id)
             .collect::<Vec<_>>(),
         [2, 1]
     );
@@ -477,6 +550,7 @@ async fn delayed_callback_retry_is_dropped_after_a_new_token_and_does_not_block_
     state.playback_command_completed(
         PendingPlayback {
             playlist: None,
+            queue: None,
             command: PlaybackCommand::PauseIfCurrent { playback_token: 4 },
             expected_token: Some(4),
         },
@@ -496,7 +570,7 @@ async fn delayed_callback_retry_is_dropped_after_a_new_token_and_does_not_block_
 }
 
 #[cfg(unix)]
-async fn session_at(url: &str) -> (tempfile::TempDir, crate::Session) {
+pub(super) async fn session_at(url: &str) -> (tempfile::TempDir, crate::Session) {
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().unwrap();
     let binary = directory.path().join("server");
@@ -515,7 +589,7 @@ async fn session_at(url: &str) -> (tempfile::TempDir, crate::Session) {
     (directory, session)
 }
 #[cfg(unix)]
-async fn read_request(stream: &mut tokio::net::TcpStream) -> String {
+pub(super) async fn read_request(stream: &mut tokio::net::TcpStream) -> String {
     use tokio::io::AsyncReadExt;
     let mut header = Vec::new();
     while !header.ends_with(b"\r\n\r\n") {
@@ -536,7 +610,7 @@ async fn read_request(stream: &mut tokio::net::TcpStream) -> String {
     header + &String::from_utf8(body).unwrap()
 }
 #[cfg(unix)]
-async fn response(
+pub(super) async fn response(
     stream: &mut tokio::net::TcpStream,
     revision: u64,
     token: u64,
@@ -546,7 +620,7 @@ async fn response(
     use tokio::io::AsyncWriteExt;
     let mut body = serde_json::json!({
         "current_audio_source_id": id, "track": {"audio_source_id":id, "title":"Track", "title_unicode":null,"artist":null,"artist_unicode":null,"cover_beatmap_id":null,"difficulties":[]},
-        "duration_ms":100_000,"mode":"paused","revision":revision,"playback_token":token,"can_next":true,"can_previous":true,
+        "waiting_for_check":false,"duration_ms":100_000,"mode":"paused","revision":revision,"playback_token":token,"can_next":true,"can_previous":true,
     }).to_string();
     if newline {
         body.push('\n');
@@ -624,9 +698,8 @@ async fn controller_serializes_http_commands_until_the_previous_response_commits
 }
 #[cfg(unix)]
 #[tokio::test]
-async fn playlist_append_preserves_pause_selection_order_and_duplicates_and_skips_unavailable() {
+async fn playlist_append_uses_server_operation_and_preserves_pause_and_selection() {
     use crate::view_models::PlaylistAction;
-    use tokio::io::AsyncWriteExt;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let (_directory, session) =
         session_at(&format!("http://{}", listener.local_addr().unwrap())).await;
@@ -639,43 +712,14 @@ async fn playlist_append_preserves_pause_selection_order_and_duplicates_and_skip
     state.replace_tracks(vec![crate::controller::tests::track(42)], true);
     state.command(AppCommand::SelectTrack(Some(42)));
     let server = tokio::spawn(async move {
-        for ids in [vec![Some(42), None, Some(42), Some(103)], vec![None]] {
+        for revision in 2..=3 {
             let (mut stream, _) = listener.accept().await.unwrap();
+            let request = read_request(&mut stream).await;
             assert!(
-                read_request(&mut stream)
-                    .await
-                    .starts_with("GET /api/playlists/3 ")
+                request.starts_with("POST /api/playlists/3/queue "),
+                "whole playlist append must reach the server without a client GET: {request}"
             );
-            let items: Vec<_> = ids.iter().enumerate().map(|(index, audio_id)| serde_json::json!({
-                "id": index, "playlist_id": 3, "source_kind": "stable", "beatmap_hash": format!("hash-{index}"),
-                "title": "Track", "artist": null, "difficulty_name": null, "beatmap_id": audio_id,
-                "beatmap_set_id": audio_id, "audio_source_id": audio_id, "cover_beatmap_id": null,
-            })).collect();
-            let body = serde_json::json!({"id": 3, "name": "Playlist", "items": items}).to_string();
-            stream
-                .write_all(
-                    format!(
-                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                        body.len()
-                    )
-                    .as_bytes(),
-                )
-                .await
-                .unwrap();
-            if ids.iter().any(Option::is_some) {
-                let (mut stream, _) = listener.accept().await.unwrap();
-                let request = read_request(&mut stream).await;
-                assert!(request.starts_with("POST /api/queue/items "));
-                assert!(request.ends_with(r#"{"audio_source_ids":[42,42,103]}"#));
-                response(&mut stream, 2, 5, 7, false).await;
-            } else {
-                assert!(
-                    tokio::time::timeout(Duration::from_millis(50), listener.accept())
-                        .await
-                        .is_err(),
-                    "unavailable playlist must not append"
-                );
-            }
+            response(&mut stream, revision, 5, 7, false).await;
         }
     });
     for _ in 0..2 {
@@ -909,11 +953,11 @@ fn queue_media_demand_survives_empty_main_view_and_is_removed_on_close_or_new_qu
     let (mut state, _) = crate::controller::tests::controller();
     state.replace_tracks(Vec::new(), true);
     state.upcoming.open = true;
-    state.upcoming.view.tracks = vec![
-        crate::controller::tests::track(42),
-        crate::controller::tests::track(103),
+    state.upcoming.view.entries = vec![
+        queue_row(crate::controller::tests::track(42), 1),
+        queue_row(crate::controller::tests::track(103), 2),
     ];
-    state.request_media(42, true);
+    state.set_visible_queue_media(vec![(crate::models::QueueEntryId::new(1).unwrap(), true)]);
     state.set_visible_media(Vec::new());
     assert_eq!(
         state.media.queue,
@@ -928,12 +972,12 @@ fn queue_media_demand_survives_empty_main_view_and_is_removed_on_close_or_new_qu
     state.set_queue_visible(false);
     assert!(state.media.queue_media.is_empty() && state.media.queue.is_empty());
     state.upcoming.open = true;
-    state.request_media(103, true);
+    state.set_visible_queue_media(vec![(crate::models::QueueEntryId::new(2).unwrap(), true)]);
     let refreshed = crate::models::QueueState {
-        upcoming_tracks: Vec::new(),
-        audio_source_ids: Vec::new(),
-        playlist_item_ids: Vec::new(),
-        current_index: None,
+        entries: Vec::new(),
+        current_entry_id: None,
+        history_len: 0,
+        waiting_for_check: false,
         mode: PlaybackMode::Stopped,
         revision: 0,
         playback_token: 0,
@@ -973,22 +1017,24 @@ async fn late_queue_and_assignment_metadata_use_current_unicode_choices_without_
     state.queue_loaded(
         state.upcoming.request,
         Ok(crate::models::QueueState {
-            audio_source_ids: vec![99, 99],
-            playlist_item_ids: vec![None, None],
-            current_index: Some(0),
+            current_entry_id: None,
+            history_len: 0,
+            waiting_for_check: false,
             mode: PlaybackMode::Paused,
             revision: 5,
             playback_token: 9,
-            upcoming_tracks: vec![first.track.clone().unwrap(), first.track.clone().unwrap()],
+            entries: (0..2)
+                .map(|pos| queue_entry(first.track.clone().unwrap(), pos))
+                .collect(),
         }),
     );
     assert!(
         state
             .upcoming
             .view
-            .tracks
+            .entries
             .iter()
-            .all(|row| row.title == "曲" && row.artist == "演奏者")
+            .all(|row| row.track.title == "曲" && row.track.artist == "演奏者")
     );
     first.revision = 6;
     state.apply_assignment(first);

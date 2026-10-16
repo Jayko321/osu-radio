@@ -1,11 +1,13 @@
 use anyhow::{Context, Result};
 use radio_services::Services;
-use tokio::sync::watch;
+use std::sync::Arc;
+use tokio::sync::{Notify, watch};
 
 #[derive(Clone)]
 pub(crate) struct AppState {
     services: Services,
     playback_revision: watch::Sender<u64>,
+    pub(crate) queue_check_wakeup: Arc<Notify>,
 }
 
 impl AppState {
@@ -32,6 +34,7 @@ impl AppState {
         Ok(Self {
             services: database,
             playback_revision: watch::channel(revision).0,
+            queue_check_wakeup: Arc::new(Notify::new()),
         })
     }
 
@@ -51,6 +54,11 @@ impl AppState {
             *current = revision;
             true
         });
+    }
+
+    /// Call only after commit; T06 queue routes share this wakeup hook.
+    pub(crate) fn wake_queue_checks(&self) {
+        self.queue_check_wakeup.notify_one();
     }
 
     #[cfg(all(test, feature = "sqlite"))]
@@ -106,6 +114,14 @@ mod tests {
             .unwrap()[0]
             .audio_source_id;
         state.services().queue().append(vec![id, id]).await.unwrap();
+        state
+            .services()
+            .queue()
+            .command(radio_services::PlaybackCommand::Play {
+                audio_source_id: None,
+            })
+            .await
+            .unwrap();
         let mut expected = state.services().queue().get().await.unwrap();
         assert_eq!(expected.mode, PlaybackMode::Playing);
         expected.mode = PlaybackMode::Paused;

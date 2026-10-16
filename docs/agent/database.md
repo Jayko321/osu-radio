@@ -32,7 +32,8 @@ migration for subsequent changes.
 | `audio_sources` | Generated `i32` ID; globally unique `(kind, location)`; `local`, `copied`, or `online`. |
 | `audio_volume` | Composite primary key `(audio_kind, source_location)` and absolute integer `volume_percent` in 0–100. No library foreign key. |
 | `listening_history` | Composite primary key `(audio_kind, source_location)` using the audio source's existing identity; UTC millisecond timestamp and last acknowledged playback token. No library foreign key. |
-| `playback_queue` | Singleton `id = 1`; JSON audio-ID history and parallel nullable playlist-item IDs, nullable current index, playback mode and monotonic revision/token counters. |
+| `playback_queue` | Singleton `id = 1`; nullable current entry ID, `history_len` boundary, playback mode, persisted `waiting_for_check`, nullable launch audio ID/kind/location/generation without foreign keys, BIGINT revision/token and retained last issued entry ID. |
+| `queue_entries` | Positive permanent BIGINT ID; unique dense position, independent audio/playlist source keys, nullable advisory IDs, ordinary/Unicode caption and difficulty snapshots, availability and check generation. No library/playlist foreign keys or deletion cascades. |
 | `playlists` | Generated `i32` ID and nonempty trimmed name; equal names are allowed. Nullable custom PNG and a retained monotonic cover revision; optional unique source/collection provenance independent of installation deletion. |
 | `playlist_items` | Generated `i32` ID; required playlist with deletion cascade; unique `(playlist_id, source_kind, beatmap_hash)`, explicit native/MD5 hash kind and saved ordinary/Unicode title and artist plus difficulty. No library foreign key. |
 
@@ -124,8 +125,8 @@ there are no new standalone beatmap or set creation workflows.
 | `tags()` | `all`, `get`, `for_set`; lists use `ORDER BY name ASC` with SQLite `BINARY` / PostgreSQL `C`. |
 | `audio_sources()` | `get`, `find`, `get_or_insert`. |
 | `audio_settings()` | `get`, `update`, `set_volume`; settings and durable per-audio overrides. |
-| `queue()` | `get`, `upcoming`, `playback`, `append`, `clear`, `command`, `recover`; one persistent server queue. |
-| `playlists()` | `all`, `get`, `create`, `rename`, `delete`, `add_items`, `remove_item`, `play`, `cover`, `set_cover`, `clear_cover`; concrete difficulties with source-stable membership. |
+| `queue()` | `get`, `snapshot`, `upcoming`, `playback`, `insert`, `append`, `play_entry`, `move_entry`, `remove_entry`, `clear_upcoming`, `clear`, `pending_checks`, `apply_check`, `command`, `recover`; one persistent server queue. |
+| `playlists()` | `all`, `get`, `create`, `rename`, `delete`, `add_items`, `remove_item`, `play`, `cover`, `set_cover`, `clear_cover`, `append_to_queue`; concrete difficulties with source-stable membership. |
 
 [Installation services](../../crates/radio-services/src/osu_installation.rs) own
 folder discovery validation, label trimming, snapshot replacement and deletion.
@@ -168,15 +169,80 @@ this optimization adds no schema or persistent index.
 
 ## Playback queue
 
-The additive [queue migration](../../crates/radio-db/src/migrations/m20261001_000005_playback_queue.rs)
-creates one empty state row without changing the library. The concrete
-[repository](../../crates/radio-db/src/repositories/queue.rs) stores the ordered
-JSON ID array, including duplicates and played history. A parallel array carries
-playlist-item IDs; ordinary queue additions and explicit audio-ID plays carry null.
-There is no foreign key from queue history to playlist items. Empty queues have a null
-index; exhaustion retains the history with an index equal to its length. No
-foreign key binds history to audio rows, so source cleanup can remove deleted
-library sources while retaining the queue's previous positions.
+The [original queue migration](../../crates/radio-db/src/migrations/m20261001_000005_playback_queue.rs)
+created one empty state. The frozen [row migration 12](../../crates/radio-db/src/migrations/m20261016_000012_queue_entries.rs)
+replaces the former JSON arrays/index with `queue_entries` and singleton state, inside
+the existing schema lock and outer transaction. It preserves every position, duplicate,
+current position, mode, revision and token; it neither trims nor starts playback.
+The old JSON/index columns are removed. Legacy/unversioned databases still require
+an explicit reset or a new database; this upgrade applies to versioned databases only.
+
+Each entry retains the audio's exact `(kind, location)` encoding and, when available,
+the playlist item's `(installation kind, hash kind, beatmap hash)`. `PlaylistItem`
+now exposes `hash_kind`. Captions prefer retained playlist values, then library
+metadata, then the explicit `Unavailable track` title. Lost numeric references
+are retained in `migration_audio_source_id` / `migration_playlist_item_id`; missing
+paths and hashes are never fabricated. Local/Copied entries begin `checking`, other
+entries `unavailable`, all with generation zero. The server availability worker performs the actual file I/O outside database
+transactions; services persist availability and waiting intent without probing files.
+
+`QueueEntryId` is a positive `i64` newtype with decimal `Display`; Qt/QML must receive
+a string, never a floating point number. `QueueState` exports `entries`,
+`current_entry_id`, `history_len`, `last_entry_id`, mode, `waiting_for_check`, `launch_source` and revision/token.
+With a current entry, its position equals `history_len`. Without one, entries before
+the boundary are past; empty queues use zero and exhausted queues use the list length.
+`allocate_id`, `reindex` and `validate` support service transitions.
+IDs are not reissued after deletion/clear; all positions/counters fit signed BIGINT,
+IDs/order are unique/dense, and Playing/Paused require an existing current entry.
+Waiting additionally requires a current `checking` entry and Playing/Paused mode.
+The [waiting migration 13](../../crates/radio-db/src/migrations/m20261016_000013_queue_waiting.rs)
+infers waiting for active current checking entries without changing list/order/mode/counters.
+Downgrade to v12 rejects waiting intent that cannot be reconstructed, including an
+already assigned launch that is checking again without waiting. Migrations 1–12 stay frozen.
+
+The [repository](../../crates/radio-db/src/repositories/queue.rs) reads list and singleton
+in one LEFT JOIN statement, including pool callers under PostgreSQL READ COMMITTED.
+`save` requires a transaction-bound repository and caller-held singleton writer lock;
+it validates before writing, rejects counter regression/reused IDs, replaces the rows
+and updates the singleton with one outer commit. Advisory IDs can outlive their library
+or playlist rows; saved keys/captions never depend on those rows continuing to exist.
+Reset includes queue entries and the singleton launch binding.
+
+The additive [launch-source migration 14](../../crates/radio-db/src/migrations/m20261016_000014_queue_launch_source.rs)
+adds four nullable singleton fields without library foreign keys. SQL enforces an all-null
+or complete binding with nonnegative generation, active current entry and no waiting.
+It fills the binding from a complete current entry for active nonwaiting v13 launches;
+legacy missing keys stay missing. Downgrade compares this frozen inference and refuses
+any state whose source binding v13 cannot reconstruct. Migrations 1–13 stay unchanged.
+
+`QueueService::reconcile_sources_in` runs after shared-row cleanup, before mark-scanned
+or outer commit, in installation deletion and the common snapshot replacement workflow.
+Both replace APIs, registration with import and reimport therefore use the same writer
+lock/transaction. Playlist entries resolve their own `(installation kind, hash kind, hash)`
+through `PlaylistRepository::resolve_sources`, independent of item existence; the lowest
+beatmap ID with Local/Copied audio wins. Library entries resolve exact `(kind, location)`.
+Numeric migration evidence never recovers a missing key. Lost audio/map/set/cover IDs
+are cleared; entry IDs, order, item IDs, saved keys and captions remain. A changed/lost
+binding advances generation; restored/changed playable sources become checking. Changes
+only to map/set/cover references retain availability/generation. A changed queue advances
+revision once; an unchanged queue is not saved. Any error/overflow/cancellation rolls
+back library, queue, collections and timestamp together.
+
+The assigned launch retains `QueueLaunchSource { audio_source_id, source, check_generation }`
+and token across entry rebinding/removal of library sources. New tokens clear the old
+binding. Verified assignment or successful waiting check captures it; recovery captures
+it from the current entry again, paused and waiting if necessary. A waiting launch that
+loses its source advances with its playing/paused intent; restoration alone never selects
+or starts a track. `pending_checks()` reads queue entries, never the retained launch source.
+[T04 contracts](../../crates/radio-services/src/tests/queue_t04.rs) cover these paths,
+late callbacks, exact/shared keys, rollback, cancellation and independent-pool visibility;
+[migration contracts](../../crates/radio-db/src/tests/queue.rs) cover v13→v14/reopen/reset
+and guarded downgrade on SQLite and disposable PostgreSQL.
+
+Downgrade first reconstructs the complete frozen v11→v12 result and compares every
+entry field, order/ID, boundary and last issued ID. A changed snapshot, availability,
+generation, nonreconstructible key, extra issued ID or boundary blocks downgrade
+before any schema changes; supported states round-trip through populated down/up.
 
 [QueueService](../../crates/radio-services/src/queue.rs) opens one transaction,
 locks the existing settings singleton before reads, validates every new Local/Copied
@@ -185,55 +251,81 @@ entire queue unchanged. The same lock coordinates queue changes with snapshot
 replacement/deletion across independent pools and processes. Reads assemble the
 queue and current metadata within one consistent read transaction.
 
-First append to empty/exhausted history starts the first new entry. Append with
-an active current entry retains its mode, including pause. Explicit Play of a
-different audio ID inserts immediately after current, before pending items. Play
-of the paused current track resumes with its token; Stop followed by Play restarts
-with a new token. Next/Previous preserve pause, and select a paused entry when
-starting from Stop. Previous at the first playable entry restarts it; from
-exhaustion it returns the last playable entry. Transitions skip deleted/Online
-IDs while keeping their history entries. Decode/download failure advances via
-the client's Failed callback; exhaustion stops. Seeking stays local; persisted
-volume settings are described below.
+`insert(Vec<QueueItemRef>, QueuePlacement)` accepts Local/Copied audio IDs or a
+concrete `(playlist_id, item_id)`. It checks membership atomically and retains unresolved
+playlist items as unavailable with their saved keys/captions. `End` appends; `Next`
+inserts immediately after current, or at the future boundary without current.
+`append` delegates to this path. Both placements preserve order/duplicates, allocate
+independent permanent IDs and never select a track, start music or lift pause.
 
-Revision increases once for a persisted change; no-op commands and stale callbacks
-retain it. Every new launch, restart, Stop, clear, exhaustion and active-state
-recovery of a current entry invalidates the prior playback token. Pause/resume retains it. Finished
-requires the current token and Playing mode; Failed requires the current token
-and Playing/Paused mode, preserving pause on its transition. `PauseIfCurrent`
-requires the current token for retriable device-failure feedback; ordinary user
-Pause remains global. Duplicate callbacks
-cannot advance twice. Counters use checked arithmetic and checked BIGINT conversion.
-Server startup explicitly calls `recover` once after migration: a current entry
-becomes Paused with a new token/revision, retaining history and index, including
-an entry stopped before shutdown. Already-paused states also invalidate
-old-process callbacks; empty/exhausted queues remain stopped. The next Play
-begins recovered audio from the start.
+`play_entry` selects the existing ID without copying it. Unknown entry/anchor IDs
+return `QueueError::UnknownEntry`; explicit Play of an unavailable entry returns
+`UnavailableEntry`. Invalid audio and foreign/missing playlist items return
+`InvalidAudioSource` / `InvalidPlaylistItem`. Errors roll back the entire mutation.
+Library Play of different audio inserts immediately after current (or at the future
+boundary) and launches it. Resume retains the token; another entry, including the same
+audio, gets a new token. Without current, Play starts at the future boundary;
+if no future remains, explicit Play replays from the beginning.
 
-Assignments contain only the current audio ID, `LibraryTrack`, mode, revision,
-token and transition availability. Metadata loads only that audio's references,
-preserving the same lowest-beatmap representative/cover, complete difficulty
-list and unfiltered set multiplicity as Songs. It does not depend on a search
-result or materialize the complete library. ID validation reads queue IDs in
-batches of 500. Physical source availability remains the client's download/
-decoding responsibility; extensionless imported locations remain valid.
+`move_entry(id, before_id)` moves before an anchor, or to the end for `None`.
+It keeps current ID/token and follows current with the history boundary. Without
+current it retains the count of past entries. Removing past decreases the boundary;
+removing a different entry or `clear_upcoming` keeps the current launch. Removing
+current selects the next available/checking entry with Playing/Paused intent, or
+stops if none remains. `clear` invalidates the launch and retains the issued-ID counter.
 
-`upcoming()` reads the queue and pending audio summaries in one read transaction.
-It excludes current and history, keeps duplicate positions and skips deleted/Online
-sources. Metadata loads only pending audio references and is reused for repeated
-audio/item pairs; playlist entries use their saved ordinary/Unicode labels and
-single difficulty while the item exists. Other entries use the library audio summary,
-independently of Songs search or later playlist ordering. It neither probes files
-nor changes the queue.
+Next/Previous follow list order and skip unavailable or unresolved/Online sources.
+They select checking entries and persist `waiting_for_check`, preserving Playing/Paused
+intent. Previous at the first playable entry restarts it; from exhaustion it returns
+the last candidate. Stop followed by Play restarts with a new token. Every new launch,
+Stop, clear, exhaustion and recovery of current invalidates old playback callbacks.
+Pause/resume and list edits that retain current do not change its token.
 
-[Repository queue contracts](../../crates/radio-db/src/tests/queue.rs) cover a
-populated pre-queue upgrade, concurrent migration, reopen, rollback, position
-validation and explicit reset. [Service queue contracts](../../crates/radio-services/src/tests/queue.rs)
-cover atomic validation, copied/Online inputs, insertion/history, duplicate IDs,
-EOF/failure, pause/resume/Stop, boundaries, stale/duplicate callbacks across pools,
-concurrent append/clear, recovery, removed sources and search-independent metadata.
-Both run through the ordinary disposable SQLite/PostgreSQL contract harnesses.
-These deterministic storage/transition checks do not establish physical output.
+`pending_checks()` returns saved checking jobs with current waiting entry first.
+`QueueCheck` carries entry ID, generation, audio ID and exact `SourceType`. `apply_check`
+accepts a result only if all four still match and availability is still checking.
+Waiting success clears waiting without changing token/mode; failure marks the entry
+unavailable and advances with the same intent. Availability updates of an already
+assigned launch keep current/token/mode. Accepted Failed marks its current entry
+unavailable only if audio ID, exact source and generation still match the retained
+launch binding, then advances using the existing intent. Deleted/cleared IDs, changed generation/source and duplicate
+results are no-ops. Checks never record listening. Started and Finished are ignored
+while waiting; Started additionally requires current token, active mode and the retained
+launch source. `PauseIfCurrent` remains token-bound. Checked counters and BIGINT conversions
+roll back failures, including history writes in the same transaction.
+
+After actual mutations or recovery, service transitions remove only the earliest
+past entries above 5000, counting unavailable entries. Current and future are retained;
+without current, `history_len` defines past. Reads, no-op edits, duplicate Started and
+stale callbacks/results never trim or change revision/token. Revision increases once
+per committed queue/history mutation. Recovery pauses current, invalidates old callbacks,
+restores waiting if current is checking and trims history without autostart. Empty or
+exhausted queues stay stopped; oversized past is still trimmed on recovery.
+
+`snapshot()` returns singleton fields and every ordered `QueueSnapshotEntry`, containing
+the retained `QueueEntry`, listening date and individual volume override. One read
+transaction covers all three projections. Captions come from entries, never a changed
+playlist. Existing history/volume services resolve dates/overrides by the saved source
+key through batched repository queries, even when advisory IDs are null or library rows
+have disappeared. Duplicates, unavailable rows and nullable references remain visible;
+reading does not resolve sources, probe files or trim history.
+
+Service `PlaybackAssignment` includes current entry ID, availability and waiting in
+addition to audio/item IDs, `LibraryTrack`, mode, revision/token and transport flags.
+The existing HTTP DTO still omits the three new service fields until T06. Playlist
+assignments use saved captions/single difficulty after item deletion; ordinary audio
+assignments retain captions and current library difficulty/cover references.
+`upcoming()` remains the legacy filtered pending projection. Whole-playlist append
+and history-preserving launch are implemented by T03 below; import reconciliation is T04.
+The server file worker and client waiting behavior remain T05 and T07 respectively.
+For assigned playback, audio ID, listening date and volume use the retained launch source,
+including a deleted library source; full queue entries expose their current resolved links.
+
+Automated T02 evidence is recorded in [the card](../impl/queue-rework/T02.md).
+[Service contracts](../../crates/radio-services/src/tests/queue_t02.rs) exercise identity,
+insertions/edits, checks, history boundaries, source-keyed projections and rollback;
+[repository contracts](../../crates/radio-db/src/tests/queue.rs) cover v12→v13/reopen and
+downgrade guards. Physical audio, Qt and native Windows acceptance are separate.
 
 ## Audio volume settings
 
@@ -275,8 +367,9 @@ inside the transaction that loads library tracks, playlist items or the current
 assignment.
 
 `QueueService` records `Started { playback_token }` within its existing singleton
-writer lock and outer transaction. It validates the current token and playable
-source in Playing/Paused mode, then accounts for that source/token once. A new
+writer lock and outer transaction. It validates the current token, cleared waiting
+and retained launch source in Playing/Paused mode, then accounts for that source/token
+once, including after its library source has been removed or rebound. A new
 date increments queue revision while retaining the launch token, position and
 mode. Pausing and continuing the same launch do not update history; a new launch
 can update it again. Duplicate or stale callbacks leave revision and date intact.
@@ -294,10 +387,10 @@ the migration and source/token lifecycle on each database backend.
 ## User playlists
 
 The additive [playlist migration](../../crates/radio-db/src/migrations/m20261001_000006_playlists.rs)
-creates the two playlist tables, indexes `beatmaps.hash` for resolution, and adds
-the nullable queue JSON column without clearing the library or queue. A null
-column in a pre-playlist queue reads as one null item ID per existing audio ID.
-The repository validates equal array lengths on every queue save.
+added playlists, saved item snapshots and a historical nullable queue JSON column
+without clearing the library or queue. Migration 12 consumes that column; a null
+historical value means one null item ID per old audio ID. Current queue storage
+uses entry rows, with no parallel persistent JSON arrays.
 
 The additive [cover migration](../../crates/radio-db/src/migrations/m20261001_000009_playlist_covers.rs)
 adds a nullable binary PNG and a nonnegative `i64` revision without rewriting
@@ -344,16 +437,37 @@ Snapshot replacement, empty snapshots and installation deletion retain membershi
 returning matching source data restores availability. Physical file existence and
 decoding remain the existing playback worker's responsibility.
 
-`play(id, start_item_id)` resolves the playlist and replaces the queue in one
-writer-locked transaction. Unavailable entries are skipped. An empty or wholly
-unavailable playlist, unknown start item, or unavailable requested start produces
-a typed error and leaves the old queue untouched. A successful launch stores
-both audio and item IDs, selects the requested or first available item and gets
-a new launch token. Later playlist edits/deletion leave the queue composition
-unchanged. Assignments retain `current_playlist_item_id` even after item deletion;
-while the item exists its saved labels and single difficulty are projected into
-the track. Deleted-item metadata falls back to the normal audio track projection.
-Next/Previous and completion callbacks reuse the existing position/token rules.
+`append_to_queue(id) -> PlaybackAssignment` resolves and appends every playlist
+item under the singleton writer lock, in one transaction with one outer commit.
+It preserves current entry, mode, waiting, history boundary and playback token;
+a nonempty append increments revision once. An empty playlist is a no-op returning
+the existing assignment without changing revision/token or trimming history.
+An unknown playlist returns `PlaylistError::NotFound`.
+
+`play(id, start_item_id)` uses the same transaction discipline. It retains the old
+list through current inclusive (without current: through `history_len`), replaces
+only the future with the entire playlist, and selects the requested or first
+resolved item. Every new position has a fresh entry ID, original item ID, source key
+including `hash_kind`, and saved ordinary/Unicode captions and difficulty.
+Resolved items start `checking`, unresolved ones `unavailable`. The launch waits
+for checking through T02 and invalidates the previous playback token; neither
+insertion nor completion of checks records a listening date.
+
+A wholly unavailable nonempty playlist is retained as future with the boundary
+before it, no current entry, Stopped mode and a new token. Returning sources does
+not create Play. An empty Play returns `NoAvailableItems`; an unknown/foreign start
+returns `ItemNotFound`, an explicitly unavailable start `UnavailableItem`.
+All errors leave the queue and counters untouched. Both operations apply the
+5000-past-entry limit after changes. Later playlist edits/deletion preserve queue
+composition, keys and snapshots, including item IDs and single-difficulty playback
+projections. Next/Previous and callbacks reuse T02's entry/token transitions.
+
+[T03 contracts](../../crates/radio-services/src/tests/queue_t03.rs) cover append in
+empty/exhausted/playing/paused states, repeated difficulties sharing audio,
+source/MD5 keys and unavailable items, history-preserving and explicit starts,
+errors/no-op, stale callbacks/checks, no false listening dates, detached playlist
+snapshots, history trimming, rollback and independent-pool writers. Actual checks
+and limits are recorded in [T03](../impl/queue-rework/T03.md).
 
 [Migration/repository checks](../../crates/radio-db/src/tests/playlists.rs) cover
 a populated five-migration upgrade, an eight-migration upgrade with existing
@@ -364,7 +478,7 @@ cover revision retention, cascades and reset.
 reopen, concurrent idempotent addition, atomic validation, reimported IDs, source
 removal/return, copy priority, distinct source kinds, 503 ordered items, PNG
 validation, replacement/reset, persistence after deleting the original file, queue
-replacement, shared audio, selected start, pause/resume and stale callbacks.
+history preservation, shared audio, selected start, pause/resume and stale callbacks.
 Unicode contracts cover playback/pending queue projections, import refresh without
 changing saved ordinary labels, unavailable snapshots, source return and
 failed-import rollback.
@@ -496,9 +610,9 @@ rollback, and tag contracts check normalized identities and composite links.
 [listening history](../../crates/radio-db/src/tests/listening_history.rs) compare
 source-keyed values across independent pools, read snapshots, rollback and reset.
 [Queue boundary assertions](../../crates/radio-db/src/tests/queue.rs) reject
-mismatched playlist positions, invalid empty/current states and counters outside
-BIGINT without replacing the stored row. The [service queue tests](../../crates/radio-services/src/tests/queue.rs)
-also seed the persisted revision/token at BIGINT's maximum: failed commands retain
+duplicate IDs, sparse order, invalid empty/current/boundary states and counters
+outside BIGINT without changing the persisted list or singleton. The [service queue tests](../../crates/radio-services/src/tests/queue.rs)
+also seed the persisted revision/token/ID counters at BIGINT's maximum: failed commands retain
 the exact queue and playback assignment. A missing settings row is tested inside
 a rolled-back fixture; get/settings/update/lock report the missing row and never
 recreate it implicitly.
@@ -524,7 +638,7 @@ playlist, while comparing retained covers and queue state.
 [Migration lifecycle contracts](../../crates/radio-db/src/tests/migration_lifecycle.rs)
 first verify the frozen v1 schema's singleton/kind/required-field/uniqueness and
 foreign-key constraints, lookup indexes and installation cascade while retaining
-shared metadata/audio rows. They then step through additive migrations 5–11 in both directions, checking migration
+shared metadata/audio rows. They then step through migrations 5–12 in both directions, checking migration
 history, table/column/index presence, retained installation/difficulty/background
 references and an unrelated table, then reapply the latest schema and verify
 default queue/audio settings. A separate fixture rolls background migration 2
@@ -571,3 +685,11 @@ A single PostgreSQL `EXPLAIN (ANALYZE, BUFFERS)` run with 50,000 metadata rows,
 metadata cleanup took 40.2 ms and audio cleanup 33.4 ms. All shared rows were
 referenced; deletion/null-reference correctness is covered by the contracts.
 Benchmark setup was rolled back. Windows native-path execution remains unverified.
+
+The [T10 integration report](../impl/queue-rework/T10.md#отчёт-о-выполнении)
+records fresh SQLite/PostgreSQL migration/repository/service contracts, including
+populated v11→v12, v12→v13 and v13→v14 fixtures, downgrade guards, reset scope,
+rollback/overflow and independent-connection visibility. Real-backend probes use
+private versioned SQLite, HTTP import/reimport and paused recovery. The fixture
+seeds only the retained allocator above 2^53 with test-only SQL after shutdown;
+entries and operations still traverse HTTP/services/repositories.

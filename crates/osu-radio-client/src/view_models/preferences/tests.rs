@@ -67,7 +67,10 @@ fn rapid_changes_reorder_library_keep_queue_order_and_use_current_values_for_lat
     state.replace_tracks(vec![selected.clone(), track(2, "Alpha", "Zulu")], false);
     state.command(AppCommand::SelectTrack(Some(1)));
     state.player.current_track = Some(selected);
-    state.upcoming.view.tracks = vec![track(2, "Alpha", "Zulu"), track(1, "Zulu", "Alpha")];
+    state.upcoming.view.entries = vec![
+        crate::controller::tests::queue_row(track(2, "Alpha", "Zulu"), 1),
+        crate::controller::tests::queue_row(track(1, "Zulu", "Alpha"), 2),
+    ];
     let generation = state.media.generation;
     for preferences in [
         TrackNamePreferences {
@@ -98,11 +101,11 @@ fn rapid_changes_reorder_library_keep_queue_order_and_use_current_values_for_lat
             state
                 .upcoming
                 .view
-                .tracks
+                .entries
                 .iter()
                 .map(|row| row.audio_source_id)
                 .collect::<Vec<_>>(),
-            [2, 1]
+            [Some(2), Some(1)]
         );
     }
     assert_eq!(state.library.tracks.first().unwrap().audio_source_id, 1);

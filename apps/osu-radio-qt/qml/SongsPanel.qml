@@ -103,6 +103,19 @@ Item {
             padding: 0
             Accessible.name: title + ", " + artist
             onClicked: songsPane.bridge.library.selectTrack(audioId)
+            Keys.onPressed: event => queueMenu.handleKey(event)
+            TapHandler {
+                acceptedButtons: Qt.RightButton
+                onTapped: queueMenu.openAt(point.position)
+            }
+            TrackQueueMenu {
+                id: queueMenu
+                objectName: "songQueueMenu"
+                row: card
+                canInsert: songsPane.bridge.connected && !songsPane.bridge.queue.queueBusy
+                    && !songsPane.bridge.playlists.playlistBusy
+                onInsertRequested: next => songsPane.bridge.library.insertTrack(card.audioId, next)
+            }
             background: Item {
                 Artwork { anchors.fill: parent; source: card.artworkUrl }
                 Rectangle {

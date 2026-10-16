@@ -128,6 +128,62 @@ class HttpFixtureTests(unittest.TestCase):
             self.assertEqual(self.request(base, "GET", "/api/playlists/1")[0], 404)
             self.assertEqual(self.request(base, "GET", "/api/playlists"), (200, []))
 
+    def test_queue_ids_survive_position_changes_and_rejections(self):
+        with self.server("queue-managed") as (base, root):
+            initial = self.request(base, "GET", "/api/queue")[1]
+            self.assertEqual(len(initial["entries"]), 5005)
+            self.assertEqual(initial["history_len"], 5000)
+            maximum = "9223372036854775807"
+            duplicate = "9007199254740995"
+            checking = "9007199254740997"
+            self.assertEqual([row["audio_source_id"] for row in initial["entries"][-4:-2]], [42, 42])
+            status, _ = self.request(base, "PATCH", "/api/queue/items/" + checking, {"before_entry_id": maximum})
+            self.assertEqual(status, 409)
+            self.assertEqual(self.request(base, "GET", "/api/queue")[1], initial)
+            self.assertEqual(self.request(base, "PATCH", "/api/queue/items/" + maximum, {"before_entry_id": None})[0], 200)
+            self.assertFalse((root / "queue_viewport_requests").exists())
+            self.assertEqual(self.request(base, "PATCH", "/api/queue/items/" + maximum, {"before_entry_id": maximum})[0], 200)
+            checkpoint = (root / "queue_viewport_requests").read_text()
+            self.assertEqual(checkpoint, (root / "requests").read_text())
+            self.request(base, "GET", "/api/queue")
+            self.request(base, "PATCH", "/api/queue/items/" + maximum, {"before_entry_id": maximum})
+            self.assertEqual((root / "queue_viewport_requests").read_text(), checkpoint)
+            moved = self.request(base, "GET", "/api/queue")[1]
+            self.assertEqual(moved["entries"][-1]["id"], maximum)
+            self.assertEqual(self.request(base, "DELETE", "/api/queue/items/" + duplicate)[0], 200)
+            self.assertIn(maximum, [row["id"] for row in self.request(base, "GET", "/api/queue")[1]["entries"]])
+            self.assertEqual(self.request(base, "POST", "/api/queue/items/100000/play")[0], 200)
+            past = self.request(base, "GET", "/api/queue")[1]
+            self.assertEqual(past["current_entry_id"], "100000")
+            self.assertEqual(len(past["entries"]), 5004)
+            self.assertEqual(self.request(base, "DELETE", "/api/queue/upcoming")[0], 200)
+            self.assertEqual(len(self.request(base, "GET", "/api/queue")[1]["entries"]), 1)
+            self.assertEqual(self.request(base, "DELETE", "/api/queue")[0], 200)
+            self.assertEqual(self.request(base, "GET", "/api/queue")[1]["entries"], [])
+            operations = [json.loads(line) for line in (root / "queue_operations").read_text().splitlines()]
+            self.assertEqual(operations[0]["body"], {"before_entry_id": maximum})
+            self.assertEqual(operations[1]["path"], "/api/queue/items/" + maximum)
+
+    def test_insertions_keep_assignment_and_all_playlist_item_snapshots(self):
+        with self.server("queue-insert") as (base, _):
+            before = self.request(base, "GET", "/api/playback")[1]
+            for placement in ("end", "next"):
+                status, assignment = self.request(base, "POST", "/api/queue/items", {
+                    "items": [{"type": "audio", "audio_source_id": 42}], "placement": placement})
+                self.assertEqual(status, 200)
+                for key in ("current_entry_id", "playback_token", "mode"):
+                    self.assertEqual(assignment[key], before[key])
+            self.assertEqual(self.request(base, "POST", "/api/playlists/1/queue")[0], 200)
+            confirmed = self.request(base, "GET", "/api/queue")[1]
+            rows = confirmed["entries"][-3:]
+            self.assertEqual([row["playlist_item_id"] for row in rows], [11, 12, 13])
+            self.assertEqual([row["audio_source_id"] for row in rows], [42, 42, None])
+            self.assertEqual([row["difficulty_name"] for row in rows], ["Easy", "Hard", "Missing"])
+            self.assertEqual(rows[-1]["availability"], "unavailable")
+            self.assertEqual(self.request(base, "POST", "/api/queue/items", {
+                "items": [{"type": "audio", "audio_source_id": 999}], "placement": "end"})[0], 409)
+            self.assertEqual(self.request(base, "GET", "/api/queue")[1], confirmed)
+
     def test_volume_retry_queue_tokens_and_stale_callbacks_preserve_state(self):
         with self.server("volume") as (base, root):
             self.assertEqual(self.request(base, "GET", "/api/user-data/audio-settings")[0], 500)
@@ -138,7 +194,7 @@ class HttpFixtureTests(unittest.TestCase):
             self.assertEqual(json.loads((root / "audio-volumes.json").read_text()), {"42": 10})
             self.assertEqual(self.request(base, "GET", "/api/tracks")[1][1]["volume_percent"], 10)
             queue = self.request(base, "GET", "/api/queue")[1]
-            self.assertEqual((queue["audio_source_ids"], queue["current_index"], queue["mode"]), ([7, 42, 103], 0, "paused"))
+            self.assertEqual(([e["audio_source_id"] for e in queue["entries"]], queue["current_entry_id"], queue["history_len"], queue["mode"]), ([7, 42, 103], "1", 0, "paused"))
             moved = self.request(base, "POST", "/api/playback/commands", {"command": "next"})[1]
             self.assertEqual((moved["current_audio_source_id"], moved["mode"], moved["playback_token"]), (42, "paused", 2))
             self.assertEqual(self.request(base, "POST", "/api/playback/commands", {"command": "finished", "playback_token": 1})[1], moved)

@@ -11,7 +11,10 @@ use std::{
 use tempfile::NamedTempFile;
 
 #[derive(Clone, Debug, Default, PartialEq)]
+#[allow(clippy::struct_excessive_bools)] // Waiting, source and transport availability are independent.
 pub struct Playback {
+    pub current_entry_id: Option<crate::models::QueueEntryId>,
+    pub waiting_for_check: bool,
     pub current_audio_id: Option<i32>,
     pub current_playlist_item_id: Option<i32>,
     pub loading_audio_id: Option<i32>,
@@ -29,6 +32,8 @@ pub(crate) enum Command {
     Assign {
         generation: u64,
         id: Option<i32>,
+        entry_id: Option<crate::models::QueueEntryId>,
+        waiting_for_check: bool,
         playback_token: u64,
         mode: crate::models::PlaybackMode,
         volume: f32,
@@ -244,6 +249,8 @@ impl<E: Engine> Core<E> {
             Command::Assign {
                 generation: candidate,
                 id,
+                entry_id,
+                waiting_for_check,
                 playback_token,
                 mode,
                 volume,
@@ -256,7 +263,9 @@ impl<E: Engine> Core<E> {
                     return None;
                 }
                 let restart = playback_token != self.state.playback_token
-                    || id != self.state.current_audio_id;
+                    || entry_id != self.state.current_entry_id;
+                let was_waiting = self.state.waiting_for_check;
+                self.state.waiting_for_check = waiting_for_check;
                 self.state.snapshot.volume = volume;
                 if !restart
                     && let Some(player) = &mut self.player
@@ -265,7 +274,7 @@ impl<E: Engine> Core<E> {
                     self.state.error = Some(error);
                     return None;
                 }
-                if !restart && self.mode == mode {
+                if !restart && self.mode == mode && !was_waiting && !waiting_for_check {
                     self.refresh();
                     return None;
                 }
@@ -279,6 +288,7 @@ impl<E: Engine> Core<E> {
                         self.file.take();
                         self.file_id = None;
                     }
+                    self.state.current_entry_id = entry_id;
                     self.state.current_audio_id = id;
                     self.state.loading_audio_id = None;
                     self.state.playback_token = playback_token;
@@ -290,6 +300,11 @@ impl<E: Engine> Core<E> {
                     self.state.snapshot.duration = None;
                     self.reported = false;
                     self.started = false;
+                }
+                if waiting_for_check {
+                    self.state.loading_audio_id = None;
+                    self.state.snapshot.state = PlayerState::Paused;
+                    return None;
                 }
                 match mode {
                     PlaybackMode::Stopped => {
@@ -339,7 +354,10 @@ impl<E: Engine> Core<E> {
                 id,
                 result,
             } => {
-                if candidate != generation || self.state.current_audio_id != Some(id) {
+                if candidate != generation
+                    || self.state.current_audio_id != Some(id)
+                    || self.state.waiting_for_check
+                {
                     return None;
                 }
                 self.state.loading_audio_id = None;
@@ -361,7 +379,9 @@ impl<E: Engine> Core<E> {
                 playback_token,
                 position,
             } => {
-                if playback_token != self.state.playback_token
+                if self.state.waiting_for_check
+                    || !self.state.has_source
+                    || playback_token != self.state.playback_token
                     || expected_id.is_some_and(|id| self.state.current_audio_id != Some(id))
                 {
                     return None;
@@ -466,6 +486,9 @@ impl<E: Engine> Core<E> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    mod real_backend;
+
     use super::*;
     use crate::models::PlaybackMode;
     use std::io::Write;
@@ -474,6 +497,7 @@ mod tests {
     pub(super) struct FakeEngine {
         snapshot: Snapshot,
         loads: usize,
+        seeks: usize,
         output_error: Option<String>,
         immediate_end: bool,
         play_error: bool,
@@ -518,6 +542,7 @@ mod tests {
             if self.seek_error {
                 return Err("seek failed".into());
             }
+            self.seeks = self.seeks.saturating_add(1);
             self.snapshot.position = position;
             Ok(())
         }
@@ -546,6 +571,8 @@ mod tests {
     ) -> Option<Download> {
         core.command(
             Command::Assign {
+                entry_id: None,
+                waiting_for_check: false,
                 generation,
                 id: Some(id),
                 playback_token: token,
@@ -573,6 +600,8 @@ mod tests {
         for (token, percent) in [(1, 10_u8), (2, 20), (3, 0), (4, 100)] {
             core.command(
                 Command::Assign {
+                    entry_id: None,
+                    waiting_for_check: false,
                     generation: token,
                     id: Some(10),
                     playback_token: token,
@@ -598,6 +627,8 @@ mod tests {
         }
         core.command(
             Command::Assign {
+                entry_id: None,
+                waiting_for_check: false,
                 generation: 4,
                 id: Some(10),
                 playback_token: 4,
@@ -608,6 +639,8 @@ mod tests {
         );
         core.command(
             Command::Assign {
+                entry_id: None,
+                waiting_for_check: false,
                 generation: 4,
                 id: Some(10),
                 playback_token: 4,
@@ -628,6 +661,8 @@ mod tests {
         );
         core.command(
             Command::Assign {
+                entry_id: None,
+                waiting_for_check: false,
                 generation: 3,
                 id: Some(10),
                 playback_token: 3,
@@ -871,6 +906,8 @@ mod tests {
         let mut core = Core::<MissingDevice>::default();
         core.command(
             Command::Assign {
+                entry_id: None,
+                waiting_for_check: false,
                 generation: 1,
                 id: Some(10),
                 playback_token: 4,
@@ -890,6 +927,8 @@ mod tests {
         assert_eq!(core.feedback.pop_front(), Some(Message::DeviceFailure(4)));
         core.command(
             Command::Assign {
+                entry_id: None,
+                waiting_for_check: false,
                 generation: 1,
                 id: Some(10),
                 playback_token: 4,
@@ -900,6 +939,8 @@ mod tests {
         );
         core.command(
             Command::Assign {
+                entry_id: None,
+                waiting_for_check: false,
                 generation: 1,
                 id: Some(10),
                 playback_token: 4,
@@ -911,6 +952,8 @@ mod tests {
         assert_eq!(core.feedback.pop_front(), Some(Message::DeviceFailure(4)));
         core.command(
             Command::Assign {
+                entry_id: None,
+                waiting_for_check: false,
                 generation: 1,
                 id: Some(10),
                 playback_token: 4,
@@ -922,6 +965,8 @@ mod tests {
         assert!(core.feedback.pop_front().is_none());
         core.command(
             Command::Assign {
+                entry_id: None,
+                waiting_for_check: false,
                 generation: 1,
                 id: Some(10),
                 playback_token: 4,
@@ -932,6 +977,8 @@ mod tests {
         );
         core.command(
             Command::Assign {
+                entry_id: None,
+                waiting_for_check: false,
                 generation: 1,
                 id: Some(10),
                 playback_token: 4,
@@ -975,6 +1022,8 @@ mod tests {
             assert!(
                 core.command(
                     Command::Assign {
+                        entry_id: None,
+                        waiting_for_check: false,
                         generation: 2,
                         id: Some(20),
                         playback_token: 2,
@@ -1032,6 +1081,8 @@ mod tests {
         let first = worker.invalidate();
         assert!(worker.is_current(first));
         worker.send(Command::Assign {
+            entry_id: None,
+            waiting_for_check: false,
             generation: first,
             id: Some(10),
             playback_token: 100,
@@ -1061,6 +1112,8 @@ mod tests {
         assert!(!stale_path.exists());
         assert!(feedback.try_recv().is_err());
         worker.send(Command::Assign {
+            entry_id: None,
+            waiting_for_check: false,
             generation: current,
             id: Some(20),
             playback_token: 200,
@@ -1096,6 +1149,8 @@ mod tests {
         assert!(loaded_path.exists());
         let next = worker.invalidate();
         worker.send(Command::Assign {
+            entry_id: None,
+            waiting_for_check: false,
             generation: next,
             id: Some(30),
             playback_token: 300,
@@ -1138,5 +1193,316 @@ mod tests {
             receiver.try_recv(),
             Err(mpsc::TryRecvError::Disconnected)
         ));
+    }
+    #[test]
+    fn queue_edits_preserve_engine_counts_position_and_seek_but_new_entry_reloads() {
+        let mut core = Core::<FakeEngine>::default();
+        let entry = crate::models::QueueEntryId::new(1).unwrap();
+        let assign_entry = |core: &mut Core<FakeEngine>, entry_id, generation| {
+            core.command(
+                Command::Assign {
+                    generation,
+                    entry_id: Some(entry_id),
+                    waiting_for_check: false,
+                    id: Some(10),
+                    playback_token: 1,
+                    mode: PlaybackMode::Playing,
+                    volume: 0.4,
+                },
+                generation,
+            )
+        };
+        assert!(assign_entry(&mut core, entry, 1).is_some());
+        core.command(
+            Command::Loaded {
+                generation: 1,
+                id: 10,
+                result: Ok(file(b"mp3")),
+            },
+            1,
+        );
+        core.command(
+            Command::Seek {
+                expected_id: Some(10),
+                playback_token: 1,
+                position: Duration::from_secs(17),
+            },
+            1,
+        );
+        assert_eq!(core.feedback.pop_front(), Some(Message::Started(1)));
+        for edit in [
+            "move current",
+            "remove another",
+            "clear upcoming",
+            "availability checking",
+            "availability unavailable",
+            "reimport rebound row",
+        ] {
+            assert!(assign_entry(&mut core, entry, 1).is_none());
+            let player = core.player.as_ref().unwrap();
+            assert_eq!(
+                (player.loads, player.play_volumes.len(), player.seeks),
+                (1, 1, 1),
+                "{edit}"
+            );
+            assert_eq!(
+                core.state.snapshot.position,
+                Duration::from_secs(17),
+                "{edit}"
+            );
+            assert!(core.feedback.is_empty(), "{edit}");
+        }
+        assert!(assign_entry(&mut core, crate::models::QueueEntryId::new(2).unwrap(), 2).is_none());
+        let player = core.player.as_ref().unwrap();
+        assert_eq!(
+            (player.loads, player.play_volumes.len(), player.seeks),
+            (1, 1, 0)
+        );
+        assert_eq!(core.state.snapshot.position, Duration::ZERO);
+        assert_eq!(core.feedback.pop_front(), Some(Message::Started(1)));
+    }
+
+    #[test]
+    fn unchanged_insertion_assignments_preserve_engine_and_position_in_all_modes() {
+        for mode in [
+            PlaybackMode::Stopped,
+            PlaybackMode::Playing,
+            PlaybackMode::Paused,
+        ] {
+            let mut core = Core::<FakeEngine>::default();
+            let current = (mode != PlaybackMode::Stopped).then_some(10);
+            if current.is_some() {
+                load(&mut core, 1, 10);
+                core.command(
+                    Command::Seek {
+                        expected_id: current,
+                        playback_token: 1,
+                        position: Duration::from_secs(17),
+                    },
+                    1,
+                );
+                assign(&mut core, 1, 1, 10, mode);
+            } else {
+                core.command(
+                    Command::Assign {
+                        generation: 1,
+                        entry_id: None,
+                        waiting_for_check: false,
+                        id: None,
+                        playback_token: 1,
+                        mode,
+                        volume: 1.0,
+                    },
+                    1,
+                );
+            }
+            core.feedback.clear();
+            let position = core.state.snapshot.position;
+            let counts = core
+                .player
+                .as_ref()
+                .map(|engine| (engine.loads, engine.play_volumes.len(), engine.seeks));
+            // Insertion and completion of checks for other entries keep this assignment.
+            for _ in 0..3 {
+                assert!(
+                    core.command(
+                        Command::Assign {
+                            generation: 1,
+                            entry_id: None,
+                            waiting_for_check: false,
+                            id: current,
+                            playback_token: 1,
+                            mode,
+                            volume: core.state.snapshot.volume
+                        },
+                        1
+                    )
+                    .is_none()
+                );
+                assert_eq!(core.state.snapshot.position, position);
+                assert_eq!(core.state.playback_token, 1);
+                assert_eq!(
+                    core.player.as_ref().map(|engine| (
+                        engine.loads,
+                        engine.play_volumes.len(),
+                        engine.seeks
+                    )),
+                    counts
+                );
+                assert!(core.feedback.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn waiting_never_downloads_opens_engine_or_reports_and_paused_release_waits_for_play() {
+        for release_mode in [PlaybackMode::Playing, PlaybackMode::Paused] {
+            let mut core = Core::<FakeEngine>::default();
+            let mut assign_waiting = |mode, waiting_for_check| {
+                core.command(
+                    Command::Assign {
+                        generation: 1,
+                        entry_id: Some(crate::models::QueueEntryId::new(1).unwrap()),
+                        waiting_for_check,
+                        id: Some(10),
+                        playback_token: 10,
+                        mode,
+                        volume: 0.2,
+                    },
+                    1,
+                )
+            };
+            for mode in [PlaybackMode::Playing, PlaybackMode::Paused, release_mode] {
+                assert!(assign_waiting(mode, true).is_none());
+            }
+            assert!(core.player.is_none() && core.file.is_none() && core.feedback.is_empty());
+            core.command(
+                Command::Seek {
+                    expected_id: Some(10),
+                    playback_token: 10,
+                    position: Duration::from_secs(99),
+                },
+                1,
+            );
+            assert_eq!(core.state.seek_serial, 0, "waiting has no seekable source");
+            let downloaded = file(b"mp3");
+            let path = downloaded.path().to_owned();
+            core.command(
+                Command::Loaded {
+                    generation: 1,
+                    id: 10,
+                    result: Ok(downloaded),
+                },
+                1,
+            );
+            assert!(!path.exists() && core.player.is_none() && core.feedback.is_empty());
+            let released = core.command(
+                Command::Assign {
+                    generation: 1,
+                    entry_id: Some(crate::models::QueueEntryId::new(1).unwrap()),
+                    waiting_for_check: false,
+                    id: Some(10),
+                    playback_token: 10,
+                    mode: release_mode,
+                    volume: 0.2,
+                },
+                1,
+            );
+            assert_eq!(released.is_some(), release_mode == PlaybackMode::Playing);
+            if release_mode == PlaybackMode::Paused {
+                assert!(core.player.is_none() && core.file.is_none() && core.feedback.is_empty());
+                assert!(
+                    core.command(
+                        Command::Assign {
+                            generation: 1,
+                            entry_id: Some(crate::models::QueueEntryId::new(1).unwrap()),
+                            waiting_for_check: false,
+                            id: Some(10),
+                            playback_token: 10,
+                            mode: PlaybackMode::Playing,
+                            volume: 0.2,
+                        },
+                        1
+                    )
+                    .is_some()
+                );
+            }
+            core.command(
+                Command::Loaded {
+                    generation: 1,
+                    id: 10,
+                    result: Ok(file(b"mp3")),
+                },
+                1,
+            );
+            assert_eq!(core.feedback.pop_front(), Some(Message::Started(10)));
+            assert_eq!(
+                (
+                    core.player.as_ref().unwrap().loads,
+                    core.player.as_ref().unwrap().play_volumes.len()
+                ),
+                (1, 1)
+            );
+        }
+    }
+
+    #[test]
+    fn removing_waiting_entry_rejects_old_download_assignment_and_seek() {
+        let mut core = Core::<FakeEngine>::default();
+        core.command(
+            Command::Assign {
+                generation: 1,
+                entry_id: Some(crate::models::QueueEntryId::new(1).unwrap()),
+                waiting_for_check: true,
+                id: Some(10),
+                playback_token: 1,
+                mode: PlaybackMode::Playing,
+                volume: 0.3,
+            },
+            1,
+        );
+        assert!(
+            core.command(
+                Command::Assign {
+                    generation: 2,
+                    entry_id: Some(crate::models::QueueEntryId::new(2).unwrap()),
+                    waiting_for_check: false,
+                    id: Some(10),
+                    playback_token: 2,
+                    mode: PlaybackMode::Playing,
+                    volume: 0.3
+                },
+                2
+            )
+            .is_some()
+        );
+        core.command(
+            Command::Loaded {
+                generation: 2,
+                id: 10,
+                result: Ok(file(b"mp3")),
+            },
+            2,
+        );
+        core.feedback.clear();
+        core.command(
+            Command::Assign {
+                generation: 1,
+                entry_id: Some(crate::models::QueueEntryId::new(1).unwrap()),
+                waiting_for_check: true,
+                id: Some(10),
+                playback_token: 1,
+                mode: PlaybackMode::Paused,
+                volume: 0.9,
+            },
+            2,
+        );
+        core.command(
+            Command::Loaded {
+                generation: 1,
+                id: 10,
+                result: Err("late failure".into()),
+            },
+            2,
+        );
+        core.command(
+            Command::Seek {
+                expected_id: Some(10),
+                playback_token: 1,
+                position: Duration::from_secs(99),
+            },
+            2,
+        );
+        assert_eq!(core.state.playback_token, 2);
+        assert!(!core.state.waiting_for_check);
+        assert_eq!(core.state.snapshot.position, Duration::ZERO);
+        assert!(core.state.error.is_none() && core.feedback.is_empty());
+        assert_eq!(
+            (
+                core.player.as_ref().unwrap().loads,
+                core.player.as_ref().unwrap().seeks
+            ),
+            (1, 0)
+        );
     }
 }

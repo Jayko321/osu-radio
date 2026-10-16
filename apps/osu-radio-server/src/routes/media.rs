@@ -16,7 +16,7 @@ use serde::Serialize;
 use tokio::io::AsyncReadExt;
 use tokio_util::io::ReaderStream;
 
-use crate::{error::ApiError, state::AppState};
+use crate::{audio_file::open_audio_file, error::ApiError, state::AppState};
 
 const MAX_COVER_BYTES: u64 = 16 * 1024 * 1024;
 const AUDIO_CHUNK_BYTES: usize = 64 * 1024;
@@ -44,19 +44,10 @@ pub(crate) async fn audio(
             ));
         }
     };
-    // Check before opening: opening a nonregular file such as a FIFO can block.
-    let metadata = tokio::fs::metadata(&path).await.map_err(audio_file_error)?;
-    if !metadata.is_file() {
-        return Err(ApiError::not_found("Audio file unavailable"));
-    }
-    let file = tokio::fs::File::open(path)
-        .await
+    let (file, length) = tokio::task::spawn_blocking(move || open_audio_file(Path::new(&path)))
+        .await?
         .map_err(audio_file_error)?;
-    let metadata = file.metadata().await.map_err(audio_file_error)?;
-    if !metadata.is_file() {
-        return Err(ApiError::not_found("Audio file unavailable"));
-    }
-    let length = metadata.len();
+    let file = tokio::fs::File::from_std(file);
     // Never buffer the complete track. Limit the reader to the advertised length
     // even if another process appends to the underlying file during transfer.
     let stream = ReaderStream::with_capacity(file.take(length), AUDIO_CHUNK_BYTES);

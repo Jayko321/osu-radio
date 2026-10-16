@@ -154,13 +154,71 @@ impl ApiClient {
         &self,
         audio_source_ids: &[i32],
     ) -> Result<crate::models::PlaybackAssignment, ApiError> {
+        let items = audio_source_ids
+            .iter()
+            .map(|&audio_source_id| crate::models::QueueItemRef::Audio { audio_source_id })
+            .collect::<Vec<_>>();
+        self.insert_queue(&items, crate::models::QueuePlacement::End)
+            .await
+    }
+    pub async fn insert_queue(
+        &self,
+        items: &[crate::models::QueueItemRef],
+        placement: crate::models::QueuePlacement,
+    ) -> Result<crate::models::PlaybackAssignment, ApiError> {
+        let path = "/api/queue/items";
         self.json_response(
-            "/api/queue/items",
+            path,
             self.http
-                .post(self.url("/api/queue/items"))
-                .json(&serde_json::json!({"audio_source_ids": audio_source_ids})),
+                .post(self.url(path))
+                .json(&serde_json::json!({"items": items, "placement": placement})),
         )
         .await
+    }
+    pub async fn append_playlist_to_queue(
+        &self,
+        id: i32,
+    ) -> Result<crate::models::PlaybackAssignment, ApiError> {
+        let path = format!("/api/playlists/{id}/queue");
+        self.json_response(&path, self.http.post(self.url(&path)))
+            .await
+    }
+    pub async fn play_queue_entry(
+        &self,
+        id: crate::models::QueueEntryId,
+    ) -> Result<crate::models::PlaybackAssignment, ApiError> {
+        let path = format!("/api/queue/items/{id}/play");
+        self.json_response(&path, self.http.post(self.url(&path)))
+            .await
+    }
+    pub async fn move_queue_entry(
+        &self,
+        id: crate::models::QueueEntryId,
+        before_entry_id: Option<crate::models::QueueEntryId>,
+    ) -> Result<crate::models::PlaybackAssignment, ApiError> {
+        let path = format!("/api/queue/items/{id}");
+        self.json_response(
+            &path,
+            self.http
+                .patch(self.url(&path))
+                .json(&serde_json::json!({"before_entry_id": before_entry_id})),
+        )
+        .await
+    }
+    pub async fn remove_queue_entry(
+        &self,
+        id: crate::models::QueueEntryId,
+    ) -> Result<crate::models::PlaybackAssignment, ApiError> {
+        let path = format!("/api/queue/items/{id}");
+        self.json_response(&path, self.http.delete(self.url(&path)))
+            .await
+    }
+    pub async fn clear_upcoming_queue(
+        &self,
+    ) -> Result<crate::models::PlaybackAssignment, ApiError> {
+        let path = "/api/queue/upcoming";
+        self.json_response(path, self.http.delete(self.url(path)))
+            .await
     }
     pub async fn clear_queue(&self) -> Result<crate::models::PlaybackAssignment, ApiError> {
         self.json_response("/api/queue", self.http.delete(self.url("/api/queue")))

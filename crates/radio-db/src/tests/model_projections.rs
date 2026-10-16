@@ -400,6 +400,7 @@ async fn playlist_projections(
         playlist_id: playlist.id,
         source_kind: "lazer".into(),
         beatmap_hash: "beatmap-Easy".into(),
+        hash_kind: "source".into(),
         title: Some("Projection title".into()),
         title_unicode: Some("曲".into()),
         artist: Some("Artist".into()),

@@ -20,6 +20,7 @@ pub(crate) struct MediaScheduler {
     pub(crate) visible: Option<Vec<(i32, bool)>>,
     pub(crate) selected_artwork_missing: Option<bool>,
     pub(crate) queue_media: HashMap<i32, bool>,
+    pub(crate) visible_queue: Vec<(crate::models::QueueEntryId, bool)>,
     pub(crate) jobs: HashMap<u64, MediaJob>,
     pub(crate) durations: HashMap<i32, Option<Duration>>,
     pub(crate) unavailable: HashSet<i32>,
@@ -59,6 +60,9 @@ impl MediaScheduler {
             self.durations.clear();
             self.unavailable.clear();
             self.selected_artwork_missing = has_selection.then_some(true);
+            for (_, missing) in &mut self.visible_queue {
+                *missing = true;
+            }
             for missing in self.queue_media.values_mut() {
                 *missing = true;
             }
@@ -87,10 +91,17 @@ impl MediaScheduler {
             .is_some_and(|track| track.audio_source_id == id)
             || (input.upcoming.is_some_and(|queue| queue.open)
                 && self.queue_media.contains_key(&id))
-            || self
-                .visible
-                .as_ref()
-                .is_none_or(|visible| visible.iter().any(|(audio_id, _)| *audio_id == id))
+            || self.visible.as_ref().map_or_else(
+                || {
+                    input.library.indices.contains_key(&id)
+                        || input
+                            .playlists
+                            .tracks
+                            .iter()
+                            .any(|row| row.track.audio_source_id == id)
+                },
+                |visible| visible.iter().any(|(audio_id, _)| *audio_id == id),
+            )
     }
     pub(crate) fn set_visible_media(
         &mut self,
@@ -113,6 +124,22 @@ impl MediaScheduler {
         self.reconcile_media(input, work);
     }
     pub(crate) fn reconcile_media(&mut self, input: &MediaInput<'_>, work: &mut Workflow<'_>) {
+        if let Some(queue) = input.upcoming {
+            self.visible_queue
+                .retain(|(id, _)| queue.open && queue.view.entries.iter().any(|row| row.id == *id));
+            self.queue_media.clear();
+            for (id, missing) in &self.visible_queue {
+                if let Some(audio_id) = queue
+                    .view
+                    .entries
+                    .iter()
+                    .find(|row| row.id == *id)
+                    .and_then(|row| row.audio_source_id)
+                {
+                    *self.queue_media.entry(audio_id).or_insert(false) |= *missing;
+                }
+            }
+        }
         let unwanted: Vec<_> = self
             .jobs
             .values()
@@ -134,10 +161,16 @@ impl MediaScheduler {
                 }
             }
         }
+        let queued = std::mem::take(&mut self.queue);
         if let Some(visible) = self.visible.clone() {
-            self.queue.clear();
             for (id, missing) in visible {
                 self.enqueue_media(id, missing, input, work);
+            }
+        } else {
+            for (id, missing) in queued {
+                if self.media_wanted(id, input, work) {
+                    self.enqueue_media(id, missing, input, work);
+                }
             }
         }
         if input.upcoming.is_some_and(|queue| queue.open) {
@@ -172,15 +205,6 @@ impl MediaScheduler {
             .is_some_and(|track| track.audio_source_id == id)
         {
             self.selected_artwork_missing = Some(missing);
-        }
-        if input.upcoming.is_some_and(|queue| queue.open)
-            && input
-                .upcoming
-                .into_iter()
-                .flat_map(|queue| &queue.view.tracks)
-                .any(|track| track.audio_source_id == id)
-        {
-            self.queue_media.insert(id, missing);
         }
         if self.media_wanted(id, input, work) {
             self.enqueue_media(id, missing, input, work);
@@ -422,9 +446,10 @@ impl MediaInput<'_> {
                 self.upcoming.and_then(|queue| {
                     queue
                         .view
-                        .tracks
+                        .entries
                         .iter()
-                        .find(|track| track.audio_source_id == id)
+                        .find(|row| row.audio_source_id == Some(id))
+                        .map(|row| &row.track)
                 })
             })
             .or_else(|| {
@@ -442,6 +467,7 @@ impl MediaScheduler {
         ticket: MediaTicket,
         available: bool,
         selected_id: Option<i32>,
+        queue: &super::QueueView,
     ) {
         if let Some(job) = self.jobs.get_mut(&ticket.serial)
             && job.ticket == ticket
@@ -452,8 +478,18 @@ impl MediaScheduler {
                 if selected_id == Some(ticket.audio_id) {
                     self.selected_artwork_missing = Some(false);
                 }
+                // A shared audio delivery satisfies every visible duplicate.
                 if let Some(missing) = self.queue_media.get_mut(&ticket.audio_id) {
                     *missing = false;
+                }
+                for (id, missing) in &mut self.visible_queue {
+                    if queue
+                        .entries
+                        .iter()
+                        .any(|row| row.id == *id && row.audio_source_id == Some(ticket.audio_id))
+                    {
+                        *missing = false;
+                    }
                 }
                 if let Some(visible) = &mut self.visible {
                     for (id, missing) in visible {
@@ -477,10 +513,16 @@ impl MediaScheduler {
 impl MediaScheduler {
     pub(crate) fn close_queue_demand(&mut self) {
         self.queue_media.clear();
+        self.visible_queue.clear();
     }
-    pub(crate) fn retain_queue_demand(&mut self, tracks: &[Track]) {
-        self.queue_media
-            .retain(|id, _| tracks.iter().any(|track| track.audio_source_id == *id));
+    pub(crate) fn set_visible_queue_media(
+        &mut self,
+        visible: Vec<(crate::models::QueueEntryId, bool)>,
+        input: &MediaInput<'_>,
+        work: &mut Workflow<'_>,
+    ) {
+        self.visible_queue = visible;
+        self.reconcile_media(input, work);
     }
     pub(crate) fn remember_duration(&mut self, audio_id: i32, duration: Option<Duration>) {
         self.durations.insert(audio_id, duration);

@@ -71,7 +71,9 @@ async fn contracts(url: &str) {
     concurrent_replacements_and_deletion(&database, &other_pool).await;
     shared_source_variants(&database).await;
     source_files_remain_untouched(&database).await;
-    queue::contracts(&database, &other_pool, url).await;
+    Box::pin(queue::contracts(&database, &other_pool, url)).await;
+    queue_t03::contracts(&database, &other_pool).await;
+    queue_t04::contracts(&database, &other_pool).await;
     playlists::contracts(&database, &other_pool, url).await;
     playlists::unicode_contracts(&database).await;
     playlists::cover_contracts(&database, &other_pool, url).await;
@@ -899,6 +901,9 @@ mod search;
 mod listening_history;
 mod playlists;
 mod queue;
+mod queue_t02;
+mod queue_t03;
+mod queue_t04;
 
 mod audio_settings;
 

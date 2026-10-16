@@ -15,33 +15,28 @@ Basic.Button {
     required property string artworkUrl
     property bool selected: false
     property bool busy: false
+    property bool canInsert: true
+    signal insertRequested(bool next)
     signal removeRequested(int itemId)
     height: 76
     padding: 12
     leftPadding: 16
     rightPadding: 16
     Accessible.name: title + ", " + subtitle
-    Keys.onPressed: event => {
-        if (event.key === Qt.Key_Menu || (event.key === Qt.Key_F10 && (event.modifiers & Qt.ShiftModifier))) {
-            itemMenu.popup(card, Qt.point(0, card.height), itemMenu.itemAt(0));
-            event.accepted = true;
-        }
-    }
+    Keys.onPressed: event => itemMenu.handleKey(event)
     TapHandler {
         acceptedButtons: Qt.RightButton
-        onTapped: { card.forceActiveFocus(); itemMenu.popup(card, point.position, itemMenu.itemAt(0)); }
+        onTapped: itemMenu.openAt(point.position)
     }
-    Basic.Menu {
+    TrackQueueMenu {
         id: itemMenu
         objectName: "playlistItemMenu"
-        onOpened: { currentIndex = 0; itemAt(0).forceActiveFocus(); }
-        onClosed: card.forceActiveFocus()
-        Basic.MenuItem {
-            objectName: "removePlaylistTrack"
-            text: "Remove from playlist"
-            enabled: !card.busy
-            onTriggered: card.removeRequested(card.playlistItemId)
-        }
+        row: card
+        canInsert: card.canInsert && !card.busy
+        showRemove: true
+        canRemove: !card.busy
+        onInsertRequested: next => card.insertRequested(next)
+        onRemoveRequested: card.removeRequested(card.playlistItemId)
     }
     background: Item {
         Artwork { anchors.fill: parent; source: card.artworkUrl; imageOpacity: card.available ? 1 : 0.5 }

@@ -23,8 +23,8 @@ creates a future product requirement.
 | `LibraryViewModel` | Songs, search, sorting, loading and selected library track | Library results and selection survive playlist navigation independently. Selection alone never starts audio. |
 | `PlaylistsViewModel` | Playlist list/detail, query, selected item, editor and item operations | A concrete playlist item has its own identity even when several difficulties share audio. Rows carry item ID and track together. |
 | `SettingsViewModel` | Preferences, audio volume, registered folders and staged add/refresh/remove workflow | State/rules are reusable and work before a server connects; storage and native pickers are separate adapters. |
-| `PlayerViewModel` | Selected-track presentation, playback state, control availability and Play/Pause/Resume rules | Selected, current and loading tracks remain distinguishable. Tokens and playlist item IDs prevent duplicate-audio confusion. |
-| `QueueViewModel` | Upcoming rows, loading/errors and refresh of an open panel | The client projects the queue; the server owns persisted queue order and assignments. |
+| `PlayerViewModel` | Selected-track presentation, playback state, control availability and Play/Pause/Resume rules | Selected, current and loading tracks remain distinguishable. Entry IDs/tokens identify launches; waiting gates local audio and recovered pause preserves independent selection. |
+| `QueueViewModel` | Full queue rows, history/current boundary, loading/operation errors and open-panel refresh | The client projects the queue; the server owns persisted queue order and assignments. |
 
 The VMs and their domain support modules live in `src/view_models/`;
 `src/controller/` holds coordination and execution infrastructure.
@@ -54,11 +54,32 @@ playlist artwork and editor drafts. The existing 64 MiB limit, proportional
 remain. QML disables its additional provider cache. Keeping these facilities out
 of toolkit-free VMs avoids making Qt resources part of reusable state.
 
+Queue mutations join the existing `PendingPlayback` lane; additions are never
+retried automatically. Queue viewport demand carries entry IDs, resolves through
+the current Queue VM and shares audio/cache work with the other panels. The
+Qt panel uses a separate TrackListModel for the complete queue, including history.
+Entry IDs cross Qt as strings. The [T07 report](../impl/queue-rework/T07.md) records
+client contracts and the [T08 report](../impl/queue-rework/T08.md) records model/panel
+evidence; the [T09 report](../impl/queue-rework/T09.md) records insertion menus.
+The [T10 report](../impl/queue-rework/T10.md) separates real-backend automated
+probes from native platform and physical-audio acceptance.
+
 The server owns persistence, source-file access, original audio serving and the
 permanent queue. The client owns temporary audio downloads and the local playback
 worker. `osu-radio-player` accepts local files and owns synchronous decoding,
 seek, output and volume; it has no HTTP, database or GUI dependency. No server
 HTTP contract or schema change is part of this refactor.
+
+The server's availability worker is owned by `serve`, starts after state recovery
+and listener preparation, and uses existing queue services for selection and guarded
+result commits. `AppState` retains only a wakeup signal, not its lifecycle handle.
+Its four blocking file operations run outside write transactions; checked entries
+are not reopened on startup. Awaited shutdown stops selection/application, drains
+started I/O and joins the supervisor. Drop requests the same stop without awaiting.
+The existing child kill protocol remains; hard process termination cannot acknowledge
+worker shutdown. See [backend lifecycle](backend.md#queue-availability-worker) and
+[worker tests](../../apps/osu-radio-server/src/queue_check/tests.rs). This implements
+the approved [T05](../impl/queue-rework/T05.md) without adding another queue owner.
 
 ## Approved Qt presentation
 
@@ -68,7 +89,7 @@ references. Those separate Qt VM adapters belong to the bridge, live for the
 window lifetime and mutate properties/models only on the Qt thread. Queued
 callbacks safely handle QObject destruction.
 
-One `TrackListModel` implementation has distinct library and playlist instances.
+One `TrackListModel` implementation has distinct library, playlist and queue instances.
 Playlist roles derive item identity from the row itself, never another list's
 index. `Main.qml` composes separate Songs, Playlists, Settings and Player panels.
 Existing playlist components and `QueuePanel` stay reusable. QML owns appearance,
@@ -106,7 +127,7 @@ a temporary toolkit store as the long-term settings architecture.
 | Playlist owner and atomic item/track rows | [playlists.rs](../../crates/osu-radio-client/src/view_models/playlists.rs) |
 | Settings owner; audio/folder workflow data | [settings.rs](../../crates/osu-radio-client/src/view_models/settings.rs), [volume.rs](../../crates/osu-radio-client/src/view_models/volume.rs), [folders.rs](../../crates/osu-radio-client/src/view_models/folders.rs) |
 | Player owner and primary command rules | [player.rs](../../crates/osu-radio-client/src/view_models/player.rs) |
-| Upcoming queue owner | [queue.rs](../../crates/osu-radio-client/src/view_models/queue.rs) |
+| Full queue projection and operation owner | [queue.rs](../../crates/osu-radio-client/src/view_models/queue.rs) |
 | Common media scheduler | [media.rs](../../crates/osu-radio-client/src/controller/media.rs) |
 | QObject delivery/lifetime | [app_bridge.rs](../../apps/osu-radio-qt/src/app_bridge.rs) |
 | Domain Qt adapters and reusable track model | [qt_view_models.rs](../../apps/osu-radio-qt/src/qt_view_models.rs) |

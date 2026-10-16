@@ -61,6 +61,37 @@ async fn call(api: &ApiClient, operation: &str) -> Result<(), ApiError> {
         "reset_volume" => api.set_audio_volume(7, None).await,
         "queue" => api.queue().await.map(drop),
         "append" => api.append_queue(&[7, 7]).await.map(drop),
+        "insert" => api
+            .insert_queue(
+                &[crate::models::QueueItemRef::PlaylistItem {
+                    playlist_id: 2,
+                    item_id: 9,
+                }],
+                crate::models::QueuePlacement::Next,
+            )
+            .await
+            .map(drop),
+        "append_playlist" => api.append_playlist_to_queue(7).await.map(drop),
+        "play_entry" => api
+            .play_queue_entry(crate::models::QueueEntryId::new(i64::MAX).unwrap())
+            .await
+            .map(drop),
+        "move_entry" => api
+            .move_queue_entry(
+                crate::models::QueueEntryId::new(i64::MAX).unwrap(),
+                Some(crate::models::QueueEntryId::new(i64::MAX - 1).unwrap()),
+            )
+            .await
+            .map(drop),
+        "move_end" => api
+            .move_queue_entry(crate::models::QueueEntryId::new(i64::MAX).unwrap(), None)
+            .await
+            .map(drop),
+        "remove_entry" => api
+            .remove_queue_entry(crate::models::QueueEntryId::new(i64::MAX).unwrap())
+            .await
+            .map(drop),
+        "clear_upcoming" => api.clear_upcoming_queue().await.map(drop),
         "clear" => api.clear_queue().await.map(drop),
         "playback" => api.playback().await.map(drop),
         "command" => api.playback_command(&PlaybackCommand::Stop).await.map(drop),
@@ -87,6 +118,7 @@ async fn call(api: &ApiClient, operation: &str) -> Result<(), ApiError> {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // Table checks every transport wrapper and exact request body.
 async fn every_http_wrapper_retains_method_path_status_and_server_error() {
     for (operation, method, path) in [
         ("sets", "GET", "/api/beatmap-sets"),
@@ -107,6 +139,25 @@ async fn every_http_wrapper_retains_method_path_status_and_server_error() {
         ("reset_volume", "DELETE", "/api/audio-sources/7/volume"),
         ("queue", "GET", "/api/queue"),
         ("append", "POST", "/api/queue/items"),
+        ("insert", "POST", "/api/queue/items"),
+        ("append_playlist", "POST", "/api/playlists/7/queue"),
+        (
+            "play_entry",
+            "POST",
+            "/api/queue/items/9223372036854775807/play",
+        ),
+        (
+            "move_entry",
+            "PATCH",
+            "/api/queue/items/9223372036854775807",
+        ),
+        ("move_end", "PATCH", "/api/queue/items/9223372036854775807"),
+        (
+            "remove_entry",
+            "DELETE",
+            "/api/queue/items/9223372036854775807",
+        ),
+        ("clear_upcoming", "DELETE", "/api/queue/upcoming"),
         ("clear", "DELETE", "/api/queue"),
         ("playback", "GET", "/api/playback"),
         ("command", "POST", "/api/playback/commands"),
@@ -159,7 +210,14 @@ async fn every_http_wrapper_retains_method_path_status_and_server_error() {
                 serde_json::json!({"individual_volume_enabled": false, "global_volume_percent": 100}),
             ),
             "volume" => Some(serde_json::json!({"volume_percent": 0})),
-            "append" => Some(serde_json::json!({"audio_source_ids": [7, 7]})),
+            "append" => Some(
+                serde_json::json!({"items": [{"type":"audio","audio_source_id":7}, {"type":"audio","audio_source_id":7}], "placement":"end"}),
+            ),
+            "insert" => Some(
+                serde_json::json!({"items": [{"type":"playlist_item","playlist_id":2,"item_id":9}], "placement":"next"}),
+            ),
+            "move_entry" => Some(serde_json::json!({"before_entry_id":"9223372036854775806"})),
+            "move_end" => Some(serde_json::json!({"before_entry_id":null})),
             "command" => Some(serde_json::json!({"command": "stop"})),
             "create" | "rename" => Some(serde_json::json!({"name": "曲"})),
             "add_items" => Some(serde_json::json!({"beatmap_ids": [8, 9]})),
@@ -187,7 +245,7 @@ async fn every_http_wrapper_retains_method_path_status_and_server_error() {
 
 #[tokio::test]
 async fn missing_mutation_and_legacy_search_success_contracts_preserve_payloads() {
-    let body = br#"{"mode":"stopped","revision":17,"playback_token":23,"can_next":false,"can_previous":false}"#;
+    let body = br#"{"waiting_for_check":false,"mode":"stopped","revision":17,"playback_token":23,"can_next":false,"can_previous":false}"#;
     let (api, server) = respond(response("200 OK", body)).await;
     assert!(!api.base_url().ends_with('/'));
     let assignment = api.clear_queue().await.unwrap();
@@ -377,7 +435,7 @@ async fn discovery_and_playback_bound_individual_lines_including_heartbeats() {
             body.extend_from_slice(if discovery {
                 b"{\"event\":\"complete\"}\n"
             } else {
-                b"{\"mode\":\"stopped\",\"revision\":1,\"playback_token\":0,\"can_next\":false,\"can_previous\":false}\n"
+                b"{\"waiting_for_check\":false,\"mode\":\"stopped\",\"revision\":1,\"playback_token\":0,\"can_next\":false,\"can_previous\":false}\n"
             });
             let (api, server) = respond(response("200 OK", &body)).await;
             let mut emitted = 0;

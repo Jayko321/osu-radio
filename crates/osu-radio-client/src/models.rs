@@ -221,7 +221,7 @@ mod tests {
             ),
             (
                 "volume_percent",
-                json!({"mode": "paused", "revision": 1,
+                json!({"waiting_for_check": false, "mode": "paused", "revision": 1,
                 "playback_token": 2, "can_next": false, "can_previous": false}),
                 true,
             ),
@@ -395,12 +395,6 @@ mod tests {
         assert!(!set.has_multiple_audio_sources);
         assert!(set.beatmaps.is_empty());
         assert_eq!((set.online_id, set.hash), (None, None));
-        let queue: QueueState =
-            serde_json::from_value(json!({"audio_source_ids": [7, 7], "current_index": 0,
-            "mode": "paused", "revision": 3, "playback_token": 4}))
-            .unwrap();
-        assert!(queue.upcoming_tracks.is_empty() && queue.playlist_item_ids.is_empty());
-        assert_eq!(queue.audio_source_ids, [7, 7]);
         let summary: PlaylistSummary =
             serde_json::from_value(json!({"id": 5, "name": "曲"})).unwrap();
         assert_eq!(
@@ -478,21 +472,103 @@ pub enum PlaybackMode {
     Playing,
 }
 
+/// Independent client identity; serialize to a string before crossing any Qt/QML boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct QueueEntryId(i64);
+impl QueueEntryId {
+    pub const fn new(value: i64) -> Result<Self, &'static str> {
+        if value > 0 {
+            Ok(Self(value))
+        } else {
+            Err("Queue entry ID must be positive")
+        }
+    }
+    #[must_use]
+    pub const fn get(self) -> i64 {
+        self.0
+    }
+}
+impl TryFrom<String> for QueueEntryId {
+    type Error = &'static str;
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+            return Err("Expected a positive decimal i64 string");
+        }
+        value
+            .parse::<i64>()
+            .map_err(|_| "Expected a positive decimal i64 string")
+            .and_then(Self::new)
+    }
+}
+impl From<QueueEntryId> for String {
+    fn from(id: QueueEntryId) -> Self {
+        id.to_string()
+    }
+}
+impl std::fmt::Display for QueueEntryId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueueAvailability {
+    Checking,
+    Available,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct QueueEntry {
+    pub id: QueueEntryId,
+    pub position: usize,
+    pub audio_source_id: Option<i32>,
+    pub playlist_item_id: Option<i32>,
+    pub title: Option<String>,
+    pub title_unicode: Option<String>,
+    pub artist: Option<String>,
+    pub artist_unicode: Option<String>,
+    pub difficulty_name: Option<String>,
+    pub beatmap_id: Option<i32>,
+    pub beatmap_set_id: Option<i32>,
+    pub cover_beatmap_id: Option<i32>,
+    pub availability: QueueAvailability,
+    pub last_played_at_ms: Option<i64>,
+    #[serde(deserialize_with = "optional_volume_percent")]
+    pub volume_percent: Option<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum QueueItemRef {
+    Audio { audio_source_id: i32 },
+    PlaylistItem { playlist_id: i32, item_id: i32 },
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QueuePlacement {
+    End,
+    Next,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct QueueState {
-    #[serde(default)]
-    pub upcoming_tracks: Vec<LibraryTrack>,
-    pub audio_source_ids: Vec<i32>,
-    #[serde(default)]
-    pub playlist_item_ids: Vec<Option<i32>>,
-    pub current_index: Option<usize>,
+    pub entries: Vec<QueueEntry>,
+    pub current_entry_id: Option<QueueEntryId>,
+    pub history_len: usize,
     pub mode: PlaybackMode,
+    pub waiting_for_check: bool,
     pub revision: u64,
     pub playback_token: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PlaybackAssignment {
+    pub current_entry_id: Option<QueueEntryId>,
+    pub availability: Option<QueueAvailability>,
+    pub waiting_for_check: bool,
     #[serde(default, deserialize_with = "optional_volume_percent")]
     pub volume_percent: Option<u8>,
     pub current_audio_source_id: Option<i32>,

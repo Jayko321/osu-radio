@@ -14,6 +14,10 @@ mod m20261001_000009_playlist_covers;
 mod m20261003_000010_playlist_unicode_names;
 mod m20261004_000011_imported_collections;
 
+mod m20261016_000012_queue_entries;
+mod m20261016_000013_queue_waiting;
+mod m20261016_000014_queue_launch_source;
+
 pub(crate) struct Migrator;
 
 #[async_trait::async_trait]
@@ -31,12 +35,16 @@ impl MigratorTrait for Migrator {
             Box::new(m20261001_000009_playlist_covers::Migration),
             Box::new(m20261003_000010_playlist_unicode_names::Migration),
             Box::new(m20261004_000011_imported_collections::Migration),
+            Box::new(m20261016_000012_queue_entries::Migration),
+            Box::new(m20261016_000013_queue_waiting::Migration),
+            Box::new(m20261016_000014_queue_launch_source::Migration),
         ]
     }
 }
 
 // Child-first order is also valid for the legacy Diesel schema.
 const APPLICATION_TABLES: &[&str] = &[
+    "queue_entries",
     "audio_volume",
     "listening_history",
     "playlist_items",

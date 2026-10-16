@@ -171,12 +171,12 @@ async fn reversible_migrations_preserve_the_library(database: &Database) {
     .await
     .unwrap();
     assert_schema(database, 4).await;
-    for version in 5..=11 {
+    for version in 5..=14 {
         Migrator::up(&database.connection, Some(1)).await.unwrap();
         assert_schema(database, version).await;
         assert_library(database, &installation, set.id, map.id).await;
     }
-    for version in (4..=10).rev() {
+    for version in (4..=13).rev() {
         Migrator::down(&database.connection, Some(1)).await.unwrap();
         assert_schema(database, version).await;
         assert_library(database, &installation, set.id, map.id).await;
@@ -192,18 +192,11 @@ async fn reversible_migrations_preserve_the_library(database: &Database) {
     assert_schema(database, 4).await;
     assert_library(database, &installation, set.id, map.id).await;
     database.migrate().await.unwrap();
-    assert_schema(database, 11).await;
+    assert_schema(database, 14).await;
     assert_library(database, &installation, set.id, map.id).await;
     assert_eq!(
         database.queue().get().await.unwrap(),
-        crate::model::QueueState {
-            audio_source_ids: Vec::new(),
-            playlist_item_ids: Vec::new(),
-            current_index: None,
-            mode: crate::model::PlaybackMode::Stopped,
-            revision: 0,
-            playback_token: 0,
-        }
+        crate::model::QueueState::default()
     );
     assert_eq!(
         database.user_data().audio_settings().await.unwrap(),
@@ -228,6 +221,7 @@ async fn assert_schema(database: &Database, version: usize) {
         ("playlist_items", 6),
         ("listening_history", 7),
         ("audio_volume", 8),
+        ("queue_entries", 12),
     ] {
         assert_eq!(
             manager.has_table(table).await.unwrap(),
@@ -237,7 +231,12 @@ async fn assert_schema(database: &Database, version: usize) {
     }
     for (table, column, since) in [
         ("beatmaps", "background_path", 2),
-        ("playback_queue", "playlist_item_ids", 6),
+        ("playback_queue", "current_entry_id", 12),
+        ("playback_queue", "waiting_for_check", 13),
+        ("playback_queue", "launch_audio_source_id", 14),
+        ("playback_queue", "launch_audio_kind", 14),
+        ("playback_queue", "launch_audio_location", 14),
+        ("playback_queue", "launch_check_generation", 14),
         ("user_data", "individual_volume_enabled", 8),
         ("user_data", "global_volume_percent", 8),
         ("playlists", "custom_cover_png", 9),
@@ -253,6 +252,13 @@ async fn assert_schema(database: &Database, version: usize) {
             manager.has_column(table, column).await.unwrap(),
             version >= since,
             "{table}.{column} at migration {version}"
+        );
+    }
+    for column in ["audio_source_ids", "playlist_item_ids", "current_index"] {
+        let since = if column == "playlist_item_ids" { 6 } else { 5 };
+        assert_eq!(
+            manager.has_column("playback_queue", column).await.unwrap(),
+            (since..12).contains(&version)
         );
     }
     for (table, index, since) in [

@@ -1,4 +1,4 @@
-use super::tests::{controller, track};
+use super::tests::{controller, queue_row, track};
 use super::*;
 use crate::models::{PlaybackAssignment, PlaybackCommand, PlaybackMode, Playlist, PlaylistItem};
 use crate::view_models::player;
@@ -37,10 +37,10 @@ fn media_and_controller_resolve_duplicate_audio_from_the_same_state_owner() {
     assert_title(&state, Some("Library"));
     let mut queued = track(1);
     queued.title = "Queued".into();
-    state.upcoming.view.tracks = vec![queued];
+    state.upcoming.view.entries = vec![queue_row(queued, 1)];
     state.library.indices.insert(1, usize::MAX);
     assert_title(&state, Some("Queued"));
-    state.upcoming.view.tracks.clear();
+    state.upcoming.view.entries.clear();
     let mut selected = track(1);
     selected.title = "Selected".into();
     state.player.selected_track = Some(selected);
@@ -61,7 +61,11 @@ fn duration_effect_updates_duplicate_rows_without_changing_selection_or_playback
         state.playlist_action(PlaylistAction::SelectItem(31));
         state.player.current_track = Some(track(1));
         state.upcoming.open = open;
-        state.upcoming.view.tracks = vec![track(1), track(2), track(1)];
+        state.upcoming.view.entries = vec![
+            queue_row(track(1), 1),
+            queue_row(track(2), 2),
+            queue_row(track(1), 3),
+        ];
         let playback = state.player.playback.clone();
         for duration in [Some(Duration::from_secs(42)), None] {
             updates.lock().unwrap().clear();
@@ -83,10 +87,10 @@ fn duration_effect_updates_duplicate_rows_without_changing_selection_or_playback
                 state
                     .upcoming
                     .view
-                    .tracks
+                    .entries
                     .iter()
-                    .filter(|track| track.audio_source_id == 1)
-                    .all(|track| track.duration == duration)
+                    .filter(|row| row.audio_source_id == Some(1))
+                    .all(|row| row.track.duration == duration)
             );
             assert_eq!(
                 state.player.selected_track.as_ref().unwrap().duration,
@@ -167,6 +171,8 @@ async fn audio_download_guards_preserve_current_work_and_seek_reaches_the_worker
     .unwrap();
     let first = worker.invalidate();
     worker.send(crate::playback::Command::Assign {
+        entry_id: None,
+        waiting_for_check: false,
         generation: first,
         id: Some(1),
         playback_token: 5,
@@ -203,6 +209,8 @@ async fn audio_download_guards_preserve_current_work_and_seek_reaches_the_worker
     let worker = state.playback.as_ref().unwrap();
     let current = worker.invalidate();
     worker.send(crate::playback::Command::Assign {
+        entry_id: None,
+        waiting_for_check: false,
         generation: current,
         id: Some(1),
         playback_token: 6,
@@ -328,6 +336,9 @@ fn playlist() -> Playlist {
 }
 fn assignment(mode: PlaybackMode) -> PlaybackAssignment {
     PlaybackAssignment {
+        current_entry_id: None,
+        availability: None,
+        waiting_for_check: false,
         current_audio_source_id: Some(1),
         current_playlist_item_id: Some(31),
         track: None,
@@ -765,8 +776,17 @@ fn offline_transport_commands_report_errors_without_queuing_or_opening_a_worker(
         PlaylistAction::AddToQueue(7),
     ] {
         updates.lock().unwrap().clear();
+        let append = matches!(action, PlaylistAction::AddToQueue(_));
         state.playlist_action(action);
         assert!(state.player.commands.is_empty() && state.playback.is_none());
+        if append {
+            assert_eq!(
+                state.upcoming.view.operation_error.as_deref(),
+                Some("Connect to the server to queue a playlist.")
+            );
+            assert!(!state.upcoming.view.busy);
+            continue;
+        }
         assert!(
             updates
                 .lock()

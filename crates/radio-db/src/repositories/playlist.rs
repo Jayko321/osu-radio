@@ -9,7 +9,7 @@ use sea_orm::{
 
 use crate::{
     entities::{playlist, playlist_item},
-    model::{Playlist, PlaylistBeatmap, PlaylistItem, PlaylistSummary},
+    model::{Playlist, PlaylistBeatmap, PlaylistItem, PlaylistSummary, QueuePlaylistSource},
 };
 
 pub struct PlaylistRepository<'a> {
@@ -111,9 +111,54 @@ impl PlaylistRepository<'_> {
     }
 
     async fn resolve(&self, rows: Vec<playlist_item::Model>) -> Result<Vec<PlaylistItem>> {
+        let keys = rows
+            .iter()
+            .map(|item| QueuePlaylistSource {
+                installation_kind: item.source_kind.clone(),
+                hash_kind: item.hash_kind.clone(),
+                beatmap_hash: item.beatmap_hash.clone(),
+            })
+            .collect::<Vec<_>>();
+        let resolved = self.resolve_sources(&keys).await?;
+        let items = rows
+            .into_iter()
+            .map(|item| {
+                let map = resolved.get(&QueuePlaylistSource {
+                    installation_kind: item.source_kind.clone(),
+                    hash_kind: item.hash_kind.clone(),
+                    beatmap_hash: item.beatmap_hash.clone(),
+                });
+                PlaylistItem {
+                    last_played_at_ms: None,
+                    volume_percent: None,
+                    id: item.id,
+                    playlist_id: item.playlist_id,
+                    source_kind: item.source_kind,
+                    hash_kind: item.hash_kind,
+                    beatmap_hash: item.beatmap_hash,
+                    title: item.title,
+                    title_unicode: item.title_unicode,
+                    artist: item.artist,
+                    artist_unicode: item.artist_unicode,
+                    difficulty_name: item.difficulty_name,
+                    beatmap_id: map.map(|map| map.beatmap_id),
+                    beatmap_set_id: map.map(|map| map.beatmap_set_id),
+                    audio_source_id: map.and_then(|map| map.audio_source_id),
+                    cover_beatmap_id: map.and_then(|map| map.cover_beatmap_id),
+                }
+            })
+            .collect();
+        Ok(items)
+    }
+
+    /// Resolve saved keys independently of playlist rows, choosing the lowest playable beatmap ID.
+    pub async fn resolve_sources(
+        &self,
+        keys: &[QueuePlaylistSource],
+    ) -> Result<HashMap<QueuePlaylistSource, PlaylistBeatmap>> {
         let mut resolved = HashMap::new();
         for (kind, column) in [("source", "b.hash"), ("md5", "b.md5_hash")] {
-            let hashes: HashSet<_> = rows
+            let hashes: HashSet<_> = keys
                 .iter()
                 .filter(|item| item.hash_kind == kind)
                 .map(|item| item.beatmap_hash.clone())
@@ -132,39 +177,16 @@ impl PlaylistRepository<'_> {
                     && let Some(hash) = hash
                 {
                     resolved
-                        .entry((map.source_kind.clone(), kind.to_owned(), hash.clone()))
+                        .entry(QueuePlaylistSource {
+                            installation_kind: map.source_kind.clone(),
+                            hash_kind: kind.to_owned(),
+                            beatmap_hash: hash.clone(),
+                        })
                         .or_insert(map);
                 }
             }
         }
-        let items = rows
-            .into_iter()
-            .map(|item| {
-                let map = resolved.get(&(
-                    item.source_kind.clone(),
-                    item.hash_kind.clone(),
-                    item.beatmap_hash.clone(),
-                ));
-                PlaylistItem {
-                    last_played_at_ms: None,
-                    volume_percent: None,
-                    id: item.id,
-                    playlist_id: item.playlist_id,
-                    source_kind: item.source_kind,
-                    beatmap_hash: item.beatmap_hash,
-                    title: item.title,
-                    title_unicode: item.title_unicode,
-                    artist: item.artist,
-                    artist_unicode: item.artist_unicode,
-                    difficulty_name: item.difficulty_name,
-                    beatmap_id: map.map(|map| map.beatmap_id),
-                    beatmap_set_id: map.map(|map| map.beatmap_set_id),
-                    audio_source_id: map.and_then(|map| map.audio_source_id),
-                    cover_beatmap_id: map.and_then(|map| map.cover_beatmap_id),
-                }
-            })
-            .collect();
-        Ok(items)
+        Ok(resolved)
     }
 
     pub async fn create(&self, name: &str) -> Result<PlaylistSummary> {
