@@ -44,7 +44,14 @@ async fn server_starts_from_environment_without_dotenv() {
 #[tokio::test]
 async fn startup_configuration_errors_exit_unsuccessfully_without_announcing_readiness() {
     for (contents, expected) in [
-        (None, "SQLITE_DATABASE_URL must be set"),
+        (
+            None,
+            if cfg!(target_os = "linux") {
+                "Cannot determine SQLite data directory"
+            } else {
+                "SQLITE_DATABASE_URL must be set"
+            },
+        ),
         (
             Some(b"INVALID='unterminated\n".as_slice()),
             "Failed to load .env",
@@ -63,13 +70,89 @@ async fn startup_configuration_errors_exit_unsuccessfully_without_announcing_rea
     }
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn default_directory_failure_exits_before_readiness() {
+    let directory = TempDir::new().unwrap();
+    let blocked = directory.path().join("blocked");
+    fs::write(&blocked, b"file instead of directory").unwrap();
+    let mut command = isolated_command(&directory);
+    command
+        .env_remove("SQLITE_DATABASE_URL")
+        .env("XDG_DATA_HOME", blocked);
+    assert_startup_failure(command, "Failed to create SQLite data directory").await;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn default_database_survives_restart_without_dotenv_or_a_database_url() {
+    use osu_radio_client::{ApiClient, RegisterOsuFolder};
+
+    for xdg in [None, Some(""), Some("relative/data"), Some("absolute")] {
+        let directory = TempDir::new().unwrap();
+        let home = directory.path().join("home with spaces");
+        let data = directory.path().join("data with spaces");
+        let expected = if xdg == Some("absolute") {
+            data.clone()
+        } else {
+            home.join(".local/share")
+        }
+        .join("osu-radio/osu-radio.db");
+        let folder = directory.path().join("osu");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("client.realm"), b"source remains intact").unwrap();
+        for restart in [false, true] {
+            let mut command = isolated_command(&directory);
+            command.env_remove("SQLITE_DATABASE_URL").env("HOME", &home);
+            if let Some(value) = xdg {
+                command.env(
+                    "XDG_DATA_HOME",
+                    if value == "absolute" {
+                        data.as_os_str()
+                    } else {
+                        std::ffi::OsStr::new(value)
+                    },
+                );
+            }
+            let mut child = command.spawn().unwrap();
+            let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+            let line = timeout(Duration::from_secs(30), lines.next_line())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let api = ApiClient::new(line.strip_prefix("osu-radio server listening on ").unwrap())
+                .unwrap();
+            if restart {
+                let folders = api.osu_folders().await.unwrap();
+                assert_eq!(folders.len(), 1);
+                assert_eq!(folders.first().unwrap().label.as_deref(), Some("Persisted"));
+            } else {
+                api.register_osu_folder(&RegisterOsuFolder::labelled(&folder, "Persisted"))
+                    .await
+                    .unwrap();
+            }
+            child.kill().await.unwrap();
+            assert!(expected.is_file());
+            assert!(!directory.path().join("osu-radio.db").exists());
+            assert!(!directory.path().join("library.sqlite").exists());
+            assert_eq!(
+                fs::read(folder.join("client.realm")).unwrap(),
+                b"source remains intact"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn startup_database_connection_failure_is_reported_before_binding() {
     let directory = TempDir::new().unwrap();
     let mut command = isolated_command(&directory);
     command.env("SQLITE_DATABASE_URL", "missing-parent/library.sqlite");
+    command.env("XDG_DATA_HOME", directory.path().join("unused-data"));
     assert_startup_failure(command, "Failed to connect to the configured database").await;
     assert!(!directory.path().join("missing-parent").exists());
+    assert!(!directory.path().join("unused-data").exists());
 }
 
 #[tokio::test]

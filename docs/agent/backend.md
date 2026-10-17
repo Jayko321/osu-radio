@@ -29,14 +29,33 @@ client. Neither hosted-source providers nor remote hosting are selected.
 
 ## Current startup configuration
 
-`ServerConfig::from_env` calls `dotenvy::dotenv()` before reading configuration.
+The [Arch recipe](../../packaging/arch/PKGBUILD) installs the server beside Qt
+in `/usr/bin` and the complete framework-dependent lazer helper publish under
+`/usr/lib/osu-radio/`. It sets `OSU_LAZER_REALM_PARSER_PATH` at build time to
+`/usr/lib/osu-radio/osu-lazer-realm-parser`; the existing scanner build script
+embeds that path and skips its development helper build. The runtime override
+remains available. SQLite and API docs are enabled through the server's default
+features. See the [packaging instructions](../../packaging/arch/README.md) for
+dependencies and release verification limits; installed acceptance is T05/T06.
+
+`ServerConfig::from_env` calls `dotenvy::dotenv()` before reading configuration,
+unless the process variable `OSU_RADIO_SKIP_DOTENV` is exactly `1`. The Linux
+client sets this variable on its child server, so embedded startup never searches
+the current directory or its ancestors for `.env`. Standalone startup keeps
+dotenv loading by default; other switch values do not disable it.
 A missing `.env` (`NotFound`) is allowed: process environment alone can supply
 configuration. A discovered file still loads without overriding existing process
 variables. Other I/O errors and malformed file contents propagate as
-`Failed to load .env`, even when the required database URL is already set.
+`Failed to load .env`, even when a database URL is already set.
 
-The default SQLite build requires `SQLITE_DATABASE_URL` (a path, SQLite URL or
-`:memory:`); the PostgreSQL build requires `POSTGRES_DATABASE_URL`. Startup opens
+On Linux the SQLite build uses `$XDG_DATA_HOME/osu-radio/osu-radio.db` when
+`SQLITE_DATABASE_URL` is absent. An absent, empty or relative XDG value falls
+back to `$HOME/.local/share/osu-radio/osu-radio.db`; HOME must then be absolute.
+Only this default path creates its parent directory. Failure to determine or
+create it propagates before readiness. Explicit SQLite paths, URLs and `:memory:`
+retain priority and their existing semantics, including missing-parent errors.
+Other platforms still require `SQLITE_DATABASE_URL`; PostgreSQL always requires
+`POSTGRES_DATABASE_URL` and never uses this fallback. Startup opens
 the pool and applies versioned migrations without resetting. Legacy tables without
 SeaORM history are rejected with instructions to use a new database or explicit reset. `OSU_RADIO_SERVER_ADDRESS` defaults to
 `127.0.0.1:3000` when its environment lookup fails. An invalid address or a bind
@@ -66,15 +85,17 @@ change the HTTP contracts or select a hosted-source provider.
 `127.0.0.1:0`, as the child's `OSU_RADIO_SERVER_ADDRESS`. Port zero requests an
 OS-assigned port. The option can be overridden; the supervisor does not always
 force port zero. `ServerOptions::working_directory` changes the child's working
-directory when present; otherwise it inherits the parent directory. This affects
-which `.env` the server finds in that directory or its ancestors. No file is
-required when the process environment supplies the selected database URL.
+directory when present; otherwise it inherits the parent directory. On Linux
+the child receives `OSU_RADIO_SKIP_DOTENV=1` regardless of the inherited value.
+Other platforms retain dotenv search in the working directory and its ancestors.
 
 [Configuration regressions](../../apps/osu-radio-server/src/config/tests.rs)
 run in separate processes with cleared application environments and temporary
 working directories. They cover environment-only configuration, the default and
-explicit address, the required backend-specific URL, valid dotenv loading,
-process-variable precedence and fatal parse/read errors. The
+explicit address, the Linux SQLite XDG/HOME fallback (including spaces, missing
+HOME and directory creation errors), required URLs on other configurations,
+valid dotenv loading, exact skip-switch semantics, process-variable precedence
+and fatal parse/read errors. The
 [repository dotenv test](../../apps/osu-radio-server/src/config/tests.rs) separately
 parses the checkout's optional `.env` through `dotenvy::from_read_iter`, compares
 the process environment before/after and withholds values in diagnostics. It
@@ -82,8 +103,10 @@ does not install those values, construct application state or connect to the
 configured database. A checkout without that optional file skips this read.
 
 The [startup tests](../../apps/osu-radio-server/tests/startup.rs) launch the actual
-SQLite server without `.env`, using in-memory storage and an ephemeral loopback
-port. They also check configuration/connection/bind failures, including a held
+SQLite server without `.env`, using in-memory storage or private XDG/HOME
+paths and an ephemeral loopback port. The default-path test saves a folder and
+reads it after restart without a database URL, checking source preservation and
+no database in cwd. They also check configuration/connection/bind failures, including a held
 loopback port, nonzero exit and no false readiness announcement. Child-only
 environment and private working directories keep the application database out of
 these checks. Both docs feature states run them; PostgreSQL configuration checks

@@ -20,32 +20,33 @@ fn server_binary() -> PathBuf {
 }
 
 #[tokio::test]
-#[ignore = "needs a built SQLite osu-radio-server; unset SQLITE_DATABASE_URL and POSTGRES_DATABASE_URL"]
+#[ignore = "needs a built SQLite osu-radio-server; uses an isolated subprocess"]
 async fn the_embedded_server_answers_on_the_port_it_reports() {
-    assert!(
-        env::var_os("SQLITE_DATABASE_URL").is_none(),
-        "unset SQLITE_DATABASE_URL to isolate this test"
-    );
-    assert!(
-        env::var_os("POSTGRES_DATABASE_URL").is_none(),
-        "unset POSTGRES_DATABASE_URL to isolate this test"
-    );
+    if env::var_os("OSU_RADIO_EMBEDDED_TEST_CHILD").is_none() {
+        check_in_subprocess();
+        return;
+    }
     let directory = tempfile::tempdir().unwrap();
-    std::fs::write(
-        directory.path().join(".env"),
-        "SQLITE_DATABASE_URL=library.sqlite\n",
-    )
-    .unwrap();
+    let cwd = directory.path().join("child");
+    std::fs::create_dir(&cwd).unwrap();
     let folder = directory.path().join("osu");
     std::fs::create_dir(&folder).unwrap();
     let marker = folder.join("client.realm");
     std::fs::write(&marker, b"source stays intact").unwrap();
     let options = ServerOptions {
         binary: Some(server_binary()),
-        working_directory: Some(directory.path().to_path_buf()),
+        working_directory: Some(cwd.clone()),
         ..ServerOptions::default()
     };
     let session = Session::start(options.clone()).await.unwrap();
+    assert!(!cwd.join("osu-radio.db").exists());
+    assert!(!cwd.join("library.sqlite").exists());
+    #[cfg(target_os = "linux")]
+    assert!(
+        PathBuf::from(env::var_os("XDG_DATA_HOME").unwrap())
+            .join("osu-radio/osu-radio.db")
+            .is_file()
+    );
     assert!(session.base_url().starts_with("http://127.0.0.1:"));
     assert!(!session.base_url().ends_with(":0"));
     assert_eq!(session.api().user_data().await.unwrap().id, 1);
@@ -96,6 +97,26 @@ async fn the_embedded_server_answers_on_the_port_it_reports() {
     assert_eq!(session.api().user_data().await.unwrap().id, 1);
     session.shutdown().await.unwrap();
 
+    #[cfg(target_os = "linux")]
+    for location in [directory.path(), cwd.as_path()] {
+        for contents in [
+            b"SQLITE_DATABASE_URL=must-not-open.sqlite\nOSU_RADIO_SERVER_ADDRESS=invalid\n"
+                .as_slice(),
+            b"INVALID='unterminated\n".as_slice(),
+            &[0xff],
+        ] {
+            std::fs::write(location.join(".env"), contents).unwrap();
+            let session = Session::start(options.clone()).await.unwrap();
+            assert_eq!(
+                session.api().osu_folders().await.unwrap(),
+                vec![updated.clone()]
+            );
+            session.shutdown().await.unwrap();
+            std::fs::remove_file(location.join(".env")).unwrap();
+            assert!(!cwd.join("must-not-open.sqlite").exists());
+        }
+    }
+
     let session = Session::start(options).await.unwrap();
     assert_eq!(session.api().osu_folders().await.unwrap(), vec![updated]);
     session.api().remove_osu_folder(id).await.unwrap();
@@ -103,4 +124,37 @@ async fn the_embedded_server_answers_on_the_port_it_reports() {
     assert!(session.api().beatmap_sets().await.unwrap().is_empty());
     assert_eq!(std::fs::read(marker).unwrap(), b"source stays intact");
     session.shutdown().await.unwrap();
+}
+
+fn check_in_subprocess() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            "the_embedded_server_answers_on_the_port_it_reports",
+            "--ignored",
+        ])
+        .env_clear()
+        .env("OSU_RADIO_EMBEDDED_TEST_CHILD", "1")
+        .env("OSU_RADIO_SKIP_DOTENV", "0")
+        .env("HOME", directory.path().join("home"))
+        .env("XDG_DATA_HOME", directory.path().join("data with spaces"));
+    #[cfg(not(target_os = "linux"))]
+    command.env(
+        "SQLITE_DATABASE_URL",
+        directory.path().join("library.sqlite"),
+    );
+    for name in ["PATH", "SystemRoot", "LLVM_PROFILE_FILE"] {
+        if let Some(value) = env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

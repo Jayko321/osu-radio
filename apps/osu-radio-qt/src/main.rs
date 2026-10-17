@@ -11,7 +11,7 @@
 mod launch;
 use osu_radio_qt::runtime;
 
-use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QUrl};
+use cxx_qt_lib::{QGuiApplication, QQmlApplicationEngine, QString, QUrl};
 use launch::LaunchMode;
 use std::{
     process::ExitCode,
@@ -60,6 +60,8 @@ fn run(mode: LaunchMode) -> ExitCode {
         eprintln!("Could not initialize Qt.");
         return ExitCode::FAILURE;
     };
+    app.as_mut()
+        .set_application_version(&QString::from(env!("CARGO_PKG_VERSION")));
     let created = Arc::new(AtomicBool::new(false));
     let loaded = Arc::clone(&created);
     engine

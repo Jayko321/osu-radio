@@ -26,12 +26,18 @@ def request(base, method, path, body=None):
         return json.loads(data) if data else None
 
 
+def fixture_environment(root):
+    return {"SQLITE_DATABASE_URL": str(root / "library.sqlite"),
+            "OSU_LAZER_REALM_PARSER_PATH": str(root / "realm-helper"),
+            "XDG_DATA_HOME": str(root / "data"),
+            "OSU_RADIO_SKIP_DOTENV": "1"}
+
+
 @contextlib.contextmanager
 def server(binary, root):
     env = dict(os.environ)
-    for key in ("SQLITE_DATABASE_URL", "POSTGRES_DATABASE_URL",
-                "OSU_LAZER_REALM_PARSER_PATH"):
-        env.pop(key, None)
+    env.pop("POSTGRES_DATABASE_URL", None)
+    env.update(fixture_environment(root))
     env["OSU_RADIO_SERVER_ADDRESS"] = "127.0.0.1:0"
     with (root / "server.log").open("ab") as log:
         child = subprocess.Popen([binary], cwd=root, env=env,
@@ -87,16 +93,14 @@ def generate(root):
     helper.write_text("#!/usr/bin/env python3\nfrom pathlib import Path\n"
                       "import sys\nsys.stdout.write(Path(__file__).with_name('snapshot.ndjson').read_text())\n")
     helper.chmod(0o700)
-    (root / ".env").write_text("SQLITE_DATABASE_URL=library.sqlite\n"
-                               "OSU_LAZER_REALM_PARSER_PATH=" + json.dumps(str(helper)) + "\n")
 
 
 def prepare(binary, root):
     generate(root)
     wrapper = root / "fixture-server"
     wrapper.write_text("#!/usr/bin/env python3\nimport os\n"
-                       "for key in ('SQLITE_DATABASE_URL', 'POSTGRES_DATABASE_URL', 'OSU_LAZER_REALM_PARSER_PATH'):\n"
-                       "    os.environ.pop(key, None)\n"
+                       "os.environ.pop('POSTGRES_DATABASE_URL', None)\n"
+                       "os.environ.update(" + repr(fixture_environment(root)) + ")\n"
                        "os.execv(" + repr(binary) + ", [" + repr(binary) + "])\n")
     wrapper.chmod(0o700)
     with server(binary, root) as base:

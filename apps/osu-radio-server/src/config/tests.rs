@@ -90,6 +90,7 @@ fn environment_only_uses_explicit_address() {
     );
 }
 
+#[cfg(not(all(target_os = "linux", feature = "sqlite")))]
 #[test]
 fn selected_database_url_is_still_required() {
     let directory = directory_without_dotenv();
@@ -159,6 +160,98 @@ fn unreadable_dotenv_is_fatal_even_with_database_in_environment() {
 }
 
 #[test]
+fn only_one_skips_dotenv_including_parent_search() {
+    for contents in [
+        format!("{DATABASE_URL_ENV}=database-from-dotenv\n").into_bytes(),
+        b"INVALID='unterminated\n".to_vec(),
+        vec![0xff],
+    ] {
+        let directory = directory_without_dotenv();
+        fs::write(directory.path().join(".env"), &contents).unwrap();
+        let child = directory.path().join("child");
+        fs::create_dir(&child).unwrap();
+        for cwd in [directory.path(), child.as_path()] {
+            check_in_subprocess(
+                cwd,
+                "default-address",
+                &[
+                    (DATABASE_URL_ENV, DATABASE_URL),
+                    ("OSU_RADIO_SKIP_DOTENV", "1"),
+                ],
+            );
+        }
+    }
+    let directory = directory_without_dotenv();
+    fs::write(directory.path().join(".env"), "INVALID='unterminated\n").unwrap();
+    for value in ["", "0", "true", "01"] {
+        check_in_subprocess(
+            directory.path(),
+            "parse-error",
+            &[
+                (DATABASE_URL_ENV, DATABASE_URL),
+                ("OSU_RADIO_SKIP_DOTENV", value),
+            ],
+        );
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "sqlite"))]
+#[test]
+fn linux_sqlite_defaults_are_private_absolute_and_only_used_without_a_url() {
+    let directory = directory_without_dotenv();
+    let home = directory.path().join("home with spaces");
+    let xdg = directory.path().join("xdg with spaces");
+    for value in [
+        None,
+        Some(""),
+        Some("relative/data"),
+        Some(xdg.to_str().unwrap()),
+    ] {
+        let mut variables = vec![("HOME", home.to_str().unwrap())];
+        if let Some(value) = value {
+            variables.push(("XDG_DATA_HOME", value));
+        }
+        let expected = if value == Some(xdg.to_str().unwrap()) {
+            xdg.join("osu-radio/osu-radio.db")
+        } else {
+            home.join(".local/share/osu-radio/osu-radio.db")
+        };
+        variables.push(("EXPECTED_SQLITE_PATH", expected.to_str().unwrap()));
+        check_in_subprocess(directory.path(), "sqlite-default", &variables);
+    }
+    let expected = xdg.join("osu-radio/osu-radio.db");
+    check_in_subprocess(
+        directory.path(),
+        "sqlite-default",
+        &[
+            ("XDG_DATA_HOME", xdg.to_str().unwrap()),
+            ("EXPECTED_SQLITE_PATH", expected.to_str().unwrap()),
+        ],
+    );
+    for home in [None, Some(""), Some("relative/home")] {
+        let variables = home.map_or_else(Vec::new, |home| vec![("HOME", home)]);
+        check_in_subprocess(directory.path(), "missing-home", &variables);
+    }
+    let blocked = directory.path().join("blocked");
+    fs::write(&blocked, b"file instead of directory").unwrap();
+    check_in_subprocess(
+        directory.path(),
+        "mkdir-error",
+        &[("XDG_DATA_HOME", blocked.to_str().unwrap())],
+    );
+    let unused = directory.path().join("unused");
+    check_in_subprocess(
+        directory.path(),
+        "default-address",
+        &[
+            (DATABASE_URL_ENV, DATABASE_URL),
+            ("XDG_DATA_HOME", unused.to_str().unwrap()),
+        ],
+    );
+    assert!(!unused.exists());
+}
+
+#[test]
 #[ignore = "invoked by configuration tests in an isolated child process"]
 fn configuration_probe() {
     let scenario = env::var(PROBE_ENV).expect("configuration probe scenario");
@@ -184,6 +277,28 @@ fn configuration_probe() {
                 error.downcast_ref::<env::VarError>(),
                 Some(env::VarError::NotPresent)
             ));
+        }
+        #[cfg(all(target_os = "linux", feature = "sqlite"))]
+        "sqlite-default" => {
+            let config = ServerConfig::from_env().unwrap();
+            let expected = env::var("EXPECTED_SQLITE_PATH").unwrap();
+            assert_eq!(config.database_url, expected);
+            assert!(Path::new(&expected).parent().unwrap().is_dir());
+            assert!(
+                !Path::new(&expected).exists(),
+                "configuration creates only the directory"
+            );
+        }
+        #[cfg(all(target_os = "linux", feature = "sqlite"))]
+        "missing-home" | "mkdir-error" => {
+            let error = ServerConfig::from_env()
+                .err()
+                .expect("invalid default directory");
+            assert!(error.to_string().contains(if scenario == "missing-home" {
+                "Cannot determine SQLite data directory"
+            } else {
+                "Failed to create SQLite data directory"
+            }));
         }
         "parse-error" | "read-error" => {
             let error = ServerConfig::from_env().err().expect(".env must fail");

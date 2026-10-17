@@ -576,6 +576,9 @@ schema refresh or drop external objects.
 
 The server stores `Services` in `AppState`; CLI uses the same service accessors. CLI/server select
 `SQLITE_DATABASE_URL` for SQLite or `POSTGRES_DATABASE_URL` for PostgreSQL.
+The CLI requires its selected URL. Only the Linux SQLite server has a
+[user-data fallback](backend.md#current-startup-configuration) when its URL is
+absent; connection creation, migrations and explicit reset are shared unchanged.
 `store` reads a complete scanner snapshot, registers the marker and replaces its
 library; `--count` and skipped counts are removed. `--clear` explicitly resets all
 application data before registration. Output reports inserted sets/beatmaps and
