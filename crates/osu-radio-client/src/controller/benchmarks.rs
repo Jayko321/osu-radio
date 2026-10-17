@@ -377,7 +377,7 @@ fn text(ordinary: Option<&str>, unicode: Option<&str>, unknown: &str) -> String 
 }
 
 /// Actual HTTP -> decode -> mapping -> controller notification, with and without debounce.
-/// The child must be configured to use a disposable backup by its working directory.
+/// Set the selected database URL explicitly to a disposable backup; Linux children skip dotenv.
 #[tokio::test]
 #[ignore = "requires RADIO_SEARCH_BENCH_BINARY, RADIO_SEARCH_BENCH_WORKDIR and RADIO_SEARCH_BENCH_COMPACT"]
 async fn controller_http_timings() {

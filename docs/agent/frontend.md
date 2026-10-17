@@ -510,13 +510,13 @@ The current [supervisor](../../crates/osu-radio-client/src/server.rs) has these 
 
 - `ServerOptions` accepts `remote_url`, `binary`, `working_directory`, `address`, and `startup_timeout`. Defaults are no remote URL/binary/directory override, `127.0.0.1:0`, and 30 seconds. The address configures a local child; Qt uses its default, letting the OS select a port. With `remote_url`, child-process options are unused.
 - Binary resolution checks the explicit option, `OSU_RADIO_SERVER_BIN`, a sibling of the current executable, then the executable name on `PATH`. The filename uses the platform's executable suffix. Build the server before launching the GUI; its Cargo dependency on the client does not build the server executable.
-- The child receives `OSU_RADIO_SERVER_ADDRESS` from the options. It inherits the working directory unless overridden. Server configuration accepts a missing `.env` when the process environment supplies the database URL; existing malformed/unreadable files remain errors. See [backend configuration](backend.md) and the [server config source](../../apps/osu-radio-server/src/config.rs).
+- The child receives `OSU_RADIO_SERVER_ADDRESS` from the options and, on Linux, `OSU_RADIO_SKIP_DOTENV=1`. It inherits the working directory unless overridden. The Linux child ignores `.env` in cwd and ancestors; SQLite defaults to the user XDG data directory without a URL. Explicit process URLs retain priority. Standalone servers retain dotenv loading and fatal malformed/unreadable-file errors unless the switch is exactly `1`. See [backend configuration](backend.md) and the [server config source](../../apps/osu-radio-server/src/config.rs).
 - Stdin is closed. Stdout and stderr are piped and drained, with `[server]` prefixes. Stderr is forwarded while stdout is inspected for readiness; stdout continues forwarding afterward. Leaving either pipe unread can block the child.
 - Readiness depends on a stdout line containing `listening on ` followed by an `http://` or `https://` URL. The server prints its bound address, so the URL contains the actual port rather than `0`. This is a protocol between [server `main.rs`](../../apps/osu-radio-server/src/main.rs) and `parse_ready_line`, not optional diagnostic wording.
 - Early stdout EOF waits for child exit within the startup deadline; a still-running child is killed and reaped on timeout. Read failure, early exit and timeout have separate errors. Cancellation during startup also awaits termination. Post-start stdout/stderr read loops stop on read errors; there is no automatic restart or ongoing health monitor.
 - `shutdown` takes the child once and awaits its termination; repeated shutdown is harmless. `kill_on_drop(true)` and `EmbeddedServer::drop` provide fallback termination, but `Drop` does not await it. A hard kill or crash of the parent cannot be assumed to run destructors or terminate the child.
 
-Readiness parsing has focused unit tests in [server.rs](../../crates/osu-radio-client/src/server.rs). The [ignored embedded-server integration test](../../crates/osu-radio-client/tests/embedded_server.rs) starts a real server and performs database-backed requests; it uses a disposable SQLite database and refuses configured database environment variables. Its prerequisites and scope are recorded in [development](development.md).
+Readiness parsing has focused unit tests in [server.rs](../../crates/osu-radio-client/src/server.rs). The [ignored embedded-server integration test](../../crates/osu-radio-client/tests/embedded_server.rs) starts a real server and performs database-backed requests; it clears inherited configuration in a subprocess, uses private HOME/XDG directories (an explicit private URL on other platforms), and checks restart persistence plus ignored valid/malformed/unreadable dotenv files on Linux. Its prerequisites and scope are recorded in [development](development.md).
 
 [Session tests](../../crates/osu-radio-client/src/session.rs) cover remote HTTP
 readiness, bad URL/status/JSON, retry, timeout/cancellation and server survival
@@ -688,6 +688,17 @@ presentation state and sends no library search command. The `settings-search`
 case in [`AdapterProbe.qml`](../../apps/osu-radio-qt/tests/AdapterProbe.qml) covers
 keyboard editing/clearing, title/name matches, conditional rows, empty states,
 scroll extent/reset and retained state across navigation.
+**About** uses the same Settings layout and search, with **Version**, **License**
+(`MIT`) and **Project** (`https://github.com/Jayko321/osu-radio`). Matching About
+shows all three rows; matching a field name shows its row. Values and the URL
+are not search keys. The version binds to `Qt.application.version`:
+[`main.rs`](../../apps/osu-radio-qt/src/main.rs) sets it from `CARGO_PKG_VERSION`
+through the existing CXX-Qt `QGuiApplication::set_application_version` before
+loading QML. Both Qt and server manifests use `0.1.0-alpha`. No VM, protocol or
+QSettings key/location changes are involved; the gallery still uses no native
+preference storage or backend. The probe checks exact About values and the live
+metadata binding. Installed-package display and desktop link activation remain
+part of [release T06](../impl/arch-linux-release/T06.md).
 All panes stay constructed,
 retaining search text, selection and settings while the right-hand player remains
 visible. Output-device and other placeholder preferences remain deferred.
@@ -775,7 +786,13 @@ cleanup, serialized draft exclusion, sort/selection independence from saved orde
 and explicit offline playback errors. They use only memory and inert cover bytes.
 
 [`build.rs`](../../apps/osu-radio-qt/build.rs) embeds QML and assets; resource
-loading does not depend on the working directory. Server configuration still does.
+loading does not depend on the working directory. The
+[Arch kit](../../packaging/arch/README.md) installs Qt/server side by side in
+`/usr/bin`, with `osu-radio` pointing to `osu-radio-qt` and a desktop entry
+launching `/usr/bin/osu-radio` without terminal, icon or working-directory override.
+Linux embedded startup skips dotenv and uses the server's XDG SQLite fallback;
+standalone startup retains dotenv search as described in [backend](backend.md).
+KDE menu/picker/audio acceptance remains separate from recipe validation.
 Asset origins/licenses are in [`SOURCES.md`](../../apps/osu-radio-qt/assets/SOURCES.md).
 Software-rendered integration probes verify state transitions, not GPU blur,
 native picker interaction, desktop layout or Windows behavior. See the manual

@@ -14,7 +14,10 @@ Item {
     readonly property bool individualVolumeMatches: matches(audioSettingsHeader.text, individualVolumeSwitch.text)
     readonly property bool globalVolumeMatches: settingsPane.bridge.settings.individualVolumeEnabled && matches(audioSettingsHeader.text, globalVolumeLabel.settingName)
     readonly property bool discordMatches: matches("Integrations", "Discord Rich Presence")
-    readonly property bool hasMatches: foldersMatch || individualVolumeMatches || globalVolumeMatches || discordMatches
+    readonly property bool versionMatches: matches(aboutSettingsHeader.text, aboutVersion.settingName)
+    readonly property bool licenseMatches: matches(aboutSettingsHeader.text, aboutLicense.settingName)
+    readonly property bool projectMatches: matches(aboutSettingsHeader.text, aboutProjectLabel.text)
+    readonly property bool hasMatches: foldersMatch || individualVolumeMatches || globalVolumeMatches || discordMatches || versionMatches || licenseMatches || projectMatches
     function matches(section: string, setting: string): bool {
         return query.length === 0 || section.toLowerCase().includes(query) || setting.toLowerCase().includes(query);
     }
@@ -317,6 +320,67 @@ Item {
                         visible: settingsPane.bridge.settings.audioSettingsCanRetry
                         enabled: settingsPane.bridge.connected
                         onClicked: settingsPane.bridge.settings.retryAudioSettings()
+                    }
+                }
+            }
+            Column {
+                objectName: "aboutSettingsSection"
+                visible: settingsPane.versionMatches || settingsPane.licenseMatches || settingsPane.projectMatches
+                width: parent.width
+                spacing: 16
+                Text {
+                    id: aboutSettingsHeader
+                    objectName: "aboutSettingsHeader"
+                    text: "About"
+                    color: Theme.text
+                    font.family: settingsPane.fontFamily
+                    font.pixelSize: 24
+                    font.bold: true
+                }
+                Text {
+                    id: aboutVersion
+                    objectName: "aboutVersion"
+                    readonly property string settingName: "Version"
+                    visible: settingsPane.versionMatches
+                    width: parent.width
+                    text: settingName + " — " + Qt.application.version
+                    color: Theme.text
+                    font.family: settingsPane.fontFamily
+                    font.pixelSize: 16
+                    wrapMode: Text.Wrap
+                }
+                Text {
+                    id: aboutLicense
+                    objectName: "aboutLicense"
+                    readonly property string settingName: "License"
+                    visible: settingsPane.licenseMatches
+                    width: parent.width
+                    text: settingName + " — MIT"
+                    color: Theme.text
+                    font.family: settingsPane.fontFamily
+                    font.pixelSize: 16
+                    wrapMode: Text.Wrap
+                }
+                Column {
+                    objectName: "aboutProjectSetting"
+                    visible: settingsPane.projectMatches
+                    width: parent.width
+                    spacing: 8
+                    Text {
+                        id: aboutProjectLabel
+                        text: "Project"
+                        color: Theme.text
+                        font.family: settingsPane.fontFamily
+                        font.pixelSize: 16
+                    }
+                    AppButton {
+                        objectName: "aboutProjectLink"
+                        text: "https://github.com/Jayko321/osu-radio"
+                        variant: "link"
+                        width: parent.width
+                        font.family: settingsPane.fontFamily
+                        Accessible.name: aboutProjectLabel.text + ": " + text
+                        onClicked: Qt.openUrlExternally(text)
                     }
                 }
             }

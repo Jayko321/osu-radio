@@ -16,6 +16,79 @@ T06 (2026-10-16): queue REST/NDJSON DTOs, API wrappers and temporary VM projecti
 changed; previous line-count metrics below were not remeasured for those files.
 Executed transport/client checks and limits are in [T06](../impl/queue-rework/T06.md#отчёт-о-выполнении).
 
+## Arch Linux startup T01 (2026-10-17)
+
+[T01 report](../impl/arch-linux-release/T01.md#отчёт-о-выполнении) records the
+executed commands and environment limits. Earlier observed-line measurements
+below were not refreshed for the changed files.
+
+- [Server configuration](../../apps/osu-radio-server/src/config.rs) and its
+  [subprocess assertions](../../apps/osu-radio-server/src/config/tests.rs) cover
+  Linux SQLite XDG/HOME defaults, spaces, explicit URL precedence, missing HOME,
+  deterministic directory errors and exact `OSU_RADIO_SKIP_DOTENV=1` behavior.
+  [Actual startup checks](../../apps/osu-radio-server/tests/startup.rs) save a
+  private folder record and reopen it after restart under four XDG variants;
+  failures have nonzero exit and no readiness. Default/docs-off suites passed
+  73/66 unit tests plus six startup tests each. PostgreSQL config passed nine
+  tests without opening a PostgreSQL database.
+- [Client supervision](../../crates/osu-radio-client/src/server.rs) is exercised
+  by the isolated [embedded test](../../crates/osu-radio-client/tests/embedded_server.rs):
+  private HOME/XDG, six cwd/parent dotenv cases, retained data and remote ownership
+  with a missing local binary. Client library mock off/on passed 197/213 tests.
+- [Qt runner](../../apps/osu-radio-qt/tests/launch_smoke.rs), shared
+  [queue fixture](../../apps/osu-radio-qt/tests/fixtures/queue_backend.py) and
+  [client consumer](../../crates/osu-radio-client/src/playback/tests/real_backend.rs)
+  now pass private database/helper settings explicitly instead of through `.env`.
+  All three actual-backend Qt probes and the client fake-engine queue probe
+  passed, including prepare/restart/reimport/verify on the same fixture database.
+  Ordinary Qt checks passed seven unit tests and 28 smoke tests; Python passed 20.
+- Debug server/Qt builds, scoped all-target Clippy (server SQLite docs on/off,
+  PostgreSQL docs on/off, client mock on/off and Qt), formatting and whitespace
+  checks passed. Socket tests required execution outside the restricted sandbox.
+  Local .NET workload-manifest failure required the existing prebuilt-helper
+  override; this is build-tree verification, not a clean production-helper build.
+  Native Windows, KDE, actual source libraries and physical audio remain unverified.
+
+## Arch Linux version and About T02 (2026-10-17)
+
+[T02 report](../impl/arch-linux-release/T02.md#отчёт-о-выполнении) records the
+commands and limits; existing observed-line measurements were not refreshed.
+
+- [Qt startup](../../apps/osu-radio-qt/src/main.rs) sets the Cargo version through
+  CXX-Qt before loading QML. Locked Cargo metadata and a lockfile comparison
+  confirm `0.1.0-alpha` for Qt/server and no dependency updates.
+- The existing [Settings probe](../../apps/osu-radio-qt/tests/AdapterProbe.qml)
+  checks the exact release version, MIT, accessible project URL, and a temporary
+  metadata change that distinguishes a binding from hardcoded QML text. It
+  exercises About/Version/License/Project searches, case/whitespace, hidden-row
+  spacing, no-match recovery and restored sections. Existing selection, Songs
+  query and HTTP-fixture assertions remain; the runner also rejects POST/DELETE
+  requests during this scenario.
+- Qt build and tests passed: seven unit tests and 28 ordinary smoke scenarios;
+  three opt-in actual-backend probes were not rerun. Gallery-offline and isolated
+  QSettings persistence/error scenarios passed. Client mock off/on passed
+  197/213 library tests (three ignored benchmarks in each run). Generated-import
+  QML lint, scoped Qt/client all-target Clippy and formatting passed. Full command
+  results are recorded in T02.
+- This uses the T01 prebuilt-helper override, private settings/databases and
+  loopback fixtures outside the sandbox. Installed-package About/link activation,
+  KDE, native Windows, source-library import and physical audio remain separate
+  acceptance checks.
+
+## Arch Linux package readiness T05 (2026-10-17)
+
+The [T05 report](../impl/arch-linux-release/T05.md#отчёт-о-выполнении) records
+an unavailable release source: GitHub tag API/archive returned HTTP 404 and
+HTTPS `git ls-remote` succeeded with no matching tag. Bash syntax, desktop entry
+validation and generated `.SRCINFO` comparison passed. No product code or recipe
+changed; the blocking zero archive checksum remains.
+
+No clean-chroot build, namcap analysis, final package installation, SDK-free
+installed helper export of a valid Realm fixture or release-version check was
+performed. T04's local snapshot evidence was not rerun or promoted to release
+acceptance. R1/R2/R5/R6/R8 and T06's package prerequisite remain open; earlier
+observed-line measurements and the inventory below were not refreshed.
+
 ## Executed focused checks
 
 - `cargo test -p osu-radio-cli -p radio-core --locked --offline -j 1`:
@@ -1162,3 +1235,31 @@ limits are recorded in [T10](../impl/queue-rework/T10.md#отчёт-о-выпо�
 | [crates/radio-services/src/tests/queue_t02.rs](../../crates/radio-services/src/tests/queue_t02.rs) | Focused | — | Shared SQLite/PostgreSQL contracts: identity/edits/waiting, 4999/5000/5001 history, counter overflow, rollback and independent writers. |
 | [crates/radio-services/src/tests/queue_t03.rs](../../crates/radio-services/src/tests/queue_t03.rs) | Focused | — | Shared SQLite/PostgreSQL whole-playlist append/R7 contracts: fixed snapshots, duplicates, unavailable, silent append and atomic errors. |
 | [docs/specs/queue-rework.md](../../docs/specs/queue-rework.md) | Focused | — | Markdown nonempty text, closed fences and local file/heading links; product acceptance and prose facts are recorded separately. |
+
+## Arch release material inventory additions (2026-10-17)
+
+These entries cover the release source checkout, which retains the committed
+ignore policy and excludes local implementation cards. Material checks and
+T03/T04 evidence do not establish final clean-chroot or installed-package coverage.
+
+| File | Status | Observed lines | Evidence / limits |
+| --- | --- | --- | --- |
+| [LICENSE](../../LICENSE) | Focused | — | T03 full-text/hash/provenance checks and T04 staged package byte comparison; final installed-license analysis remains T05. |
+| [docs/specs/arch-linux-release.md](../../docs/specs/arch-linux-release.md) | Focused | — | Repository checks validate nonempty UTF-8, closed fences and local links; release acceptance remains T05/T06. |
+| [packaging/arch/.SRCINFO](../../packaging/arch/.SRCINFO) | Focused | — | T04 staging/package evidence; T05 Bash syntax, desktop validation and generated SRCINFO comparison pass. Final tag build and installation remain open. |
+| [packaging/arch/PKGBUILD](../../packaging/arch/PKGBUILD) | Focused | — | T04 staging/package evidence; T05 Bash syntax, desktop validation and generated SRCINFO comparison pass. Final tag build and installation remain open. |
+| [packaging/arch/README.md](../../packaging/arch/README.md) | Focused | — | Repository checks validate nonempty UTF-8, closed fences and local links; release acceptance remains T05/T06. |
+| [packaging/arch/licenses/HELPER-FILES.tsv](../../packaging/arch/licenses/HELPER-FILES.tsv) | Focused | — | T03 full-text/hash/provenance checks and T04 staged package byte comparison; final installed-license analysis remains T05. |
+| [packaging/arch/licenses/HELPER-NOTICES.txt](../../packaging/arch/licenses/HELPER-NOTICES.txt) | Focused | — | T03 full-text/hash/provenance checks and T04 staged package byte comparison; final installed-license analysis remains T05. |
+| [packaging/arch/licenses/LUCIDE-LICENSE](../../packaging/arch/licenses/LUCIDE-LICENSE) | Focused | — | T03 full-text/hash/provenance checks and T04 staged package byte comparison; final installed-license analysis remains T05. |
+| [packaging/arch/licenses/NUNITO-OFL.txt](../../packaging/arch/licenses/NUNITO-OFL.txt) | Focused | — | T03 full-text/hash/provenance checks and T04 staged package byte comparison; final installed-license analysis remains T05. |
+| [packaging/arch/licenses/OPENSSL-NOTICES.txt](../../packaging/arch/licenses/OPENSSL-NOTICES.txt) | Focused | — | T03 full-text/hash/provenance checks and T04 staged package byte comparison; final installed-license analysis remains T05. |
+| [packaging/arch/licenses/POPPINS-OFL.txt](../../packaging/arch/licenses/POPPINS-OFL.txt) | Focused | — | T03 full-text/hash/provenance checks and T04 staged package byte comparison; final installed-license analysis remains T05. |
+| [packaging/arch/licenses/README.md](../../packaging/arch/licenses/README.md) | Focused | — | Repository checks validate nonempty UTF-8, closed fences and local links; release acceptance remains T05/T06. |
+| [packaging/arch/licenses/REMIX-LICENSE](../../packaging/arch/licenses/REMIX-LICENSE) | Focused | — | T03 full-text/hash/provenance checks and T04 staged package byte comparison; final installed-license analysis remains T05. |
+| [packaging/arch/licenses/RUST-NOTICES.txt](../../packaging/arch/licenses/RUST-NOTICES.txt) | Focused | — | T03 full-text/hash/provenance checks and T04 staged package byte comparison; final installed-license analysis remains T05. |
+| [packaging/arch/licenses/RUST-PACKAGES.tsv](../../packaging/arch/licenses/RUST-PACKAGES.tsv) | Focused | — | T03 full-text/hash/provenance checks and T04 staged package byte comparison; final installed-license analysis remains T05. |
+| [packaging/arch/licenses/RUST-STDLIB-COPYRIGHT.html](../../packaging/arch/licenses/RUST-STDLIB-COPYRIGHT.html) | Focused | — | T03 full-text/hash/provenance checks and T04 staged package byte comparison; final installed-license analysis remains T05. |
+| [packaging/arch/licenses/RUST-STDLIB-LICENSES.txt](../../packaging/arch/licenses/RUST-STDLIB-LICENSES.txt) | Focused | — | T03 full-text/hash/provenance checks and T04 staged package byte comparison; final installed-license analysis remains T05. |
+| [packaging/arch/licenses/SQLITE-NOTICE.txt](../../packaging/arch/licenses/SQLITE-NOTICE.txt) | Focused | — | T03 full-text/hash/provenance checks and T04 staged package byte comparison; final installed-license analysis remains T05. |
+| [packaging/arch/osu-radio.desktop](../../packaging/arch/osu-radio.desktop) | Focused | — | T04 staging/package evidence; T05 Bash syntax, desktop validation and generated SRCINFO comparison pass. Final tag build and installation remain open. |

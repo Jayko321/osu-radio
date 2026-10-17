@@ -73,6 +73,9 @@ impl EmbeddedServer {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
+        #[cfg(target_os = "linux")]
+        command.env("OSU_RADIO_SKIP_DOTENV", "1");
+
         if let Some(directory) = &options.working_directory {
             command.current_dir(directory);
         }
@@ -270,11 +273,11 @@ impl fmt::Display for ServerError {
             ),
             Self::Exited(Some(status)) => write!(
                 formatter,
-                "the server stopped before it reported an address ({status}). SQLITE_DATABASE_URL must be set in the .env it loads."
+                "the server stopped before it reported an address ({status})."
             ),
             Self::Exited(None) => write!(
                 formatter,
-                "the server stopped before it reported an address. SQLITE_DATABASE_URL must be set in the .env it loads."
+                "the server stopped before it reported an address."
             ),
             Self::Cancelled => write!(formatter, "server startup was cancelled"),
             Self::Shutdown(error) => write!(formatter, "the server could not be stopped: {error}"),
@@ -429,12 +432,12 @@ mod tests {
             ),
             (
                 ServerError::Exited(Some("fixture exit".into())),
-                "the server stopped before it reported an address (fixture exit). SQLITE_DATABASE_URL must be set in the .env it loads.",
+                "the server stopped before it reported an address (fixture exit).",
                 false,
             ),
             (
                 ServerError::Exited(None),
-                "the server stopped before it reported an address. SQLITE_DATABASE_URL must be set in the .env it loads.",
+                "the server stopped before it reported an address.",
                 false,
             ),
             (

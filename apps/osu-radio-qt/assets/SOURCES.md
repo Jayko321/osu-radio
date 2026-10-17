@@ -19,6 +19,9 @@ The standalone component gallery needs no server or working-directory assets.
   See [REMIX-LICENSE](icons/REMIX-LICENSE) for the Apache 2.0 license.
   Figma export was unavailable due to its Starter tool limit; these are upstream
   originals rather than verified exports of the Figma instances.
+- `icons/{add-to-queue,playlist-delete,playlist-edit}.svg`: 16px design variants
+  of Lucide's corner-down-left, delete and pencil-line shapes. They retain the
+  Lucide/Feather notices below; they are not byte-identical 24px originals.
 - Remaining `icons/*.svg`: original, unmodified 24px SVGs from
   [Lucide](https://github.com/lucide-icons/lucide/tree/main/icons).
   [LUCIDE-LICENSE](icons/LUCIDE-LICENSE) includes the Lucide and Feather notices.
@@ -27,3 +30,9 @@ The standalone component gallery needs no server or working-directory assets.
 - `logos/stable.png` and `logos/lazer.png`: original raster assets supplied in
   [the folder reference](https://www.figma.com/design/VQULSEzRKI4ki7uWGJEezk/osu-radio--Copy-?node-id=415-244),
   nodes `415:250` and `415:279`, downloaded without modification on 2026-09-28.
+  On 2026-10-17 the maintainer confirmed oral permission to redistribute both
+  images. No separate image license text was supplied; the project's MIT
+  license does not relicense them.
+
+The Arch distribution carries the complete notices and the dependency inventory
+in [packaging/arch/licenses](../../../packaging/arch/licenses/README.md).

@@ -19,15 +19,24 @@ pub(crate) struct ServerConfig {
 
 impl ServerConfig {
     pub(crate) fn from_env() -> Result<Self> {
-        match dotenvy::dotenv() {
-            Ok(_) => {}
-            Err(error) if error.not_found() => {}
-            Err(error) => return Err(error).context("Failed to load .env"),
+        if env::var_os("OSU_RADIO_SKIP_DOTENV").as_deref() != Some(std::ffi::OsStr::new("1")) {
+            match dotenvy::dotenv() {
+                Ok(_) => {}
+                Err(error) if error.not_found() => {}
+                Err(error) => return Err(error).context("Failed to load .env"),
+            }
         }
 
-        let database_url = env::var(DATABASE_URL_ENV).with_context(|| {
-            format!("{DATABASE_URL_ENV} must be set in the environment or .env")
-        })?;
+        let database_url = match env::var(DATABASE_URL_ENV) {
+            Ok(url) => url,
+            #[cfg(all(target_os = "linux", feature = "sqlite"))]
+            Err(env::VarError::NotPresent) => default_sqlite_path()?,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("{DATABASE_URL_ENV} must be set in the environment or .env")
+                });
+            }
+        };
         let address = env::var(ADDRESS_ENV).unwrap_or_else(|_| DEFAULT_ADDRESS.to_owned());
 
         Ok(Self {
@@ -35,4 +44,33 @@ impl ServerConfig {
             database_url,
         })
     }
+}
+
+#[cfg(all(target_os = "linux", feature = "sqlite"))]
+fn default_sqlite_path() -> Result<String> {
+    use std::{fs, path::PathBuf};
+
+    let base = env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            env::var_os("HOME")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .map(|home| home.join(".local/share"))
+        })
+        .context("Cannot determine SQLite data directory: set an absolute XDG_DATA_HOME or HOME")?;
+    let directory = base.join("osu-radio");
+    let path = directory.join("osu-radio.db");
+    let url = path
+        .to_str()
+        .context("SQLite data path is not valid UTF-8")?
+        .to_owned();
+    fs::create_dir_all(&directory).with_context(|| {
+        format!(
+            "Failed to create SQLite data directory `{}`",
+            directory.display()
+        )
+    })?;
+    Ok(url)
 }

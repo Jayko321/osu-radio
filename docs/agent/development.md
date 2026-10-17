@@ -43,6 +43,49 @@ frontends.
   machine. `--locked` protects Cargo.lock; it does not make builds offline or
   prevent generated artifacts under `target/` and the helper build directories.
 
+### Arch Linux packaging
+
+The preliminary [Arch kit](../../packaging/arch/README.md) contains the
+[PKGBUILD](../../packaging/arch/PKGBUILD), generated
+[.SRCINFO](../../packaging/arch/.SRCINFO), menu entry and distribution notices.
+It targets x86_64 and the `v0.1.0-alpha` GitHub archive. The zero archive checksum
+intentionally prevents release builds until T05 supplies the published archive's
+SHA-256; do not use `SKIP`. Once finalized, build/install with `makepkg -si`
+from a separate packaging directory as an ordinary user.
+
+The recipe installs the pinned Rust toolchain through rustup into its own home,
+uses private Cargo/NuGet/.NET homes and caches, selects SDK 8, and explicitly
+links with LLD. Production Rust output is in `src/target-production`, separate
+from development/test targets. Qt and the default SQLite/API-docs server use
+`cargo build --release --locked`; PostgreSQL is not enabled. The real helper
+uses framework-dependent `dotnet publish --runtime linux-x64 --self-contained false`.
+Its complete publish directory and all [notices](../../packaging/arch/licenses/README.md)
+are packaged. System HOME and user data are not changed by the recipe.
+
+Material checks (no build/install):
+
+```sh
+bash -n packaging/arch/PKGBUILD
+desktop-file-validate packaging/arch/osu-radio.desktop
+makepkg --dir packaging/arch --printsrcinfo
+```
+
+Compare the final output with the checked-in `.SRCINFO`. Local-source recipe
+verification is recorded in [T04](../impl/arch-linux-release/T04.md); clean Arch
+chroot, published-tag checksum/dependency analysis and installed components
+belong to T05. KDE menu, real libraries/audio and update/reinstall acceptance
+belong to T06; material checks do not establish those outcomes.
+
+The [T05 readiness check](../impl/arch-linux-release/T05.md#отчёт-о-выполнении)
+on 2026-10-17 confirmed that the public tag/archive were unavailable (HTTP 404
+and an empty successful HTTPS `git ls-remote`). Material checks passed; the zero
+checksum remains. The host lacked `devtools`, `namcap` and SDK 8; no clean chroot
+or final package was produced. Follow the current Arch
+[clean-chroot procedure](https://wiki.archlinux.org/title/Building_in_a_clean_chroot)
+and [namcap guidance](https://wiki.archlinux.org/title/Creating_packages) when
+the release source is available. T04's local snapshot is preliminary evidence;
+T06 still requires the finalized and verified T05 package.
+
 ### Linux CI
 
 [`Linux CI`](../../.github/workflows/linux-ci.yml) runs on pushes to `main`,
@@ -112,8 +155,8 @@ Clippy, not `cargo fmt` or the helper's NuGet restore.
 | `OSU_RADIO_SERVER_ADDRESS` | Standalone default is `127.0.0.1:3000`; the supervisor supplies `ServerOptions::address`, default `127.0.0.1:0`. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
 | `OSU_RADIO_SERVER_URL` | Qt connects to this existing HTTP(S) server instead of starting a child. No local server binary or database URL is needed. Empty/invalid values fail the connection. Gallery ignores it. | [AppBridge](../../apps/osu-radio-qt/src/app_bridge.rs), [session](../../crates/osu-radio-client/src/session.rs) |
 | `OSU_RADIO_SERVER_BIN` | Server executable override after explicit `ServerOptions::binary`, before sibling and `PATH` lookup. | [Supervisor](../../crates/osu-radio-client/src/server.rs) |
-| `SQLITE_DATABASE_URL` / `POSTGRES_DATABASE_URL` | Required by SQLite / PostgreSQL CLI and server builds respectively. SQLite accepts paths, SQLite URLs and `:memory:`. | [Server config](../../apps/osu-radio-server/src/config.rs) |
-| `.env` and process working directory | Server allows a missing `.env` when the selected database URL is in the process environment. Existing variables take precedence over file values; other I/O/parse errors are fatal. `ServerOptions::working_directory` selects where dotenv searches the child directory and its ancestors. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
+| `SQLITE_DATABASE_URL` / `POSTGRES_DATABASE_URL` | CLI requires its selected URL; PostgreSQL server also requires its URL. Linux SQLite server alone defaults to `$XDG_DATA_HOME/osu-radio/osu-radio.db`, or `$HOME/.local/share/osu-radio/osu-radio.db` for missing/empty/relative XDG. Explicit SQLite paths, URLs and `:memory:` retain priority; only the fallback creates parent directories. | [Server config](../../apps/osu-radio-server/src/config.rs) |
+| `OSU_RADIO_SKIP_DOTENV`, `.env` and working directory | Exactly `1` skips server dotenv loading; the Linux supervisor sets it on every child. Standalone defaults to searching cwd and ancestors. Missing files are allowed, process variables take priority, and other read/parse errors are fatal. `ServerOptions::working_directory` still controls cwd. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
 
 Discovery's default candidates also consult OS location inputs such as
 `XDG_DATA_HOME` on Linux and `APPDATA`, `LOCALAPPDATA`, `USERPROFILE`, and program
@@ -325,9 +368,10 @@ client behavior (before it retained all difficulties).
 
 `controller_http_timings` measures HTTP through controller completion, with and
 without 200 ms debounce. Set `RADIO_SEARCH_BENCH_BINARY` to the saved server,
-`RADIO_SEARCH_BENCH_WORKDIR` to a directory whose `.env` selects the backup, and
+`RADIO_SEARCH_BENCH_WORKDIR` to a private working directory, explicitly set
+`SQLITE_DATABASE_URL` to the disposable backup (Linux children skip `.env`), and
 `RADIO_SEARCH_BENCH_COMPACT=0` for the original endpoint or `1` for the new endpoint.
-Unset inherited `SQLITE_DATABASE_URL` / `POSTGRES_DATABASE_URL` when running it.
+Unset inherited `POSTGRES_DATABASE_URL` and verify the explicit SQLite URL before running it.
 The compact case exercises the actual controller task; the original case replays
 the old request/mapper into the same controller. Child startup, GUI painting,
 media fetching and source import are excluded. Do not run other CPU-intensive
@@ -355,7 +399,7 @@ validation. Check the affected interactions using the [GUI skill](../../.agents/
 
 The ignored [embedded-server test](../../crates/osu-radio-client/tests/embedded_server.rs)
 also launches a real server and exercises database-backed requests. It is not a
-replacement for the isolated readiness parser tests; it creates its own temporary SQLite database and `.env`, and requires a built SQLite server. Run with `env -u SQLITE_DATABASE_URL -u POSTGRES_DATABASE_URL cargo test -p osu-radio-client --test embedded_server --locked -- --ignored`. It covers registration, duplicates, label clearing, enabled edits, deletion, media route registration and restart persistence.
+replacement for the isolated readiness parser tests; it clears inherited app configuration in a subprocess and creates its own temporary HOME/XDG SQLite database (explicit private URL outside Linux), and requires a built SQLite server. Run with `env -u SQLITE_DATABASE_URL -u POSTGRES_DATABASE_URL cargo test -p osu-radio-client --test embedded_server --locked -- --ignored`. It covers registration, duplicates, label clearing, enabled edits, deletion, media route registration, remote ownership with a missing local binary, restart persistence and (Linux) ignored valid/malformed/unreadable `.env` in cwd and its parent.
 
 ## Component gallery
 
@@ -553,7 +597,10 @@ smoke test uses the `settings-search` probe case: real keyboard edits/clearing,
 case-insensitive title/name filtering, whitespace, no-match recovery, conditional
 global volume, hidden-row spacing, long wrapped status scroll/reset and retained
 query/selection across tabs. Its isolated HTTP fixture also checks that Settings
-search never sends a library search query. Run it alone with
+search never sends a library search query or creates/deletes backend data. It
+also checks About's exact release version, MIT and project URL, metadata binding,
+section/field filtering and empty-state recovery; clicking the external URL in
+an installed desktop session belongs to release T06. Run it alone with
 `cargo test -p osu-radio-qt --locked --test launch_smoke settings_search_filters_visible_labels_and_preserves_layout_and_state`.
 The [media controller tests](../../crates/osu-radio-client/src/controller.rs)
 cover replacement of visible demand, canceled HTTP, selected/queue demand,

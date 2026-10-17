@@ -1,0 +1,32 @@
+pkgbase = osu-radio
+	pkgdesc = Desktop music player for local osu! libraries
+	pkgver = 0.1.0alpha
+	pkgrel = 1
+	url = https://github.com/Jayko321/osu-radio
+	arch = x86_64
+	license = MIT
+	makedepends = rustup
+	makedepends = dotnet-sdk-8.0
+	makedepends = lld
+	makedepends = pkgconf
+	depends = glibc
+	depends = libgcc
+	depends = libstdc++
+	depends = alsa-lib
+	depends = qt6-base>=6.8
+	depends = qt6-declarative>=6.8
+	depends = qt6-svg
+	depends = qt6-wayland
+	depends = dotnet-runtime-8.0
+	depends = xdg-desktop-portal
+	depends = xdg-desktop-portal-impl
+	optdepends = osu: osu!stable library (manually installed libraries also work)
+	optdepends = osu-lazer-bin: osu!lazer library (manually installed libraries also work)
+	options = !lto
+	options = !debug
+	source = osu-radio-0.1.0-alpha.tar.gz::https://github.com/Jayko321/osu-radio/archive/refs/tags/v0.1.0-alpha.tar.gz
+	source = osu-radio.desktop
+	sha256sums = 0000000000000000000000000000000000000000000000000000000000000000
+	sha256sums = f99337fc9f9d60437461a3e887b0f6259202de5774224f611b85eb6f03b1b2b9
+
+pkgname = osu-radio
