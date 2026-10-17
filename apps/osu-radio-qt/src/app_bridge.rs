@@ -189,31 +189,35 @@ impl ffi::AppBridge {
             let thread = self.qt_thread();
             let slot = Arc::new(Mutex::new(None::<AppController>));
             let callback_slot = slot.clone();
-            let controller =
-                AppController::spawn(&context.handle, ServerOptions::default(), move |update| {
-                    if let AppUpdate::Artwork {
-                        ticket,
-                        cover_id,
-                        bytes,
-                    } = update
-                    {
-                        let controller = callback_slot
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .clone();
-                        if let Some(controller) = controller {
-                            let ack = ArtworkAck {
-                                controller,
-                                ticket,
-                                available: false,
-                            };
-                            // Undelivered closures release the media slot after QObject destruction.
-                            let _ = thread.queue(move |object| object.decode(ack, cover_id, bytes));
-                        }
-                    } else {
-                        let _ = thread.queue(move |object| object.apply(update));
+            let options = ServerOptions {
+                remote_url: std::env::var_os("OSU_RADIO_SERVER_URL")
+                    .map(|url| url.to_string_lossy().into_owned()),
+                ..ServerOptions::default()
+            };
+            let controller = AppController::spawn(&context.handle, options, move |update| {
+                if let AppUpdate::Artwork {
+                    ticket,
+                    cover_id,
+                    bytes,
+                } = update
+                {
+                    let controller = callback_slot
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone();
+                    if let Some(controller) = controller {
+                        let ack = ArtworkAck {
+                            controller,
+                            ticket,
+                            available: false,
+                        };
+                        // Undelivered closures release the media slot after QObject destruction.
+                        let _ = thread.queue(move |object| object.decode(ack, cover_id, bytes));
                     }
-                });
+                } else {
+                    let _ = thread.queue(move |object| object.apply(update));
+                }
+            });
             *slot
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(controller.clone());

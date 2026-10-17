@@ -57,8 +57,10 @@ the current order in source, not a separate HTTP health-check protocol.
 
 ## Embedded readiness and lifecycle
 
-The current desktop frontend launches a child server. This is today's deployment
-choice, not a permanent requirement for Windows, Linux, or future mobile apps.
+The desktop frontend launches a child server by default. With
+`OSU_RADIO_SERVER_URL` set, Qt connects to an existing server instead; see
+[remote sessions](frontend.md#session-and-server-supervision). This does not
+change the HTTP contracts or select a hosted-source provider.
 
 `EmbeddedServer::start` uses `ServerOptions::address`, whose default is
 `127.0.0.1:0`, as the child's `OSU_RADIO_SERVER_ADDRESS`. Port zero requests an
@@ -109,7 +111,15 @@ is read through readiness and afterward. Logs receive a `[server]` prefix in the
 parent. Keep draining both pipes so a full buffer cannot stall the child.
 Premature exit, output-read failure, spawn failure, and timeout are exposed as
 `ServerError` variants. `Session::start` pairs this server with an `ApiClient`
-pointing at the reported URL.
+pointing at the reported URL. With `ServerOptions::remote_url`, it instead
+validates an HTTP(S) base URL and reads `GET /api/queue` before reporting a
+connection. Invalid URLs, HTTP/status/JSON failures and startup timeout fail the
+connection; cancellation drops the pending request. Remote session shutdown and
+drop never terminate the external server.
+
+The [embedded-server integration test](../../crates/osu-radio-client/tests/embedded_server.rs)
+also attaches a remote session to the real SQLite server, checks shared folder
+and queue reads, and confirms it still answers after that session shuts down.
 
 `shutdown` kills and awaits the owned child; repeated shutdown is harmless after
 the child has been taken. `Drop` requests termination, and Tokio's child has

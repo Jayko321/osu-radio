@@ -26,6 +26,8 @@ const READY_MARKER: &str = "listening on ";
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
+    /// Connect to this existing server instead of starting a child process.
+    pub remote_url: Option<String>,
     pub binary: Option<PathBuf>,
     pub working_directory: Option<PathBuf>,
     pub address: String,
@@ -35,6 +37,7 @@ pub struct ServerOptions {
 impl Default for ServerOptions {
     fn default() -> Self {
         Self {
+            remote_url: None,
             binary: None,
             working_directory: None,
             address: EPHEMERAL_ADDRESS.to_owned(),

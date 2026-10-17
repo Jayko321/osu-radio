@@ -79,6 +79,21 @@ async fn the_embedded_server_answers_on_the_port_it_reports() {
     assert!(!updated.enabled);
     assert!(session.api().cover(i32::MAX).await.unwrap().is_none());
     assert!(session.api().audio_duration(i32::MAX).await.is_err());
+    let remote = Session::start(ServerOptions {
+        remote_url: Some(session.base_url().to_owned()),
+        binary: Some(directory.path().join("missing-local-server")),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        remote.api().osu_folders().await.unwrap(),
+        vec![updated.clone()]
+    );
+    assert!(remote.api().queue().await.unwrap().entries.is_empty());
+    remote.shutdown().await.unwrap();
+    drop(remote);
+    assert_eq!(session.api().user_data().await.unwrap().id, 1);
     session.shutdown().await.unwrap();
 
     let session = Session::start(options).await.unwrap();

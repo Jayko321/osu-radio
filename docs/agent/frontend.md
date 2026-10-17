@@ -494,11 +494,21 @@ input, Windows, physical audio or real-database end-to-end acceptance (T10).
 
 ## Session and server supervision
 
-`Session::start` starts `EmbeddedServer`, then creates an `ApiClient` at the reported URL. `Session` exposes `api`, `base_url`, and asynchronous `shutdown`. It does not itself perform an HTTP readiness request. After `Connected`, the GUI loads library and folders independently, each with loading, empty and error states. Songs have a “Refresh library” button in the bottom-left footer, outside the scrolling list; it also retries failures and is disabled while loading. Status messages remain above the list and are hidden when empty. Settings show Retry only after a failure.
+`Session::start` starts `EmbeddedServer` by default, then creates an `ApiClient` at the reported URL. With `ServerOptions::remote_url`, it connects to that existing server without resolving a local executable or reading local database configuration. Remote URLs must use HTTP(S), have a host, and contain no credentials, query or fragment; a reverse-proxy path prefix is allowed. A read of `GET /api/queue` must succeed within `startup_timeout` before `Connected`; local child startup still uses stdout readiness without an HTTP probe. Cancellation drops the remote request. `Session` exposes `api`, `base_url`, and asynchronous `shutdown`; shutdown/drop only stop an owned child, never an external server. After `Connected`, the GUI loads library and folders independently, each with loading, empty and error states. Songs have a “Refresh library” button in the bottom-left footer, outside the scrolling list; it also retries failures and is disabled while loading. Status messages remain above the list and are hidden when empty. Settings show Retry only after a failure.
+
+Qt reads the optional `OSU_RADIO_SERVER_URL` process environment variable in
+[AppBridge](../../apps/osu-radio-qt/src/app_bridge.rs). An empty/invalid value is
+a connection error, with no fallback to a local child. Without the variable,
+local startup is unchanged; the gallery remains offline. The remote server owns
+its library paths and shared queue/settings/playlists. Folder discovery acts on
+the server; the native folder chooser still selects paths on the client computer,
+so its result is usable remotely only when the same path exists on the server.
+There is no authentication or per-client queue isolation. Use a trusted LAN/VPN;
+the server is not configured for public Internet exposure.
 
 The current [supervisor](../../crates/osu-radio-client/src/server.rs) has these behaviors:
 
-- `ServerOptions` accepts `binary`, `working_directory`, `address`, and `startup_timeout`. Defaults are no binary/directory override, `127.0.0.1:0`, and 30 seconds. The address is configurable; the GUI uses those defaults, letting the OS select a port.
+- `ServerOptions` accepts `remote_url`, `binary`, `working_directory`, `address`, and `startup_timeout`. Defaults are no remote URL/binary/directory override, `127.0.0.1:0`, and 30 seconds. The address configures a local child; Qt uses its default, letting the OS select a port. With `remote_url`, child-process options are unused.
 - Binary resolution checks the explicit option, `OSU_RADIO_SERVER_BIN`, a sibling of the current executable, then the executable name on `PATH`. The filename uses the platform's executable suffix. Build the server before launching the GUI; its Cargo dependency on the client does not build the server executable.
 - The child receives `OSU_RADIO_SERVER_ADDRESS` from the options. It inherits the working directory unless overridden. Server configuration accepts a missing `.env` when the process environment supplies the database URL; existing malformed/unreadable files remain errors. See [backend configuration](backend.md) and the [server config source](../../apps/osu-radio-server/src/config.rs).
 - Stdin is closed. Stdout and stderr are piped and drained, with `[server]` prefixes. Stderr is forwarded while stdout is inspected for readiness; stdout continues forwarding afterward. Leaving either pipe unread can block the child.
@@ -507,6 +517,14 @@ The current [supervisor](../../crates/osu-radio-client/src/server.rs) has these 
 - `shutdown` takes the child once and awaits its termination; repeated shutdown is harmless. `kill_on_drop(true)` and `EmbeddedServer::drop` provide fallback termination, but `Drop` does not await it. A hard kill or crash of the parent cannot be assumed to run destructors or terminate the child.
 
 Readiness parsing has focused unit tests in [server.rs](../../crates/osu-radio-client/src/server.rs). The [ignored embedded-server integration test](../../crates/osu-radio-client/tests/embedded_server.rs) starts a real server and performs database-backed requests; it uses a disposable SQLite database and refuses configured database environment variables. Its prerequisites and scope are recorded in [development](development.md).
+
+[Session tests](../../crates/osu-radio-client/src/session.rs) cover remote HTTP
+readiness, bad URL/status/JSON, retry, timeout/cancellation and server survival
+after shutdown/drop. The `external_server_connects_without_a_local_binary_and_survives_qt_shutdown`
+[Qt probe](../../apps/osu-radio-qt/tests/launch_smoke.rs) uses a separate HTTP fixture
+and an unavailable local executable, checks library search and verifies that the
+external server still responds after Qt exits. These are loopback/offscreen checks;
+two-machine LAN, physical audio and Windows acceptance remain separate.
 
 ## GUI state and event flow
 

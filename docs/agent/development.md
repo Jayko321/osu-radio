@@ -110,6 +110,7 @@ Clippy, not `cargo fmt` or the helper's NuGet restore.
 | `OSU_LAZER_REALM_PARSER_BUILT_PATH` | Set by the build script and embedded with `env!`; this is generated build output, not the normal user override. | [Lazer process reader](../../crates/radio-scanner/src/lazer/scanner.rs) |
 | `DOTNET_CLI_HOME` | Used by the helper build when supplied; otherwise the build script uses `target/dotnet-home`. | [Build script](../../crates/radio-scanner/build.rs) |
 | `OSU_RADIO_SERVER_ADDRESS` | Standalone default is `127.0.0.1:3000`; the supervisor supplies `ServerOptions::address`, default `127.0.0.1:0`. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
+| `OSU_RADIO_SERVER_URL` | Qt connects to this existing HTTP(S) server instead of starting a child. No local server binary or database URL is needed. Empty/invalid values fail the connection. Gallery ignores it. | [AppBridge](../../apps/osu-radio-qt/src/app_bridge.rs), [session](../../crates/osu-radio-client/src/session.rs) |
 | `OSU_RADIO_SERVER_BIN` | Server executable override after explicit `ServerOptions::binary`, before sibling and `PATH` lookup. | [Supervisor](../../crates/osu-radio-client/src/server.rs) |
 | `SQLITE_DATABASE_URL` / `POSTGRES_DATABASE_URL` | Required by SQLite / PostgreSQL CLI and server builds respectively. SQLite accepts paths, SQLite URLs and `:memory:`. | [Server config](../../apps/osu-radio-server/src/config.rs) |
 | `.env` and process working directory | Server allows a missing `.env` when the selected database URL is in the process environment. Existing variables take precedence over file values; other I/O/parse errors are fatal. `ServerOptions::working_directory` selects where dotenv searches the child directory and its ancestors. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
@@ -487,6 +488,32 @@ cargo run -p osu-radio-qt --locked -- --help
 Default launch is live: first build `osu-radio-server` and supply the selected
 database URL in the environment or a loadable `.env`. `--component-gallery` is offline and requires
 no server, `.env`, database or osu! installation. `--help` and argument errors are handled before GUI initialization.
+
+For a trusted LAN, start the standalone server on its host with the usual database
+configuration. TCP port 3000 must be reachable from the client. Example on Linux:
+
+```sh
+OSU_RADIO_SERVER_ADDRESS=0.0.0.0:3000 cargo run -p osu-radio-server --locked
+```
+
+On the client machine, replace the example IP with the server's LAN address:
+
+```sh
+OSU_RADIO_SERVER_URL=http://192.168.1.10:3000 cargo run -p osu-radio-qt --locked
+```
+
+PowerShell with a built Windows client:
+
+```powershell
+$env:OSU_RADIO_SERVER_URL = 'http://192.168.1.10:3000'
+.\osu-radio-qt.exe
+```
+
+The address comes from the client's process environment, not the server's `.env`.
+Remove the variable to restore local startup. Remote sessions share the server's
+queue/library/settings; authentication is absent. Native folder-picker paths
+still refer to the client machine, while discovery/import run on the server.
+
 Recommended automated checks:
 
 ```sh

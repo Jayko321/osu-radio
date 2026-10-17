@@ -11,8 +11,20 @@ use std::{
 };
 
 fn run(args: &[&str], platform: &str, directory: &Path, server: &Path, case: &str) -> String {
+    run_with_server_url(args, platform, directory, server, case, None)
+}
+
+fn run_with_server_url(
+    args: &[&str],
+    platform: &str,
+    directory: &Path,
+    server: &Path,
+    case: &str,
+    server_url: Option<&str>,
+) -> String {
     let mut output = tempfile::tempfile().expect("captured output");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_osu-radio-qt"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_osu-radio-qt"));
+    command
         .args(args)
         .current_dir(directory)
         .env("XDG_CONFIG_HOME", directory.join("config"))
@@ -27,10 +39,15 @@ fn run(args: &[&str], platform: &str, directory: &Path, server: &Path, case: &st
         .env("OSU_RADIO_QT_PROBE_CASE", case)
         .env("OSU_RADIO_QT_PROBE_COVER", directory.join("source.png"))
         .env("OSU_RADIO_SERVER_BIN", server)
+        .env_remove("OSU_RADIO_SERVER_URL")
         .env_remove("SQLITE_DATABASE_URL")
         .env_remove("POSTGRES_DATABASE_URL")
         .env_remove("DISPLAY")
-        .env_remove("WAYLAND_DISPLAY")
+        .env_remove("WAYLAND_DISPLAY");
+    if let Some(url) = server_url {
+        command.env("OSU_RADIO_SERVER_URL", url);
+    }
+    let mut child = command
         .stdout(Stdio::from(output.try_clone().expect("stdout capture")))
         .stderr(Stdio::from(output.try_clone().expect("stderr capture")))
         .spawn()
@@ -79,6 +96,50 @@ fn assert_probe(output: &str) {
     ] {
         assert!(!output.contains(error), "QML diagnostic: {output}");
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn external_server_connects_without_a_local_binary_and_survives_qt_shutdown() {
+    use osu_radio_client::{ApiClient, EmbeddedServer, ServerOptions};
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().expect("isolated external server");
+    let fixture = directory.path().join("fixture-server");
+    std::fs::write(&fixture, format!(
+        "#!/usr/bin/env python3\nimport os\nos.environ['OSU_RADIO_QT_PROBE_CASE'] = 'search'\n{}",
+        include_str!("fixtures/server.py"),
+    )).expect("write fixture");
+    std::fs::set_permissions(&fixture, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fixture");
+    let runtime = tokio::runtime::Runtime::new().expect("external server runtime");
+    let server = runtime
+        .block_on(EmbeddedServer::start(ServerOptions {
+            binary: Some(fixture),
+            working_directory: Some(directory.path().to_owned()),
+            ..Default::default()
+        }))
+        .expect("start external fixture");
+    assert_probe(&run_with_server_url(
+        &[],
+        "offscreen",
+        directory.path(),
+        Path::new("/no/server/allowed"),
+        "search",
+        Some(server.base_url()),
+    ));
+    assert_eq!(
+        std::fs::read_to_string(directory.path().join("starts")).expect("startup count"),
+        "1"
+    );
+    let api = ApiClient::new(server.base_url()).expect("external API");
+    runtime
+        .block_on(api.queue())
+        .expect("external server still responds after Qt exits");
+    runtime
+        .block_on(server.shutdown())
+        .expect("stop external fixture");
+    assert_child_reaped(directory.path());
 }
 
 #[test]

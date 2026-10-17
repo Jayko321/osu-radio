@@ -70,6 +70,11 @@ worker. `osu-radio-player` accepts local files and owns synchronous decoding,
 seek, output and volume; it has no HTTP, database or GUI dependency. No server
 HTTP contract or schema change is part of this refactor.
 
+The client session either owns a local child server (the default) or connects to an
+existing server selected by `OSU_RADIO_SERVER_URL` in Qt. The latter session never
+starts or stops a server process; server data and the queue remain shared. Both
+modes use the same controller, HTTP API and local playback worker.
+
 The server's availability worker is owned by `serve`, starts after state recovery
 and listener preparation, and uses existing queue services for selection and guarded
 result commits. `AppState` retains only a wakeup signal, not its lifecycle handle.

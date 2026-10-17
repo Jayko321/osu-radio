@@ -48,7 +48,7 @@ arrows show intended future capabilities; they are not implemented paths.
 flowchart LR
     Qt["Qt/QML panels and adapters"] --> Client["Toolkit-free client: five VMs and coordinator"]
     Gallery["Standalone component galleries"] --> Mock["Memory-only demo state"]
-    Client -->|"HTTP; supervises child today"| Server["Backend: routes and services"]
+    Client -->|"HTTP; local child by default or existing server"| Server["Backend: routes and services"]
     Server --> Services["radio-services: model services and transactions"]
     Services -->|"folder discovery"| Scanner["Scanner: discovery and source readers"]
     Services --> DB["radio-db: repositories and constraints"]
