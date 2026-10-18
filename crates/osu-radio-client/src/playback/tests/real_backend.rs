@@ -97,6 +97,8 @@ async fn real_server_queue_and_fake_engine_preserve_launches_across_edits_and_re
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(directory.path().join("library.sqlite").is_file());
+    assert!(!directory.path().join(".env").exists());
     let options = ServerOptions {
         binary: Some(directory.path().join("fixture-server")),
         working_directory: Some(directory.path().to_owned()),
@@ -379,4 +381,8 @@ async fn real_server_queue_and_fake_engine_preserve_launches_across_edits_and_re
     drive(&mut recovered_core, api, &api.playback().await.unwrap()).await;
     assert!(recovered_core.player.is_none() && recovered_core.feedback.is_empty());
     session.shutdown().await.unwrap();
+    assert!(
+        !directory.path().join("data").exists(),
+        "explicit fixture URL must bypass XDG fallback"
+    );
 }

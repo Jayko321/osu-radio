@@ -2747,7 +2747,7 @@ dependencies = [
 
 [[package]]
 name = "osu-radio-qt"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "cxx",
  "cxx-qt",
@@ -2762,7 +2762,7 @@ dependencies = [
 
 [[package]]
 name = "osu-radio-server"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "anyhow",
  "axum",

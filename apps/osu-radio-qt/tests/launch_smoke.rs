@@ -40,7 +40,8 @@ fn run_with_server_url(
         .env("OSU_RADIO_QT_PROBE_COVER", directory.join("source.png"))
         .env("OSU_RADIO_SERVER_BIN", server)
         .env_remove("OSU_RADIO_SERVER_URL")
-        .env_remove("SQLITE_DATABASE_URL")
+        .env("SQLITE_DATABASE_URL", directory.join("library.sqlite"))
+        .env("XDG_DATA_HOME", directory.join("data"))
         .env_remove("POSTGRES_DATABASE_URL")
         .env_remove("DISPLAY")
         .env_remove("WAYLAND_DISPLAY");
@@ -457,6 +458,12 @@ fn settings_search_filters_visible_labels_and_preserves_layout_and_state() {
             .all(|line| line == "/api/tracks?q="),
         "Settings search must not search the library: {requests}"
     );
+    assert!(
+        !requests
+            .lines()
+            .any(|line| line.starts_with("POST ") || line.starts_with("DELETE ")),
+        "Settings/About search must not create or delete backend data: {requests}"
+    );
     assert_child_reaped(directory.path());
 }
 
@@ -869,11 +876,6 @@ fn assert_child_reaped(_directory: &Path) {}
 #[ignore = "needs cargo build -p osu-radio-server --locked (SQLite)"]
 fn real_backend_uses_a_disposable_database() {
     let directory = tempfile::tempdir().expect("isolated backend directory");
-    std::fs::write(
-        directory.path().join(".env"),
-        "SQLITE_DATABASE_URL=library.sqlite\n",
-    )
-    .expect("isolated env");
     let server = Path::new(env!("CARGO_BIN_EXE_osu-radio-qt"))
         .with_file_name(format!("osu-radio-server{}", std::env::consts::EXE_SUFFIX));
     assert!(
@@ -890,11 +892,6 @@ fn real_backend_uses_a_disposable_database() {
 #[ignore = "needs cargo build -p osu-radio-server --locked (SQLite)"]
 fn real_backend_playlists_use_a_disposable_database() {
     let directory = tempfile::tempdir().expect("isolated playlist backend directory");
-    std::fs::write(
-        directory.path().join(".env"),
-        "SQLITE_DATABASE_URL=library.sqlite\n",
-    )
-    .expect("isolated env");
     let server = Path::new(env!("CARGO_BIN_EXE_osu-radio-qt")).with_file_name("osu-radio-server");
     assert!(
         server.is_file(),

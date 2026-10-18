@@ -2,10 +2,10 @@
 __pycache__/
 tools/**/FodyWeavers.xsd
 /docs/*
+!/docs/impl/
 !/docs/agent/
 !/docs/specs/
 !/docs/specs/*.md
-!/docs/impl/
 /docs/impl/*
 !/docs/impl/*.md
 tools/**/bin/

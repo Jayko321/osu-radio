@@ -43,6 +43,97 @@ frontends.
   machine. `--locked` protects Cargo.lock; it does not make builds offline or
   prevent generated artifacts under `target/` and the helper build directories.
 
+### Arch Linux packaging
+
+The [Arch kit](../../packaging/arch/README.md) contains the
+[PKGBUILD](../../packaging/arch/PKGBUILD), generated
+[.SRCINFO](../../packaging/arch/.SRCINFO), menu entry and distribution notices.
+It targets x86_64 and the `v0.1.0-alpha` GitHub archive at source commit
+`bf941c29b2e69fa73aca6c1c6a7c1643f3a7f3f9`. T05 supplied the actual archive
+SHA-256 and regenerated `.SRCINFO`; do not use `SKIP`. Build/install with `makepkg -si`
+from a separate packaging directory as an ordinary user.
+
+The recipe installs the pinned Rust toolchain through rustup into its own home,
+uses private Cargo/NuGet/.NET homes and caches, selects SDK 8, and explicitly
+links with LLD. Production Rust output is in `src/target-production`, separate
+from development/test targets. Qt and the default SQLite/API-docs server use
+`cargo build --release --locked`; PostgreSQL is not enabled. The real helper
+uses framework-dependent `dotnet publish --runtime linux-x64 --self-contained false`.
+Its complete publish directory and all [notices](../../packaging/arch/licenses/README.md)
+are packaged. System HOME and user data are not changed by the recipe.
+
+Material checks (no build/install):
+
+```sh
+bash -n packaging/arch/PKGBUILD
+desktop-file-validate packaging/arch/osu-radio.desktop
+makepkg --dir packaging/arch --printsrcinfo
+```
+
+Compare the final output with the checked-in `.SRCINFO`. Local-source recipe
+verification is recorded in [T04](../impl/arch-linux-release/T04.md); clean Arch
+chroot, published-tag checksum/dependency analysis and installed components
+belong to T05. KDE menu, real libraries/audio and update/reinstall acceptance
+belong to T06; material checks do not establish those outcomes.
+
+The [T05 report](../impl/arch-linux-release/T05.md#отчёт-о-выполнении)
+records initial unavailability, then separately authorized publication of the
+source tag on 2026-10-17. All 357 archive files matched the source commit;
+the valid archive passed integrity checks and a corrupted copy was rejected.
+The clean build uses official `pacstrap -N`/`arch-chroot -N -r`, subordinate
+uid/gid mappings, separate build/runtime roots and a private package-manager
+keyring. A working resolv.conf is copied into the private root for `-r`, and
+proc is remounted in the final PID namespace before running .NET CLI (the
+wrapper's nested PID namespace otherwise mismatches `/proc/<pid>`). Only signed system package archives may come from the shared pacman
+cache; Cargo/rustup/NuGet caches start empty inside the build root. Follow the current Arch
+[clean-chroot procedure](https://wiki.archlinux.org/title/Building_in_a_clean_chroot)
+and [namcap guidance](https://wiki.archlinux.org/title/Creating_packages).
+
+T05 produced `target/arch-t05/osu-radio-0.1.0alpha-1-x86_64.pkg.tar.zst`,
+SHA-256 `ba4221bd7f1d4dab0ebed2024705a89ae245bf990d640b19af5dfebbe6ffb608`.
+The actual source-tag build and runtime-only installation passed. With source
+and build trees unavailable and no SDK, the installed helper exported a valid
+synthetic Realm fixture, the server answered HTTP and created private XDG SQLite,
+and installed Qt passed software/offscreen gallery and actual empty-backend probes.
+All 308 registry package versions/features/source hashes matched the license
+inventory. Namcap had warnings and no E-errors: its missing `OsuRadio` module is
+embedded; plugin/runtime/portal dependencies are intentional. Prebuilt native
+Realm 20.1.0 retains partial RELRO (no BIND_NOW), a recorded vendor hardening limit.
+See the report for other warning dispositions and exact environment versions.
+Those results handed the verified package to T06; subsequent native checks are
+recorded below.
+
+The [T06 report](../impl/arch-linux-release/T06.md#отчёт-о-выполнении)
+records partial installed-package acceptance on real KDE Wayland (KWin 6.7.5,
+Qt 6.12.0), using the runtime root above through bwrap and two private profiles.
+Default HOME and absolute XDG data/config/cache paths, actual child startup,
+installed About/search/values, real lazer import (13,115 sets / 53,799 maps),
+explicit Play and an active stereo PipeWire stream to Xonar U7 MKII passed.
+The test copy retains genuine Realm metadata but media for only two sets.
+Its 13 files and corresponding original osu! files retained their hashes.
+The runtime root needed the desktop's `pipewire-alsa` integration; signed system
+archives supplied it and its dependencies without changing the host or recipe.
+An active hardware stream does not establish that a person heard the output.
+
+Normal window close removed the owned server and the run's temporary audio file;
+an open temp-directory fd distinguished client cleanup from namespace teardown.
+Actual pacman upgrade from a test-only packaging revision 0.1.0alpha-0.1 to the
+final 0.1.0alpha-1, a separate reinstall, and subsequent startups retained all
+12 compared library/settings/migration tables and QSettings bytes. Queue/history
+runtime recovery is excluded from that comparison. Absolute XDG overrides also
+placed Mesa shader cache in the private cache directory, with no files in HOME
+or cwd, and restored both native Unicode controls on the second launch.
+
+T06 remains partial: the host package/menu was untouched, stable was not found
+in the explicitly scoped discovery, audible output is unconfirmed, and actual
+keyboard/browser rendering checks remain open. The real KDE picker opened but
+`xdg-desktop-portal-kde` crashed with SIGSEGV during AT-SPI interaction; selection
+did not complete. The cause is unproven and was not treated as an application
+defect. Global accessibility was restored to its original false state.
+About's Project action sent the correct native OpenURI request. Product sources,
+storage/protocols and the final package were unchanged; these installed-runtime
+checks did not rerun Cargo suites or Clippy and do not establish release acceptance.
+
 ### Linux CI
 
 [`Linux CI`](../../.github/workflows/linux-ci.yml) runs on pushes to `main`,
@@ -115,8 +206,8 @@ Clippy, not `cargo fmt` or the helper's NuGet restore.
 | `OSU_RADIO_SERVER_ADDRESS` | Standalone default is `127.0.0.1:3000`; the supervisor supplies `ServerOptions::address`, default `127.0.0.1:0`. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
 | `OSU_RADIO_SERVER_URL` | Qt connects to this existing HTTP(S) server instead of starting a child. No local server binary or database URL is needed. Empty/invalid values fail the connection. Gallery ignores it. | [AppBridge](../../apps/osu-radio-qt/src/app_bridge.rs), [session](../../crates/osu-radio-client/src/session.rs) |
 | `OSU_RADIO_SERVER_BIN` | Server executable override after explicit `ServerOptions::binary`, before sibling and `PATH` lookup. | [Supervisor](../../crates/osu-radio-client/src/server.rs) |
-| `SQLITE_DATABASE_URL` / `POSTGRES_DATABASE_URL` | Required by SQLite / PostgreSQL CLI and server builds respectively. SQLite accepts paths, SQLite URLs and `:memory:`. | [Server config](../../apps/osu-radio-server/src/config.rs) |
-| `.env` and process working directory | Server allows a missing `.env` when the selected database URL is in the process environment. Existing variables take precedence over file values; other I/O/parse errors are fatal. `ServerOptions::working_directory` selects where dotenv searches the child directory and its ancestors. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
+| `SQLITE_DATABASE_URL` / `POSTGRES_DATABASE_URL` | CLI requires its selected URL; PostgreSQL server also requires its URL. Linux SQLite server alone defaults to `$XDG_DATA_HOME/osu-radio/osu-radio.db`, or `$HOME/.local/share/osu-radio/osu-radio.db` for missing/empty/relative XDG. Explicit SQLite paths, URLs and `:memory:` retain priority; only the fallback creates parent directories. | [Server config](../../apps/osu-radio-server/src/config.rs) |
+| `OSU_RADIO_SKIP_DOTENV`, `.env` and working directory | Exactly `1` skips server dotenv loading; the Linux supervisor sets it on every child. Standalone defaults to searching cwd and ancestors. Missing files are allowed, process variables take priority, and other read/parse errors are fatal. `ServerOptions::working_directory` still controls cwd. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
 
 Discovery's default candidates also consult OS location inputs such as
 `XDG_DATA_HOME` on Linux and `APPDATA`, `LOCALAPPDATA`, `USERPROFILE`, and program
@@ -328,9 +419,10 @@ client behavior (before it retained all difficulties).
 
 `controller_http_timings` measures HTTP through controller completion, with and
 without 200 ms debounce. Set `RADIO_SEARCH_BENCH_BINARY` to the saved server,
-`RADIO_SEARCH_BENCH_WORKDIR` to a directory whose `.env` selects the backup, and
+`RADIO_SEARCH_BENCH_WORKDIR` to a private working directory, explicitly set
+`SQLITE_DATABASE_URL` to the disposable backup (Linux children skip `.env`), and
 `RADIO_SEARCH_BENCH_COMPACT=0` for the original endpoint or `1` for the new endpoint.
-Unset inherited `SQLITE_DATABASE_URL` / `POSTGRES_DATABASE_URL` when running it.
+Unset inherited `POSTGRES_DATABASE_URL` and verify the explicit SQLite URL before running it.
 The compact case exercises the actual controller task; the original case replays
 the old request/mapper into the same controller. Child startup, GUI painting,
 media fetching and source import are excluded. Do not run other CPU-intensive
@@ -358,7 +450,7 @@ validation. Check the affected interactions using the [GUI skill](../../.agents/
 
 The ignored [embedded-server test](../../crates/osu-radio-client/tests/embedded_server.rs)
 also launches a real server and exercises database-backed requests. It is not a
-replacement for the isolated readiness parser tests; it creates its own temporary SQLite database and `.env`, and requires a built SQLite server. Run with `env -u SQLITE_DATABASE_URL -u POSTGRES_DATABASE_URL cargo test -p osu-radio-client --test embedded_server --locked -- --ignored`. It covers registration, duplicates, label clearing, enabled edits, deletion, media route registration and restart persistence.
+replacement for the isolated readiness parser tests; it clears inherited app configuration in a subprocess and creates its own temporary HOME/XDG SQLite database (explicit private URL outside Linux), and requires a built SQLite server. Run with `env -u SQLITE_DATABASE_URL -u POSTGRES_DATABASE_URL cargo test -p osu-radio-client --test embedded_server --locked -- --ignored`. It covers registration, duplicates, label clearing, enabled edits, deletion, media route registration, remote ownership with a missing local binary, restart persistence and (Linux) ignored valid/malformed/unreadable `.env` in cwd and its parent.
 
 ## Component gallery
 
@@ -556,7 +648,10 @@ smoke test uses the `settings-search` probe case: real keyboard edits/clearing,
 case-insensitive title/name filtering, whitespace, no-match recovery, conditional
 global volume, hidden-row spacing, long wrapped status scroll/reset and retained
 query/selection across tabs. Its isolated HTTP fixture also checks that Settings
-search never sends a library search query. Run it alone with
+search never sends a library search query or creates/deletes backend data. It
+also checks About's exact release version, MIT and project URL, metadata binding,
+section/field filtering and empty-state recovery; clicking the external URL in
+an installed desktop session belongs to release T06. Run it alone with
 `cargo test -p osu-radio-qt --locked --test launch_smoke settings_search_filters_visible_labels_and_preserves_layout_and_state`.
 The [media controller tests](../../crates/osu-radio-client/src/controller.rs)
 cover replacement of visible demand, canceled HTTP, selected/queue demand,

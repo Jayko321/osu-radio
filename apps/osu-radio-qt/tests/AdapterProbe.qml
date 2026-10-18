@@ -179,8 +179,14 @@ QtObject {
         { query: "volume", general: false, audio: true, individual: true },
         { query: "Global volume", general: false, audio: false, individual: false },
         { query: "[missing]", general: false, audio: false, individual: false },
-        { query: "", general: true, audio: true, individual: true },
-        { query: "   ", general: true, audio: true, individual: true }
+        { query: " AbOuT ", general: false, audio: false, individual: false, about: true, version: true, license: true, project: true },
+        { query: " VeRsIoN ", general: false, audio: false, individual: false, about: true, version: true },
+        { query: "lIcEnSe", general: false, audio: false, individual: false, about: true, license: true },
+        { query: "pRoJeCt", general: false, audio: false, individual: false, about: true, project: true },
+        { query: "MIT", general: false, audio: false, individual: false },
+        { query: "github.com", general: false, audio: false, individual: false },
+        { query: "", general: true, audio: true, individual: true, about: true, version: true, license: true, project: true },
+        { query: "   ", general: true, audio: true, individual: true, about: true, version: true, license: true, project: true }
     ]
     readonly property TestCase input: TestCase { parent: probe.window ? probe.window.contentItem : null; when: false }
     readonly property var mock: gallery && window ? window.galleryStore.bridge : null
@@ -1040,6 +1046,11 @@ QtObject {
         const search = findChild(pane, "settingsSearch");
         const general = findChild(pane, "generalSettingsSection");
         const audio = findChild(pane, "audioSettingsSection");
+        const about = findChild(pane, "aboutSettingsSection");
+        const version = findChild(pane, "aboutVersion");
+        const license = findChild(pane, "aboutLicense");
+        const project = findChild(pane, "aboutProjectSetting");
+        const link = findChild(pane, "aboutProjectLink");
         const individual = findChild(pane, "individualVolumeSwitch");
         const global = findChild(pane, "globalVolumeSetting");
         const empty = findChild(pane, "settingsSearchEmpty");
@@ -1051,8 +1062,13 @@ QtObject {
             if ((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 3) return;
             bridge.library.selectTrack(42);
             input.mouseClick(findChild(window.contentItem, "settingsButton"));
-            check(general.visible && audio.visible && individual.visible && !global.visible && !empty.visible,
+            check(general.visible && audio.visible && about.visible && individual.visible && !global.visible && !empty.visible,
                 "empty query shows current settings and respects conditional global volume");
+            check(Qt.application.version === "0.1.0-alpha" && version.text === "Version — " + Qt.application.version,
+                "About shows the nonempty release version from Qt application metadata");
+            check(license.text === "License — MIT" && link.text === "https://github.com/Jayko321/osu-radio"
+                && link.Accessible.name === "Project: " + link.text && link.enabled,
+                "About exposes MIT and the accessible project link");
             input.mouseClick(search);
             input.keyClick(Qt.Key_A, Qt.NoModifier, 0);
             input.keyClick(Qt.Key_U, Qt.ShiftModifier, 0);
@@ -1073,7 +1089,15 @@ QtObject {
             check(general.visible === expected.general && audio.visible === expected.audio
                 && individual.visible === expected.individual && !global.visible,
                 "section/setting substring filter: " + expected.query);
-            check(empty.visible === (!expected.general && !expected.audio), "empty result state: " + expected.query);
+            check(about.visible === !!expected.about && version.visible === !!expected.version
+                && license.visible === !!expected.license && project.visible === !!expected.project,
+                "About section/field substring filter: " + expected.query);
+            if (about.visible && !expected.general && !expected.audio) {
+                const first = expected.version ? version : expected.license ? license : project;
+                check(about.y === 0 && first.y === findChild(about, "aboutSettingsHeader").height + about.spacing,
+                    "hidden About rows/sections leave no gaps: " + expected.query);
+            }
+            check(empty.visible === (!expected.general && !expected.audio && !expected.about), "empty result state: " + expected.query);
             if (empty.visible) {
                 check(empty.text.includes("No settings found") && empty.y === 0 && content.implicitHeight === empty.height,
                     "empty state is readable without hidden-section gaps");
@@ -1101,7 +1125,7 @@ QtObject {
             stage = 5;
             break;
         case 5:
-            check(search.text === "" && general.visible && audio.visible && !empty.visible
+            check(search.text === "" && general.visible && audio.visible && about.visible && !empty.visible
                 && scroll.contentHeight > scroll.height, "keyboard clear restores the full scroll layout");
             message.text = Qt.binding(() => bridge.settings.audioSettingsMessage);
             bridge.settings.setIndividualVolumeEnabled(true);
@@ -1149,6 +1173,17 @@ QtObject {
         case 12:
             check(empty.visible && !audio.visible && !global.visible,
                 "search never reveals a conditionally unavailable setting");
+            search.text = "version";
+            Qt.application.version = "metadata-binding-probe";
+            stage = 13;
+            break;
+        case 13:
+            check(version.text === "Version — metadata-binding-probe", "About follows application metadata changes");
+            Qt.application.version = "0.1.0-alpha";
+            stage = 14;
+            break;
+        case 14:
+            check(version.text === "Version — 0.1.0-alpha", "About restores the release metadata binding");
             finish();
             break;
         }

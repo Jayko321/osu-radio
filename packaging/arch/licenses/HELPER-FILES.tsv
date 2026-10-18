@@ -1,0 +1,10 @@
+filename	size	sha256	component	package_asset
+MongoDB.Bson.dll	509440	88937339a3abcb5bc700beb7d380b684e73cbbd517329cbb7b4f576bcbe94c68	MongoDB.Bson/2.21.0	lib/netstandard2.1/MongoDB.Bson.dll
+Realm.dll	362496	22a77fbf9c97b002a81786838a90b5ff357cbb96dc553c9a324d966d8a5e7584	Realm/20.1.0	lib/net8.0/Realm.dll
+Remotion.Linq.dll	176640	c3ec77926876c95d33770dc8eb05f0fa0556fd54c05147472593580b76bf2f2d	Remotion.Linq/2.2.0	lib/netstandard1.0/Remotion.Linq.dll
+librealm-wrappers.so	13473392	982e9febba48cf95bdbfd55dad4c1dc11d621e76087fd07f3cb84488eb7df9de	Realm/20.1.0	runtimes/linux-x64/native/librealm-wrappers.so
+osu-lazer-realm-parser	72504	86871bef3037c08301fa2d53ac8aff9ab69dfaea1394417eadb04c781f5872e8	Microsoft.NETCore.App.Host.linux-x64/8.0.32	patched apphost
+osu-lazer-realm-parser.deps.json	69119	264a5468e400373560e369054cd375abeff4c5aee730a3b8c6956613b1025a9c	osu-lazer-realm-parser source project	generated publish metadata/debug symbols
+osu-lazer-realm-parser.dll	29184	1665197f10c9e233e10c09ff88eb4e8d5842767ebdb3a37f62beb96cb7526f0b	osu-lazer-realm-parser/1.0.0	osu-lazer-realm-parser.dll
+osu-lazer-realm-parser.pdb	12708	7b94559ba7ead3e83135169fadfe0cded4325b6b301f9a4246c6b103e5f79d32	osu-lazer-realm-parser source project	generated publish metadata/debug symbols
+osu-lazer-realm-parser.runtimeconfig.json	328	97c9700542b659150b230c3578b29530fd76ab01ec66a92cd16945e0245713df	osu-lazer-realm-parser source project	generated publish metadata/debug symbols
