@@ -1,6 +1,7 @@
 //! Bounded, toolkit-free media pipeline state. Decoders acknowledge delivery explicitly.
 use super::workflow::{Effect, Workflow};
 use super::{AppUpdate, Completed, Duration, MediaTicket, Track};
+use osu_radio_media_controls::{Artwork, ArtworkKey};
 use std::collections::{HashMap, HashSet, VecDeque};
 use tokio::task::AbortHandle;
 
@@ -12,8 +13,14 @@ pub(crate) struct MediaJob {
     pub(crate) duration_pending: bool,
     pub(crate) tasks: Vec<AbortHandle>,
 }
+struct SystemArtwork {
+    audio_id: i32,
+    artwork: Artwork,
+    ticket: Option<MediaTicket>,
+}
 #[derive(Default)]
 pub(crate) struct MediaScheduler {
+    system: Option<SystemArtwork>,
     pub(crate) generation: u64,
     pub(crate) serial: u64,
     pub(crate) queue: VecDeque<(i32, bool)>,
@@ -26,6 +33,78 @@ pub(crate) struct MediaScheduler {
     pub(crate) unavailable: HashSet<i32>,
 }
 impl MediaScheduler {
+    pub(crate) fn sync_system_artwork(&mut self, current: Option<(i32, ArtworkKey)>) {
+        if self
+            .system
+            .as_ref()
+            .map(|system| (system.audio_id, system.artwork.key))
+            == current
+        {
+            return;
+        }
+        if let Some(ticket) = self.system.take().and_then(|system| system.ticket)
+            && let Some(job) = self
+                .jobs
+                .get_mut(&ticket.serial)
+                .filter(|job| job.ticket == ticket)
+        {
+            // A new launch cannot adopt the previous launch's in-flight response.
+            for task in job.tasks.drain(..) {
+                task.abort();
+            }
+            job.artwork_pending = false;
+            job.duration_pending = false;
+            if !job.decoding {
+                self.jobs.remove(&ticket.serial);
+            }
+        }
+        self.system = current.map(|(audio_id, key)| SystemArtwork {
+            audio_id,
+            artwork: Artwork { key, bytes: None },
+            ticket: None,
+        });
+    }
+
+    pub(crate) fn system_artwork(&self, current: Option<(i32, ArtworkKey)>) -> Option<Artwork> {
+        self.system
+            .as_ref()
+            .filter(|system| Some((system.audio_id, system.artwork.key)) == current)
+            .map(|system| system.artwork.clone())
+    }
+
+    fn system_missing(&self, id: i32) -> bool {
+        self.system.as_ref().is_some_and(|system| {
+            system.audio_id == id
+                && system.artwork.bytes.is_none()
+                && !self.unavailable.contains(&system.artwork.key.cover_id)
+        })
+    }
+
+    fn requested_cover(&self, id: i32, missing: bool, input: &MediaInput<'_>) -> Option<i32> {
+        if self.system_missing(id) {
+            self.system
+                .as_ref()
+                .map(|system| system.artwork.key.cover_id)
+        } else {
+            input
+                .track(id)
+                .and_then(|track| track.cover_beatmap_id)
+                .filter(|cover| missing && !self.unavailable.contains(cover))
+        }
+    }
+
+    fn share_system_request(&mut self, ticket: MediaTicket, cover: Option<i32>) {
+        if let Some(system) = &mut self.system
+            && system.audio_id == ticket.audio_id
+            && system.artwork.key.generation == ticket.generation
+            && Some(system.artwork.key.cover_id) == cover
+            && system.artwork.bytes.is_none()
+            && system.ticket.is_none()
+        {
+            system.ticket = Some(ticket);
+        }
+    }
+
     pub(crate) fn prioritize_selected(&mut self, id: Option<i32>) {
         if let Some(id) = id
             && let Some(index) = self.queue.iter().position(|(queued, _)| *queued == id)
@@ -42,6 +121,7 @@ impl MediaScheduler {
         }
     }
     pub(crate) fn advance(&mut self, invalidate: bool, has_selection: bool) {
+        self.system = None;
         self.generation = self.generation.wrapping_add(1);
         self.queue.clear();
         if let Some(visible) = &mut self.visible {
@@ -84,6 +164,13 @@ impl MediaScheduler {
         input: &MediaInput<'_>,
         _work: &mut Workflow<'_>,
     ) -> bool {
+        self.system
+            .as_ref()
+            .is_some_and(|system| system.audio_id == id)
+            || self.gui_media_wanted(id, input)
+    }
+
+    fn gui_media_wanted(&self, id: i32, input: &MediaInput<'_>) -> bool {
         input
             .player
             .selected_track
@@ -187,6 +274,9 @@ impl MediaScheduler {
         {
             self.enqueue_media(id, missing, input, work);
         }
+        if let Some(id) = self.system.as_ref().map(|system| system.audio_id) {
+            self.enqueue_media(id, false, input, work);
+        }
     }
     pub(crate) fn request_media(
         &mut self,
@@ -220,16 +310,20 @@ impl MediaScheduler {
         if id < 0 || input.track(id).is_none() {
             return;
         }
-        let requested_cover = input
-            .track(id)
-            .and_then(|track| track.cover_beatmap_id)
-            .filter(|cover| missing && !self.unavailable.contains(cover));
+        let requested_cover = self.requested_cover(id, missing, input);
         if let Some((ticket, previous_cover, active_artwork)) = self
             .jobs
             .values()
-            .find(|job| job.ticket.audio_id == id && job.ticket.generation == self.generation)
+            .find(|job| {
+                job.ticket.audio_id == id
+                    && job.ticket.generation == self.generation
+                    && !(self.system_missing(id) && job.decoding)
+            })
             .map(|job| (job.ticket, job.cover, job.artwork_pending || job.decoding))
         {
+            if active_artwork && previous_cover == requested_cover {
+                self.share_system_request(ticket, previous_cover);
+            }
             if let Some(cover) = requested_cover.filter(|_| !active_artwork) {
                 if previous_cover.is_some() {
                     // A second delivery needs a fresh ticket so a repeated old ACK cannot release it.
@@ -251,6 +345,7 @@ impl MediaScheduler {
                             job.artwork_pending = true;
                             job.tasks.push(task);
                         }
+                        self.share_system_request(ticket, Some(cover));
                     }
                     return;
                 }
@@ -297,12 +392,10 @@ impl MediaScheduler {
             if !self.media_wanted(id, input, work) {
                 continue;
             }
-            let Some(track) = input.track(id) else {
+            if input.track(id).is_none() {
                 continue;
-            };
-            let cover = track
-                .cover_beatmap_id
-                .filter(|cover| missing && !self.unavailable.contains(cover));
+            }
+            let cover = self.requested_cover(id, missing, input);
             let duration_requested = !self.durations.contains_key(&id);
             if cover.is_none() && !duration_requested {
                 continue;
@@ -347,15 +440,17 @@ impl MediaScheduler {
                     tasks,
                 },
             );
+            self.share_system_request(ticket, cover);
         }
     }
     pub(crate) fn artwork_completed(
         &mut self,
         ticket: MediaTicket,
         bytes: Option<Vec<u8>>,
-        _input: &MediaInput<'_>,
+        input: &MediaInput<'_>,
         work: &mut Workflow<'_>,
     ) {
+        let gui_wanted = self.gui_media_wanted(ticket.audio_id, input);
         let Some(job) = self
             .jobs
             .get_mut(&ticket.serial)
@@ -365,8 +460,23 @@ impl MediaScheduler {
         };
         job.artwork_pending = false;
         if ticket.generation == self.generation {
+            if let Some(system) = &mut self.system
+                && system.ticket == Some(ticket)
+                && system.artwork.key.generation == ticket.generation
+                && Some(system.artwork.key.cover_id) == job.cover
+            {
+                system.ticket = None;
+                system.artwork.bytes = bytes
+                    .as_ref()
+                    .filter(|bytes| !bytes.is_empty())
+                    .map(|bytes| std::sync::Arc::from(bytes.as_slice()));
+            }
             match (job.cover, bytes) {
-                (Some(cover_id), Some(bytes)) => {
+                (Some(cover_id), Some(bytes)) if !bytes.is_empty() => {
+                    if !gui_wanted {
+                        self.finish(ticket);
+                        return;
+                    }
                     job.decoding = true;
                     work.emit(AppUpdate::Artwork {
                         ticket,
@@ -374,7 +484,7 @@ impl MediaScheduler {
                         bytes,
                     });
                 }
-                (Some(cover), None) => {
+                (Some(cover), _) => {
                     self.unavailable.insert(cover);
                 }
                 _ => {}

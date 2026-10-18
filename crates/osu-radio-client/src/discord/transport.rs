@@ -227,6 +227,7 @@ async fn open() -> io::Result<Socket> {
     ))
 }
 #[cfg(windows)]
+#[allow(clippy::unused_async)] // Keep the shared async signature; Unix socket connection awaits I/O.
 async fn open() -> io::Result<Socket> {
     for index in 0..10 {
         if let Ok(socket) = tokio::net::windows::named_pipe::ClientOptions::new()

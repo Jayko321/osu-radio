@@ -14,6 +14,20 @@ use crate::view_models::queue::{PendingPlayback, PlaylistPlayback};
 use crate::view_models::{library, player, playlists, queue, settings};
 use tokio::time::Instant;
 impl Controller {
+    pub(crate) fn system_player_event(
+        &mut self,
+        event: osu_radio_media_controls::Event,
+        snapshot: &osu_radio_media_controls::Snapshot,
+    ) {
+        self.player_work(|player, input, work| player.system_event(event, snapshot, input, work));
+    }
+
+    pub(crate) fn set_current_volume(&mut self, volume: f64) {
+        self.settings_work(|settings, input, work| {
+            settings.set_current_volume(volume, input, work);
+        });
+    }
+
     pub(crate) fn folders_loaded(&mut self, result: Result<Vec<OsuFolder>, String>) {
         self.settings_work(|settings, input, work| settings.folders_loaded(result, input, work));
     }
@@ -225,6 +239,7 @@ impl Controller {
         &mut self,
         operation: impl FnOnce(&mut MediaScheduler, &media::MediaInput<'_>, &mut workflow::Workflow<'_>),
     ) {
+        self.media.sync_system_artwork(self.system_artwork_key());
         let mut work = workflow::Workflow {
             api: self.session.as_ref().map(|session| session.api().clone()),
             tasks: &mut self.tasks,
@@ -739,7 +754,10 @@ impl Controller {
     }
 
     pub(crate) fn start_media(&mut self) {
-        self.media_work(super::media::MediaScheduler::start_media);
+        self.media_work(|media, input, work| {
+            media.reconcile_media(input, work);
+            media.start_media(input, work);
+        });
     }
     pub(crate) fn artwork_completed(&mut self, ticket: MediaTicket, bytes: Option<Vec<u8>>) {
         self.media_work(|media, input, work| media.artwork_completed(ticket, bytes, input, work));

@@ -44,6 +44,202 @@ pub(crate) enum PrimaryAction {
     Playlist(PlaylistPlayback),
 }
 impl PlayerViewModel {
+    pub(crate) fn system_launch(&self) -> Option<osu_radio_media_controls::LaunchKey> {
+        let assignment = self.assignment.as_ref()?;
+        Some(osu_radio_media_controls::LaunchKey {
+            entry_id: assignment.current_entry_id?.get(),
+            playback_token: assignment.playback_token,
+        })
+    }
+
+    fn system_worker_current(&self) -> bool {
+        self.assignment.as_ref().is_some_and(|assignment| {
+            assignment.playback_token == self.playback.playback_token
+                && assignment.current_entry_id == self.playback.current_entry_id
+                && assignment.current_audio_source_id == self.playback.current_audio_id
+                && !assignment.waiting_for_check
+        })
+    }
+
+    pub(crate) fn system_snapshot(
+        &self,
+        connected: bool,
+        settings_loaded: bool,
+        volume: f64,
+        preferences: crate::TrackNamePreferences,
+        individual_volume: bool,
+    ) -> osu_radio_media_controls::Snapshot {
+        use osu_radio_media_controls::{Capabilities, PlaybackStatus, Snapshot};
+        let assignment = self.assignment.as_ref();
+        let launch = self.system_launch();
+        let track = self.current_track.as_ref().filter(|track| {
+            launch.is_some()
+                && assignment
+                    .is_some_and(|a| a.current_audio_source_id == Some(track.audio_source_id))
+        });
+        let worker_current = launch.is_some() && self.system_worker_current();
+        let observed = worker_current
+            && self.playback.loading_audio_id.is_none()
+            && self.playback.error.is_none();
+        let duration = worker_current
+            .then_some(self.playback.snapshot.duration)
+            .flatten()
+            .or_else(|| track.and_then(|track| track.duration));
+        let status = if observed {
+            match self.playback.snapshot.state {
+                PlayerState::Playing if self.playback.has_source => PlaybackStatus::Playing,
+                PlayerState::Paused => PlaybackStatus::Paused,
+                _ => PlaybackStatus::Stopped,
+            }
+        } else {
+            PlaybackStatus::Stopped
+        };
+        let ready = connected && settings_loaded;
+        let has_queue = assignment
+            .is_some_and(|a| a.current_entry_id.is_some() || a.can_next || a.can_previous);
+        Snapshot {
+            launch,
+            metadata: track.map(|track| track.system_metadata(preferences)),
+            duration,
+            status,
+            position: if observed {
+                self.playback.snapshot.position
+            } else {
+                Duration::ZERO
+            },
+            seek_serial: if worker_current {
+                self.playback.seek_serial
+            } else {
+                0
+            },
+            volume,
+            capabilities: Capabilities {
+                play: ready && has_queue,
+                pause: ready
+                    && launch.is_some()
+                    && assignment.is_some_and(|a| a.mode == PlaybackMode::Playing),
+                stop: ready
+                    && launch.is_some()
+                    && assignment.is_some_and(|a| a.mode != PlaybackMode::Stopped),
+                next: ready && assignment.is_some_and(|a| a.can_next),
+                previous: ready && assignment.is_some_and(|a| a.can_previous),
+                seek: ready
+                    && observed
+                    && self.playback.has_source
+                    && duration.is_some_and(|duration| !duration.is_zero()),
+                set_volume: ready
+                    && (!individual_volume
+                        || assignment
+                            .and_then(|a| a.current_audio_source_id)
+                            .is_some_and(|id| id >= 0)),
+            },
+            artwork: None,
+        }
+    }
+
+    #[allow(clippy::needless_pass_by_value)] // Consume the controller's ordered event like a command.
+    pub(crate) fn system_event(
+        &mut self,
+        event: osu_radio_media_controls::Event,
+        snapshot: &osu_radio_media_controls::Snapshot,
+        input: &PlayerInput<'_>,
+        work: &mut Workflow<'_>,
+    ) {
+        use osu_radio_media_controls::Event;
+        let capabilities = snapshot.capabilities;
+        let command = match event {
+            Event::Play if capabilities.play => PlaybackCommand::Play {
+                audio_source_id: None,
+            },
+            Event::Pause if capabilities.pause => PlaybackCommand::Pause,
+            Event::PlayPause => {
+                let playing = if self.system_worker_current()
+                    && self.playback.has_source
+                    && self.playback.loading_audio_id.is_none()
+                    && self.playback.error.is_none()
+                {
+                    self.playback.snapshot.state == PlayerState::Playing
+                } else {
+                    self.assignment
+                        .as_ref()
+                        .is_some_and(|a| a.mode == PlaybackMode::Playing)
+                };
+                if playing && capabilities.pause {
+                    PlaybackCommand::Pause
+                } else if !playing && capabilities.play {
+                    PlaybackCommand::Play {
+                        audio_source_id: None,
+                    }
+                } else {
+                    return;
+                }
+            }
+            Event::Stop if capabilities.stop => PlaybackCommand::Stop,
+            Event::Next if capabilities.next => PlaybackCommand::Next,
+            Event::Previous if capabilities.previous => PlaybackCommand::Previous,
+            Event::SeekAbsolute { launch, position } => {
+                self.system_seek(launch, position, snapshot, work);
+                return;
+            }
+            Event::SeekRelative {
+                launch,
+                offset_micros,
+            } => {
+                if !capabilities.seek || self.system_launch() != Some(launch) {
+                    return;
+                }
+                let offset = Duration::from_micros(offset_micros.unsigned_abs());
+                let position = if offset_micros < 0 {
+                    snapshot.position.saturating_sub(offset)
+                } else {
+                    snapshot.position.saturating_add(offset)
+                };
+                if snapshot
+                    .duration
+                    .is_some_and(|duration| position > duration)
+                {
+                    if !capabilities.next {
+                        return;
+                    }
+                    self.queue_playback(PlaybackCommand::Next, input, work);
+                    if work.api.is_some()
+                        && let Some(pending) = self.commands.back_mut()
+                    {
+                        pending.expected_token = Some(launch.playback_token);
+                    }
+                } else {
+                    self.system_seek(launch, position, snapshot, work);
+                }
+                return;
+            }
+            _ => return,
+        };
+        self.queue_playback(command, input, work);
+    }
+
+    fn system_seek(
+        &self,
+        launch: osu_radio_media_controls::LaunchKey,
+        position: Duration,
+        snapshot: &osu_radio_media_controls::Snapshot,
+        work: &mut Workflow<'_>,
+    ) {
+        if !snapshot.capabilities.seek || self.system_launch() != Some(launch) {
+            return;
+        }
+        work.effect(Effect::PlayerCommand(crate::playback::Command::Seek {
+            expected_id: self
+                .assignment
+                .as_ref()
+                .and_then(|a| a.current_audio_source_id),
+            playback_token: launch.playback_token,
+            position: snapshot
+                .duration
+                .map_or(position, |duration| position.min(duration)),
+        }));
+    }
+}
+impl PlayerViewModel {
     pub(crate) fn merge_current_last_played(&mut self, library: &mut super::LibraryViewModel) {
         if let Some(track) = &mut self.current_track {
             library.merge_last_played(std::slice::from_mut(track));

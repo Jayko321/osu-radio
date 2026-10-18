@@ -65,7 +65,11 @@ fn run_with_server_url(
         thread::sleep(Duration::from_millis(20));
     };
     let output = read_output(&mut output);
-    let expected_code = if args == ["--unknown"] { 2 } else { 0 };
+    let expected_code = if args == ["--unknown"] {
+        2
+    } else {
+        i32::from(case == "system-media-failed-launch")
+    };
     assert_eq!(
         status.code(),
         Some(expected_code),
@@ -83,6 +87,12 @@ fn read_output(file: &mut File) -> String {
 
 fn assert_probe(output: &str) {
     assert!(output.contains("Adapter probe passed"), "{output}");
+    // A missing D-Bus session disables integration, while the Qt probe still succeeds.
+    let qml_output = output
+        .lines()
+        .filter(|line| !line.starts_with("System media controls:"))
+        .collect::<Vec<_>>()
+        .join("\n");
     for error in [
         "Error:",
         "ReferenceError",
@@ -94,7 +104,7 @@ fn assert_probe(output: &str) {
         "not found",
         "failed to load",
     ] {
-        assert!(!output.contains(error), "QML diagnostic: {output}");
+        assert!(!qml_output.contains(error), "QML diagnostic: {output}");
     }
 }
 
@@ -153,7 +163,87 @@ fn gallery_is_offline_and_its_adapter_notifies_only_on_changes() {
         "gallery",
     );
     assert_probe(&output);
+    assert!(!output.contains("System media Qt attach:"), "{output}");
     assert!(!directory.path().join("starts").exists());
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "requires a Windows desktop and the native windows Qt plugin"]
+fn native_system_media_detaches_before_hwnd_destruction_on_all_exit_paths() {
+    use tokio::io::AsyncBufReadExt;
+    let runtime = tokio::runtime::Runtime::new().expect("fixture runtime");
+    for case in [
+        "system-media-close",
+        "system-media-quit",
+        "system-media-failed-launch",
+    ] {
+        let directory = tempfile::tempdir().expect("isolated native lifecycle probe");
+        let (mut fixture, url) = runtime.block_on(async {
+            let mut fixture = tokio::process::Command::new("python")
+                .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/server.py"))
+                .current_dir(directory.path())
+                .env("OSU_RADIO_QT_PROBE_CASE", "search")
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .expect("start external Python fixture");
+            let mut lines =
+                tokio::io::BufReader::new(fixture.stdout.take().expect("readiness pipe")).lines();
+            let ready = tokio::time::timeout(Duration::from_secs(5), lines.next_line())
+                .await
+                .expect("fixture readiness deadline")
+                .expect("read readiness")
+                .expect("ready line");
+            let url = ready
+                .strip_prefix("listening on ")
+                .expect("fixture URL")
+                .to_owned();
+            (fixture, url)
+        });
+        let output = run_with_server_url(
+            &[],
+            "windows",
+            directory.path(),
+            &directory.path().join("no-local-server.exe"),
+            case,
+            Some(&url),
+        );
+        assert!(
+            output.contains("System media Qt attach: \"windows\""),
+            "{output}"
+        );
+        if case != "system-media-failed-launch" {
+            assert!(
+                output.contains("System media Qt native publication observed"),
+                "{output}"
+            );
+        }
+        let ack = output
+            .find("System media Qt detach acknowledged; window alive")
+            .expect(&output);
+        let destroyed = output
+            .find("System media Qt window destroyed after detach")
+            .expect(&output);
+        assert!(ack < destroyed, "{output}");
+        assert!(!output.contains("System media controls:"), "{output}");
+        assert_eq!(
+            std::fs::read_to_string(directory.path().join("starts")).expect("fixture starts"),
+            "1"
+        );
+        runtime
+            .block_on(
+                osu_radio_client::ApiClient::new(&url)
+                    .expect("external API")
+                    .queue(),
+            )
+            .expect("external fixture survives Qt shutdown");
+        runtime
+            .block_on(fixture.kill())
+            .expect("stop and reap external fixture");
+        eprintln!("{case}:\n{output}");
+    }
 }
 
 #[test]

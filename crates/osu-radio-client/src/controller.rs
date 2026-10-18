@@ -4,11 +4,12 @@ use crate::{OsuFolder, ServerOptions, Session, Track, TrackNamePreferences, desc
 use std::{future::Future, path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
     runtime::Handle,
-    sync::{mpsc, watch},
+    sync::{mpsc, oneshot, watch},
     task::{AbortHandle, JoinSet},
 };
 mod coordinator;
 pub(crate) mod media;
+mod system_media;
 pub(crate) mod workflow;
 use crate::view_models::{
     AudioSettingsState, FolderSelection, LibraryViewModel, PlayerPresentation, PlayerViewModel,
@@ -48,6 +49,14 @@ pub struct MediaTicket {
 }
 #[derive(Debug)]
 pub enum AppCommand {
+    ConnectSystemMedia {
+        context: osu_radio_media_controls::NativeContext,
+        completed: oneshot::Sender<Result<(), osu_radio_media_controls::Error>>,
+    },
+    PublishSystemMedia,
+    DisconnectSystemMedia {
+        completed: oneshot::Sender<()>,
+    },
     Queue(crate::view_models::QueueAction),
     Playlist(PlaylistAction),
     Connect,
@@ -188,6 +197,33 @@ impl AppController {
         self.send(AppCommand::Shutdown);
         let _ = self.stopped.clone().wait_for(|done| *done).await;
     }
+    /// Starts native initialization with the current playback snapshot. Native failure is
+    /// diagnosed asynchronously and disables this integration until application restart.
+    pub async fn connect_system_media(
+        &self,
+        context: osu_radio_media_controls::NativeContext,
+    ) -> Result<(), osu_radio_media_controls::Error> {
+        let (completed, result) = oneshot::channel();
+        self.send(AppCommand::ConnectSystemMedia { context, completed });
+        result.await.unwrap_or_else(|_| {
+            Err(osu_radio_media_controls::Error::new(
+                "application controller stopped",
+            ))
+        })
+    }
+    /// Requests publication of the latest client-owned state; normal updates publish automatically.
+    pub fn publish_system_media(&self) {
+        self.send(AppCommand::PublishSystemMedia);
+    }
+    /// Keep the native window alive until this returns. Safe before or after ordinary shutdown.
+    pub async fn disconnect_system_media(&self) {
+        let (completed, result) = oneshot::channel();
+        self.send(AppCommand::DisconnectSystemMedia { completed });
+        // A closed controller also means its shutdown has completed native cleanup.
+        if result.await.is_err() {
+            let _ = self.stopped.clone().wait_for(|done| *done).await;
+        }
+    }
 }
 
 pub(crate) enum Completed {
@@ -228,6 +264,9 @@ pub(crate) enum Completed {
 }
 #[allow(clippy::struct_excessive_bools)]
 pub(crate) struct Controller {
+    pub(crate) system_media: Option<osu_radio_media_controls::MediaControls>,
+    system_events: Option<osu_radio_media_controls::EventReceiver>,
+    system_media_failed: bool,
     pub(crate) discord: crate::discord::Service,
     pub(crate) library: LibraryViewModel,
     pub(crate) playlists: PlaylistsViewModel,
@@ -260,6 +299,9 @@ impl Controller {
         let (assignment_sender, assignments) = mpsc::unbounded_channel();
         let (worker_sender, worker_updates) = mpsc::unbounded_channel();
         Self {
+            system_media: None,
+            system_events: None,
+            system_media_failed: false,
             discord: crate::discord::Service::default(),
             library: LibraryViewModel::default(),
             playlists: PlaylistsViewModel::default(),
@@ -304,7 +346,20 @@ impl Controller {
                 } => self.volume_saved(result),
                 command = commands.recv() => match command {
                     Some(AppCommand::Shutdown) | None => break,
+                    Some(AppCommand::DisconnectSystemMedia { completed }) => {
+                        self.disconnect_system_media().await;
+                        let _ = completed.send(());
+                    }
                     Some(command) => self.command(command),
+                },
+                event = async {
+                    match &mut self.system_events {
+                        Some(events) => events.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match event {
+                    Some(event) => self.system_media_event(event),
+                    None => self.system_media_ended(),
                 },
                 Some(event) = self.folder_events.recv() => self.selection_event(event),
                 Some(assignment) = self.assignments.recv() => self.assignment_result(assignment),
@@ -326,7 +381,9 @@ impl Controller {
             self.start_media();
             self.start_playlist_images();
             self.start_counts();
+            self.publish_system_media();
         }
+        self.disconnect_system_media().await;
         self.discord.begin_shutdown();
         self.cancel_audio();
         self.flush_volume_saves().await;
@@ -358,6 +415,13 @@ impl Controller {
     #[allow(clippy::too_many_lines)] // Keep command-to-workflow routing in one place.
     pub(crate) fn command(&mut self, command: AppCommand) {
         match command {
+            AppCommand::ConnectSystemMedia { context, completed } => {
+                let result = self.connect_system_media(context);
+                let _ = completed.send(result);
+            }
+            AppCommand::PublishSystemMedia => self.publish_system_media(),
+            // Awaited by run so the window owner gets a cleanup acknowledgement.
+            AppCommand::DisconnectSystemMedia { .. } | AppCommand::Shutdown => {}
             AppCommand::SetDiscordRichPresence(enabled) => {
                 self.settings.set_discord_enabled(enabled);
                 self.discord.enabled(enabled);
@@ -453,8 +517,6 @@ impl Controller {
                     .map(|track| track.audio_source_id),
                 &self.upcoming.view,
             ),
-
-            AppCommand::Shutdown => {}
         }
     }
     #[allow(clippy::too_many_lines)] // Keep completion routing and stale-result checks together.

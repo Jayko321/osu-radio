@@ -1162,3 +1162,33 @@ limits are recorded in [T10](../impl/queue-rework/T10.md#отчёт-о-выпо�
 | [crates/radio-services/src/tests/queue_t02.rs](../../crates/radio-services/src/tests/queue_t02.rs) | Focused | — | Shared SQLite/PostgreSQL contracts: identity/edits/waiting, 4999/5000/5001 history, counter overflow, rollback and independent writers. |
 | [crates/radio-services/src/tests/queue_t03.rs](../../crates/radio-services/src/tests/queue_t03.rs) | Focused | — | Shared SQLite/PostgreSQL whole-playlist append/R7 contracts: fixed snapshots, duplicates, unavailable, silent append and atomic errors. |
 | [docs/specs/queue-rework.md](../../docs/specs/queue-rework.md) | Focused | — | Markdown nonempty text, closed fences and local file/heading links; product acceptance and prose facts are recorded separately. |
+
+System media controls inventory refresh (2026-10-18). The earlier totals are
+historical. T01-T06 reports contain executed checks; Linux adapter/runtime rows
+remain Pending where this Windows host could only cross-compile them. This is
+an inventory update, not a claim of physical audio or desktop acceptance.
+
+| File | Status | Observed lines | Assertion evidence |
+| --- | --- | --- | --- |
+| [crates/osu-radio-client/src/controller/system_media.rs](../../crates/osu-radio-client/src/controller/system_media.rs) | Focused | — | V2/V5 controller tests exercise current-launch commands, metadata, artwork, failure and acknowledged shutdown; normal/mock suites pass. |
+| [crates/osu-radio-client/src/controller/system_media/tests.rs](../../crates/osu-radio-client/src/controller/system_media/tests.rs) | Focused | — | Executed fake-worker and HTTP fixture assertions include stale seek/queued Next, current volume and artwork identity/ack scenarios. |
+| [crates/osu-radio-media-controls/Cargo.toml](../../crates/osu-radio-media-controls/Cargo.toml) | Focused | — | Locked metadata, Windows builds/tests and Linux all-target cross-check validate workspace paths and selected dependency features. |
+| [crates/osu-radio-media-controls/src/artwork.rs](../../crates/osu-radio-media-controls/src/artwork.rs) | Focused | — | V1 tests assert identity rejection, replacement, cleanup and nonfatal artwork errors; Windows native probes read and release the current file. |
+| [crates/osu-radio-media-controls/src/lib.rs](../../crates/osu-radio-media-controls/src/lib.rs) | Focused | — | Contract consumers and V1 tests exercise native dispatch failure, launch identity, separate events and coalesced snapshots. |
+| [crates/osu-radio-media-controls/src/lifecycle.rs](../../crates/osu-radio-media-controls/src/lifecycle.rs) | Focused | — | V1 assertions cover ordered commands, latest snapshot, cancellation-safe repeated shutdown, late callbacks and terminal failure. |
+| [crates/osu-radio-media-controls/src/linux/conversion.rs](../../crates/osu-radio-media-controls/src/linux/conversion.rs) | Focused | — | Four conversion tests run on Windows, including keyed signed seeks, track paths, volume and confirmed seek detection. |
+| [crates/osu-radio-media-controls/src/linux/mod.rs](../../crates/osu-radio-media-controls/src/linux/mod.rs) | Pending | — | Linux cross-target check/Clippy pass; real isolated D-Bus lifecycle probes are compiled but unavailable on this host. |
+| [crates/osu-radio-media-controls/src/linux/player.rs](../../crates/osu-radio-media-controls/src/linux/player.rs) | Pending | — | Linux cross-target check/Clippy pass; Root/Player protocol calls require the unexecuted Linux D-Bus probes. |
+| [crates/osu-radio-media-controls/src/linux/transform.rs](../../crates/osu-radio-media-controls/src/linux/transform.rs) | Pending | — | Linux compilation passes; metadata/property tests and real notification exchange have not run on Linux here. |
+| [crates/osu-radio-media-controls/src/linux/transform/tests.rs](../../crates/osu-radio-media-controls/src/linux/transform/tests.rs) | Pending | — | Linux-only metadata/property unit tests cross-compile; execution requires Linux. |
+| [crates/osu-radio-media-controls/src/tests.rs](../../crates/osu-radio-media-controls/src/tests.rs) | Focused | — | Eight common-channel/artwork tests execute without an OS service; source files and shutdown resources are consumed directly. |
+| [crates/osu-radio-media-controls/src/windows/mod.rs](../../crates/osu-radio-media-controls/src/windows/mod.rs) | Focused | — | V4 transformation and two actual HWND probes exercise native publication, artwork, callbacks and resource cleanup. |
+| [crates/osu-radio-media-controls/src/windows/tests.rs](../../crates/osu-radio-media-controls/src/windows/tests.rs) | Focused | — | Executed timeline units/bounds, status/button and captured seek-key assertions. |
+| [crates/osu-radio-media-controls/tests/linux.rs](../../crates/osu-radio-media-controls/tests/linux.rs) | Focused | — | Four conversion tests execute on Windows; the Linux-only protocol module is cross-checked, with runtime evidence still pending. |
+| [crates/osu-radio-media-controls/tests/linux/conversions.rs](../../crates/osu-radio-media-controls/tests/linux/conversions.rs) | Focused | — | Four executed conversion tests cover absolute boundaries, signed offsets with launch keys, volume and seek confirmation. |
+| [crates/osu-radio-media-controls/tests/linux/protocol.rs](../../crates/osu-radio-media-controls/tests/linux/protocol.rs) | Pending | — | Three opt-in private-daemon protocol probes cross-compile but have not executed; CI now invokes them explicitly. |
+| [crates/osu-radio-media-controls/tests/windows.rs](../../crates/osu-radio-media-controls/tests/windows.rs) | Focused | — | Both opt-in native Windows probes were run explicitly, rather than counted as successful default-suite ignores. |
+| [crates/osu-radio-media-controls/tests/windows/cover.png](../../crates/osu-radio-media-controls/tests/windows/cover.png) | Focused | — | Native thumbnail stream readback consumes the image fixture; cleanup probe verifies its temporary copy is released. |
+| [crates/osu-radio-media-controls/tests/windows/native.rs](../../crates/osu-radio-media-controls/tests/windows/native.rs) | Focused | — | Actual HWND harness checks metadata, enabled controls, artwork clear/error, callback rejection and file release before window destruction. |
+| [docs/impl/system-media-controls.md](../../docs/impl/system-media-controls.md) | Focused | — | Current task plan and local links are checked; execution evidence and unavailable native acceptance remain separate. Existing user visibility rules are preserved. |
+| [docs/specs/system-media-controls.md](../../docs/specs/system-media-controls.md) | Focused | — | Markdown structure and current source links are checked; requirement implementation, automated evidence and user acceptance are distinguished. |

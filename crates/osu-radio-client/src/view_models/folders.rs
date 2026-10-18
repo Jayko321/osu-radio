@@ -1,5 +1,5 @@
 #[cfg(test)]
-use crate::controller::{Completed, Controller};
+use crate::controller::Controller;
 use crate::{Loading, OsuFolder, models::FolderDiscoveryEvent};
 use std::collections::{HashMap, VecDeque};
 use tokio::task::AbortHandle;

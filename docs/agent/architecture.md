@@ -86,6 +86,32 @@ worker shutdown. See [backend lifecycle](backend.md#queue-availability-worker) a
 [worker tests](../../apps/osu-radio-server/src/queue_check/tests.rs). This implements
 the approved [T05](../impl/queue-rework/T05.md) without adding another queue owner.
 
+## Approved system media boundary
+
+The approved [system media plan](../impl/system-media-controls.md) adds
+`osu-radio-media-controls` with target-specific `mpris-server 0.10` (Tokio and
+`unstable` for connection shutdown) and `windows 0.62`. It owns local MPRIS/SMTC
+translation, latest-snapshot transport, ordered events, temporary encoded artwork
+and acknowledged native cleanup. It has no client, HTTP, database or Qt dependency.
+The existing client controller and five VMs retain all playback/volume/queue rules.
+
+Snapshots describe the current assignment and matching worker, independently of
+selection. Seek events carry `LaunchKey { entry_id, playback_token }`; the client
+and worker reject stale launches. A relative seek beyond the known end enters the
+existing transport lane as Next with its expected token checked again before HTTP
+dispatch. SMTC cannot identify an action delivered by the OS after a track switch;
+its protection starts at callback receipt. MPRIS volume changes internal volume;
+the Windows system mixer remains independent.
+
+Current-cover demand joins the existing four media pipelines, sharing HTTP bytes
+with Qt while preserving Qt's decode acknowledgement. Only current encoded bytes
+cross into the native crate; Qt decoding, cache and URLs remain GUI-owned. Live Qt
+attaches automatically after window creation and awaits detach before destruction
+on Close, event-loop exit and failed launch. The gallery never attaches. A fatal
+native error disables only this integration until restart, without retry; artwork
+failure is nonfatal. See [source contracts](frontend.md#system-media-controls) and
+[verification limits](development.md#system-media-controls-verification).
+
 ## Approved Qt presentation
 
 `AppBridge` is an ordinary QObject for connection, lifecycle and update delivery.

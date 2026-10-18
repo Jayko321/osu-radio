@@ -304,7 +304,7 @@ async fn audio_gate_wait_is_cancelled_and_closed_gate_returns_without_http() {
     state.session.take().unwrap().shutdown().await.unwrap();
 }
 
-fn playlist() -> Playlist {
+pub(super) fn playlist() -> Playlist {
     Playlist {
         id: 7,
         name: "Duplicates".into(),
@@ -334,7 +334,7 @@ fn playlist() -> Playlist {
         .collect(),
     }
 }
-fn assignment(mode: PlaybackMode) -> PlaybackAssignment {
+pub(super) fn assignment(mode: PlaybackMode) -> PlaybackAssignment {
     PlaybackAssignment {
         current_entry_id: None,
         availability: None,

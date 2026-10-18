@@ -82,11 +82,18 @@ fn run(mode: LaunchMode) -> ExitCode {
         eprintln!("Failed to create the {root} QML root.");
         return ExitCode::FAILURE;
     }
+    // Dropped before engine/app on every return, including failed probe loading.
+    let _window_media =
+        (mode == LaunchMode::Songs).then(|| runtime::ffi::connect_live_window(engine.as_mut()));
     if smoke {
         runtime::ffi::configure_probe(engine.as_mut(), mode == LaunchMode::ComponentGallery);
-        let probe = if std::env::var("OSU_RADIO_QT_PROBE_CASE")
-            .is_ok_and(|case| case.starts_with("visual") || case.starts_with("native"))
-        {
+        let case = std::env::var("OSU_RADIO_QT_PROBE_CASE").unwrap_or_default();
+        let probe = if case == "system-media-failed-launch" {
+            "MissingProbe"
+        } else if case.starts_with("system-media") {
+            // The native lifecycle probe owns completion and SMTC readback.
+            return ExitCode::from(u8::try_from(app.as_mut().exec()).unwrap_or(1));
+        } else if case.starts_with("visual") || case.starts_with("native") {
             "VisualProbe"
         } else {
             "AdapterProbe"

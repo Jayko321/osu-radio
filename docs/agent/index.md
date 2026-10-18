@@ -37,6 +37,7 @@ Tokio runtime dependency. The helper is a separate .NET project.
 | `radio-db` | [Package boundary](../../crates/radio-db/Cargo.toml) | [Repositories, SQL and persistence constraints](database.md). |
 | `osu-radio-player` | [Local player](../../crates/osu-radio-player/src/lib.rs) | Local MP3, Ogg/Vorbis and WAV decoding/output, transport, seek and session volume; no source IDs or HTTP. |
 | `osu-radio-client` | [Public facade](../../crates/osu-radio-client/src/lib.rs), [session](../../crates/osu-radio-client/src/session.rs), [view models](../../crates/osu-radio-client/src/view_models/mod.rs) | Changing reusable frontend communication, supervision or toolkit-free UI data. |
+| `osu-radio-media-controls` | [Contract](../../crates/osu-radio-media-controls/src/lib.rs), [lifecycle](../../crates/osu-radio-media-controls/src/lifecycle.rs), [MPRIS](../../crates/osu-radio-media-controls/src/linux/mod.rs), [SMTC](../../crates/osu-radio-media-controls/src/windows/mod.rs) | Translating local system media APIs and managing native resources; playback rules stay in the client. |
 | `osu-radio-qt` | [Rust launch/adapter](../../apps/osu-radio-qt/src/main.rs), [QML shell](../../apps/osu-radio-qt/qml/Main.qml) | Live Qt Songs/Playlists/Settings tabs and standalone component gallery; uses the client VMs and application coordinator. |
 
 ## Architecture
@@ -60,6 +61,7 @@ flowchart LR
     Core["radio-core: markers and import types"] --> Scanner
     Server -->|"playback assignments; source bytes by ID"| Client
     Client -->|"temporary file"| Audio["Local audio player and output"]
+    Client <-->|"snapshots / events"| Media["Local MPRIS / SMTC adapters"]
     Server -.-> Hosted["Future hosted sources: undecided"]
 ```
 
@@ -93,6 +95,7 @@ Tests and their limits are linked in the component guides.
 | User playlists of individual difficulties and osu! collections | Implemented | [Storage and service](database.md#user-playlists), [HTTP](backend.md#database-backed-http-contracts), [Qt/client](frontend.md#user-playlists); stable source keys, unavailable entries, persisted custom covers and queue launch snapshots. Stable/lazer collections import with folders and refresh through the staged folder action. |
 | Qt Songs, Settings and component gallery | Connected client; offline gallery | [Qt frontend](frontend.md#qt-frontend); shared session/controller, playback, library/media and staged folder selection/import/removal. |
 | Discord Rich Presence | Implemented; opt-in | Shared local-playback service, Qt persisted toggle/search, bounded IPC and reconnect; see [frontend](frontend.md#discord-rich-presence). Native Discord runtime acceptance remains separate. |
+| System media controls | Implemented; automatic in live Qt | [MPRIS/SMTC contracts](frontend.md#system-media-controls) and [verification limits](development.md#system-media-controls-verification). Windows HWND/Qt lifecycle probes passed; Linux runtime, physical audio, panel and media-key acceptance remain unverified. |
 | Local audio playback | Implemented in source | Explicit Play; deterministic engine/HTTP tests do not establish physical output or Windows behavior. |
 | Hosted sources | Future direction | Provider, protocol and hosting remain undecided. |
 | Database repositories and complete snapshot replacement | Implemented | [Database](database.md); SQLite default, PostgreSQL alternative, explicit reset for legacy databases. |

@@ -21,6 +21,7 @@ new database or an explicitly requested reset; ordinary startup never resets.
 | `crates/radio-db` | Persistence boundary; concrete repositories own SQL and constraints; opaque transactions bind repositories. |
 | `crates/osu-radio-client` | Toolkit-free frontend access, session/supervision, temporary audio downloads and playback worker. |
 | `crates/osu-radio-player` | Synchronous local-file MP3, Ogg/Vorbis and WAV playback, seek and volume; no HTTP, database or GUI. |
+| `crates/osu-radio-media-controls` | Local MPRIS/SMTC adapters, snapshot/event transport and native resource lifecycle; client owns playback rules. |
 | `apps/osu-radio-qt` | Qt VM adapters, track models, QML panels and standalone gallery; artwork cache, window interactions and assets. |
 
 Qt (`apps/osu-radio-qt`) is the desktop GUI. Vizia has been removed.

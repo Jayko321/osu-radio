@@ -40,7 +40,7 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - name: Install native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev dbus-daemon
       - name: Repository metadata tests
         run: python3 -B -m unittest discover -s tests -v
       - name: Scanner helper build script tests
@@ -51,14 +51,16 @@ jobs:
         run: python3 -B -m unittest discover -s apps/osu-radio-qt/tests -p 'test_*.py' -v
       # radio-scanner's build.rs compiles the real .NET Realm helper.
       # Default database features select SQLite; ignored benchmarks stay skipped.
-      - name: Core, scanner, SQLite backend and audio unit tests
-        run: cargo test -p radio-core -p radio-scanner -p radio-db -p radio-services -p osu-radio-cli -p osu-radio-server -p osu-radio-player --locked -- --test-threads=1
+      - name: Core, scanner, SQLite backend, audio and system media tests
+        run: cargo test -p radio-core -p radio-scanner -p radio-db -p radio-services -p osu-radio-cli -p osu-radio-server -p osu-radio-player -p osu-radio-media-controls --locked -- --test-threads=1
       - name: Server without API docs
         run: cargo test -p osu-radio-server --no-default-features --features sqlite --locked -- --test-threads=1
       - name: Client unit tests
         run: cargo test -p osu-radio-client --lib --locked -- --test-threads=1
       - name: Client unit tests with mocks
         run: cargo test -p osu-radio-client --features mock --lib --locked -- --test-threads=1
+      - name: Isolated MPRIS protocol tests
+        run: dbus-run-session -- cargo test -p osu-radio-media-controls --test linux --locked -- --ignored --test-threads=1
 
   clippy:
     runs-on: ubuntu-24.04
@@ -73,7 +75,7 @@ jobs:
       - name: Install native build dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev
       - name: Lint headless packages (SQLite, API docs enabled)
-        run: cargo clippy -p radio-core -p radio-scanner -p radio-db -p radio-services -p osu-radio-cli -p osu-radio-server -p osu-radio-player -p osu-radio-client --all-targets --locked -- -D warnings
+        run: cargo clippy -p radio-core -p radio-scanner -p radio-db -p radio-services -p osu-radio-cli -p osu-radio-server -p osu-radio-player -p osu-radio-client -p osu-radio-media-controls --all-targets --locked -- -D warnings
       - name: Lint server without API docs
         run: cargo clippy -p osu-radio-server --no-default-features --features sqlite --all-targets --locked -- -D warnings
       - name: Lint client with mocks

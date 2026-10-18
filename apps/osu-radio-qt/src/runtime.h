@@ -2,6 +2,9 @@
 #include <QtCore/QCoreApplication>
 #include <QtCore/QTimer>
 #include <QtCore/QSettings>
+#include <QtCore/QEventLoop>
+#include <QtCore/QPointer>
+#include <QtGui/QCloseEvent>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QScreen>
 #include <QtGui/QStyleHints>
@@ -10,6 +13,144 @@
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
 #include "artwork.h"
+#include <cstdint>
+#include <memory>
+#ifdef Q_OS_WIN
+#include <winrt/Windows.Media.h>
+#include <systemmediatransportcontrolsinterop.h>
+#endif
+
+// Rust completion is independent of QObject delivery and survives event-loop exit.
+void attach_window_media(std::intptr_t hwnd) noexcept;
+void begin_window_media_detach() noexcept;
+bool window_media_detached() noexcept;
+
+class LiveWindowMedia final : public QObject {
+    QPointer<QQuickWindow> window;
+    QTimer poll;
+    bool closing = false;
+    bool probe = false;
+    bool observedDetach = false;
+    int waitingTicks = 0;
+#ifdef Q_OS_WIN
+    HWND hwnd = nullptr;
+    bool smtcEnabled() const {
+        using Controls = winrt::Windows::Media::SystemMediaTransportControls;
+        auto factory = winrt::get_activation_factory<Controls, ISystemMediaTransportControlsInterop>();
+        Controls controls{nullptr};
+        winrt::check_hresult(factory->GetForWindow(hwnd, winrt::guid_of<Controls>(), winrt::put_abi(controls)));
+        return controls.IsEnabled();
+    }
+#endif
+    void checkAlive() const {
+        if (!window || !window->handle()) qFatal("System media Qt window destroyed before detach");
+#ifdef Q_OS_WIN
+        if (hwnd && !IsWindow(hwnd)) qFatal("System media HWND destroyed before detach");
+#endif
+    }
+    void acknowledged() {
+        if (!probe || observedDetach) return;
+        checkAlive();
+        if (waitingTicks == 0) qFatal("Detach probe did not process Qt events while waiting");
+#ifdef Q_OS_WIN
+        if (hwnd && smtcEnabled()) qFatal("SMTC still enabled after detach acknowledgement");
+#endif
+        qInfo() << "System media Qt detach acknowledged; window alive; waiting ticks:" << waitingTicks;
+        observedDetach = true;
+    }
+    void waitForDetach() {
+        begin_window_media_detach();
+        QEventLoop cleanup;
+        QTimer progress;
+        progress.setInterval(5);
+        QObject::connect(&progress, &QTimer::timeout, &cleanup, [&]() {
+            if (probe) { checkAlive(); ++waitingTicks; }
+            if (window_media_detached()) cleanup.quit();
+        });
+        progress.start();
+        // Continue processing Qt work while Rust awaits native cleanup.
+        while (!window_media_detached()) cleanup.exec(QEventLoop::ExcludeUserInputEvents);
+        acknowledged();
+    }
+protected:
+    bool eventFilter(QObject *object, QEvent *event) override {
+        if (object != window || event->type() != QEvent::Close || window_media_detached())
+            return false;
+        event->ignore();
+        closing = true;
+        begin_window_media_detach();
+        poll.start();
+        return true;
+    }
+public:
+    explicit LiveWindowMedia(QQuickWindow *root) : window(root) {
+        const auto testCase = qEnvironmentVariable("OSU_RADIO_QT_PROBE_CASE");
+        const bool smoke = qEnvironmentVariableIsSet("OSU_RADIO_QT_SMOKE_TEST");
+        probe = smoke && testCase.startsWith(QStringLiteral("system-media"));
+        // winId creates the platform window even when a smoke root starts hidden.
+        root->create();
+        std::intptr_t native = 0;
+#ifdef Q_OS_WIN
+        if (QGuiApplication::platformName() == QStringLiteral("windows")) {
+            hwnd = reinterpret_cast<HWND>(root->winId());
+            native = reinterpret_cast<std::intptr_t>(hwnd);
+        }
+        if (probe && !hwnd) qFatal("Native SMTC probe requires the windows platform plugin");
+        if (hwnd) attach_window_media(native);
+#else
+        attach_window_media(native);
+#endif
+        if (smoke) qInfo() << "System media Qt attach:" << QGuiApplication::platformName() << native;
+        root->installEventFilter(this);
+        poll.setInterval(5);
+        QObject::connect(&poll, &QTimer::timeout, this, [this]() {
+            if (probe) { checkAlive(); ++waitingTicks; }
+            if (closing && window_media_detached()) {
+                poll.stop();
+                acknowledged();
+                if (window) window->close();
+            }
+        });
+        if (probe) {
+#ifdef Q_OS_WIN
+            QObject::connect(root, &QObject::destroyed, QCoreApplication::instance(), [handle = hwnd]() {
+                if (!window_media_detached() || IsWindow(handle)) qFatal("Incorrect media/window destruction order");
+                qInfo("System media Qt window destroyed after detach");
+            });
+#endif
+            auto *ready = new QTimer(this);
+            ready->setInterval(10);
+            QObject::connect(ready, &QTimer::timeout, this, [this, ready, testCase]() {
+#ifdef Q_OS_WIN
+                if (!smtcEnabled()) return;
+#endif
+                auto *bridge = window->findChild<QObject *>(QStringLiteral("appBridge"));
+                if (!bridge || !bridge->property("connected").toBool()) return;
+                ready->stop();
+                qInfo("System media Qt native publication observed");
+                if (testCase == QStringLiteral("system-media-close")) {
+                    window->close();
+                    if (window_media_detached() || !window->isVisible()) qFatal("Close did not wait for delayed detach");
+                } else {
+                    QCoreApplication::quit();
+                }
+            });
+            ready->start();
+        }
+    }
+    ~LiveWindowMedia() override {
+        poll.stop();
+        for (auto *timer : findChildren<QTimer *>()) timer->stop();
+        waitForDetach();
+        if (window) window->removeEventFilter(this);
+    }
+};
+
+inline std::unique_ptr<LiveWindowMedia> connectLiveWindow(QQmlApplicationEngine &engine) {
+    auto *window = engine.rootObjects().isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(engine.rootObjects().first());
+    if (!window) return {};
+    return std::make_unique<LiveWindowMedia>(window);
+}
 #if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
 #error "osu-radio-qt requires Qt 6.8 or newer for native QML window interactions"
 #endif

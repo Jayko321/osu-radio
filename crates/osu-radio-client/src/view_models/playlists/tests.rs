@@ -1,7 +1,8 @@
 #![allow(clippy::indexing_slicing)]
 use super::*;
 use crate::controller::AppCommand;
-use crate::models::PlaybackAssignment;
+#[cfg(unix)]
+use crate::models::{PlaybackAssignment, PlaybackCommand, PlaybackMode};
 use crate::view_models::TrackSort;
 
 fn playlist(id: i32) -> Playlist {

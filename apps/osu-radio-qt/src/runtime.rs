@@ -1,5 +1,8 @@
 use osu_radio_client::controller::AppController;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 use tokio::{
     runtime::{Handle, Runtime},
     task::JoinHandle,
@@ -7,6 +10,11 @@ use tokio::{
 
 #[cxx::bridge]
 pub mod ffi {
+    extern "Rust" {
+        fn attach_window_media(hwnd: isize);
+        fn begin_window_media_detach();
+        fn window_media_detached() -> bool;
+    }
     unsafe extern "C++" {
         include!("src/runtime.h");
         include!("src/native_tests.h");
@@ -66,6 +74,11 @@ pub mod ffi {
         fn configureEngine(engine: Pin<&mut QQmlApplicationEngine>, smoke: bool);
         #[rust_name = "configure_probe"]
         fn configureProbe(engine: Pin<&mut QQmlApplicationEngine>, gallery: bool);
+        type LiveWindowMedia;
+        #[rust_name = "connect_live_window"]
+        #[must_use]
+        fn connectLiveWindow(engine: Pin<&mut QQmlApplicationEngine>)
+        -> UniquePtr<LiveWindowMedia>;
         #[rust_name = "reset_artwork"]
         #[allow(clippy::must_use_candidate)]
         // Clearing is useful without retaining the epoch.
@@ -115,8 +128,106 @@ pub struct RuntimeContext {
     pub handle: Handle,
     controllers: Mutex<Vec<AppController>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
+    window_media: Mutex<WindowMedia>,
 }
+
+#[derive(Default)]
+struct WindowMedia {
+    attach: Option<JoinHandle<()>>,
+    detached: Option<Arc<AtomicBool>>,
+}
+
+fn attach_window_media(hwnd: isize) {
+    let Some(runtime) = RuntimeContext::current() else {
+        return;
+    };
+    #[cfg(target_os = "windows")]
+    let context = {
+        let Some(hwnd) = std::num::NonZeroIsize::new(hwnd) else {
+            eprintln!("System media controls: no native Windows window");
+            return;
+        };
+        osu_radio_client::media_controls::NativeContext::Windows { hwnd }
+    };
+    #[cfg(target_os = "linux")]
+    let context = {
+        let _ = hwnd;
+        osu_radio_client::media_controls::NativeContext::Linux
+    };
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
+    {
+        let controllers = runtime.controllers();
+        let task = runtime.handle.spawn(async move {
+            for controller in controllers {
+                if let Err(error) = controller.connect_system_media(context).await {
+                    eprintln!("System media controls: {error}");
+                }
+                controller.publish_system_media();
+            }
+        });
+        runtime
+            .window_media
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .attach = Some(task);
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux")))]
+    let _ = (runtime, hwnd);
+}
+
+fn begin_window_media_detach() {
+    let Some(runtime) = RuntimeContext::current() else {
+        return;
+    };
+    let mut media = runtime
+        .window_media
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if media.detached.is_some() {
+        return;
+    }
+    let controllers = runtime.controllers();
+    let attach = media.attach.take();
+    let detached = Arc::new(AtomicBool::new(false));
+    media.detached = Some(detached.clone());
+    drop(media);
+    runtime.track(runtime.handle.spawn(async move {
+        // Close can arrive before the queued attach has reached the controller.
+        if let Some(attach) = attach {
+            let _ = attach.await;
+        }
+        if std::env::var_os("OSU_RADIO_QT_SMOKE_TEST").is_some()
+            && std::env::var("OSU_RADIO_QT_PROBE_CASE")
+                .is_ok_and(|case| case.starts_with("system-media"))
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        }
+        for controller in controllers {
+            controller.disconnect_system_media().await;
+        }
+        detached.store(true, Ordering::Release);
+    }));
+}
+
+fn window_media_detached() -> bool {
+    RuntimeContext::current().is_none_or(|runtime| {
+        runtime
+            .window_media
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .detached
+            .as_ref()
+            .is_some_and(|done| done.load(Ordering::Acquire))
+    })
+}
+
 impl RuntimeContext {
+    fn controllers(&self) -> Vec<AppController> {
+        self.controllers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
     pub fn current() -> Option<Arc<Self>> {
         CONTEXT
             .lock()
@@ -153,6 +264,7 @@ impl LiveRuntime {
             handle: runtime.handle().clone(),
             controllers: Mutex::new(Vec::new()),
             tasks: Mutex::new(Vec::new()),
+            window_media: Mutex::new(WindowMedia::default()),
         });
         *CONTEXT
             .lock()
@@ -209,6 +321,28 @@ mod tests {
         }
     }
 
+    fn early_detach_waits_for_pending_attach(live: &LiveRuntime, context: &RuntimeContext) {
+        let (release_attach, blocked_attach) = tokio::sync::oneshot::channel();
+        context.window_media.lock().unwrap().attach = Some(context.handle.spawn(async move {
+            let _ = blocked_attach.await;
+        }));
+        begin_window_media_detach();
+        assert!(!window_media_detached());
+        begin_window_media_detach();
+        release_attach.send(()).unwrap();
+        live.runtime.block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !window_media_detached() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        });
+        begin_window_media_detach();
+        assert!(window_media_detached());
+    }
+
     #[test]
     fn runtime_prunes_completed_work_and_waits_for_controller_and_task_cleanup() {
         assert!(RuntimeContext::current().is_none());
@@ -236,6 +370,9 @@ mod tests {
                 let _ = &controller_guard;
             },
         ));
+
+        // An immediate close must await even an attach that has not run yet.
+        early_detach_waits_for_pending_attach(&live, &context);
 
         let cancelled = Arc::new(AtomicBool::new(false));
         let pending_guard = Dropped(cancelled.clone());

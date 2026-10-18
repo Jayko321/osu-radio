@@ -59,9 +59,12 @@ the selected HTTP dependencies use rustls, so no OpenSSL development package
 is needed.
 
 The locked checks cover core/scanner, SQLite repositories/services, CLI, server
-with API docs on/off, player, and client library tests/Clippy with `mock` off/on.
+with API docs on/off, player, system media controls, and client library tests/Clippy with `mock` off/on.
 Tests run with `--test-threads=1` to avoid the documented process-fixture races.
-Ignored benchmarks and opt-in integration probes remain skipped.
+The test job additionally installs `dbus-daemon` (providing both dbus-daemon and
+dbus-run-session on Ubuntu 24.04) and explicitly runs the opt-in MPRIS protocol
+suite in an isolated session. Its harness starts its own disposable bus and
+never connects to a desktop bus. Other opt-in probes and benchmarks remain skipped.
 The test job also runs `python3 -B -m unittest discover -s tools/search-benchmark -v`:
 the benchmark script's HTTP and child-process orchestration are exercised with
 mock responses/processes and temporary paths, without launching a real server.
@@ -1023,6 +1026,99 @@ Independent source reviews found no actionable correctness issue. The refresh
 control was exercised through native Space activation; desktop pointer behavior,
 GPU rendering, Windows and real game installations were not exercised. Existing
 Qt native-header compiler warnings remain.
+
+## System media controls verification
+
+Run the scoped integrated regression after client, native adapters and Qt changes:
+
+```sh
+cargo test -p osu-radio-media-controls --locked
+cargo test -p osu-radio-client --lib --locked
+cargo test -p osu-radio-client --features mock --lib --locked
+cargo test -p osu-radio-qt --locked -- --test-threads=1
+cargo clippy -p osu-radio-media-controls -p osu-radio-client --all-targets --locked -- -D warnings
+cargo clippy -p osu-radio-client --features mock -p osu-radio-qt --all-targets --locked -- -D warnings
+cargo fmt --check
+git diff --check
+```
+
+Client [system media tests](../../crates/osu-radio-client/src/controller/system_media/tests.rs)
+use the existing fake engine, HTTP fixtures and native test endpoint. They cover
+current A/selected B, launch-bound seek including queued overflow before HTTP,
+capability/status rules, current volume persistence, shared artwork demand/Qt
+acknowledgements and terminal native failure without retry. They do not exercise
+desktop controls or a physical output device. New QML bindings were not introduced;
+generated-import QML lint is required when QML changes, not for these Rust/native
+lifecycle changes alone. Retain serial gallery/main/embedded-asset probes.
+
+On Linux, run the real opt-in protocol suite separately (also wired into
+[Linux CI](../../.github/workflows/linux-ci.yml)):
+
+```sh
+dbus-run-session -- cargo test -p osu-radio-media-controls --test linux --locked -- --ignored --test-threads=1
+```
+
+The [protocol harness](../../crates/osu-radio-media-controls/tests/linux/protocol.rs)
+starts/reaps a private dbus-daemon and test child on temporary paths. It checks
+discovery, properties, commands, launch IDs, artwork, signals, fatal bus loss,
+unavailable bus and disappearance after acknowledged shutdown. A Linux Rust
+cross-target check/Clippy compiles this code but does not execute the protocol or
+Linux-only unit tests. An isolated bus still does not establish desktop panel,
+media-key or audio acceptance.
+
+On Windows, run both real-HWND harnesses and the native Qt lifecycle smoke:
+
+```powershell
+cargo test -p osu-radio-media-controls --locked -- --ignored --nocapture --test-threads=1
+cargo test -p osu-radio-qt --test launch_smoke --locked native_system_media_detaches_before_hwnd_destruction_on_all_exit_paths -- --ignored --exact --test-threads=1 --nocapture
+```
+
+The [HWND harness](../../crates/osu-radio-media-controls/tests/windows/native.rs)
+and [callback cleanup test](../../crates/osu-radio-media-controls/src/windows/tests.rs)
+read native metadata/buttons/thumbnail and verify disable/cleanup. The
+[Qt smoke](../../apps/osu-radio-qt/tests/launch_smoke.rs) uses plugin `windows`,
+real HWNDs and a separately started loopback Python fixture. Close, quit and
+failed launch await detach before HWND destruction, including delayed attach;
+the fixture survives GUI shutdown with no local server binary available. The
+same file has `real_backend_uses_a_disposable_database` for local embedded startup:
+first build `cargo build -p osu-radio-server --locked`, then run that exact test
+with `--ignored --exact --test-threads=1`. It uses a temporary working directory
+and private SQLite, never the application's database. Other real-backend probes
+in that file are Unix-only; do not claim they ran on Windows.
+
+For this Windows checkout, verify the local Qt path before each Qt build/test and
+set the environment in that process (PowerShell does not load `.env` for the GUI):
+
+```powershell
+$qtRoot = Join-Path $PWD 'target/build-tools/Qt/6.8.3/msvc2022_64'
+$env:QMAKE = Join-Path $qtRoot 'bin/qmake.exe'
+Test-Path $env:QMAKE
+$env:PATH = (Join-Path $qtRoot 'bin') + ';' + $env:PATH
+$env:QT_PLUGIN_PATH = Join-Path $qtRoot 'plugins'
+$env:QT_QPA_FONTDIR = 'C:/Windows/Fonts'
+```
+
+The pre-existing PNG unit test needs writable QTemporaryDir; this session's
+restricted sandbox returned Access denied, while the ordinary approved run
+outside sandbox passed. Do not weaken that test. The Windows serial Qt suite
+still fails `offline_controls_handle_keyboard_disabled_states_and_presentation_bindings`
+and `offline_menus_and_modals_preserve_value_roles_focus_and_dismissal_rules`:
+both finish QML assertions then exit with access violation `0xc0000005`. T06
+reproduced those exits using the preserved pre-feature release executable. Keep
+the suite red and report these failures; no ignore or crash-code acceptance was
+added. Exact executed results are in the [T07 report](../impl/system-media-controls/T07.md#отчёт-о-выполнении)
+and [specification evidence](../specs/system-media-controls.md#состояние-и-свидетельства).
+
+Native acceptance still requires a desktop panel/MPRIS client, real media keys
+and physical audio on each OS: play A, select B in library/playlist, pause/resume
+without focus, seek both ways, switch optional metadata/covers, test Linux internal
+volume and Windows independent mixer, then exit. Run local/remote connection
+variants separately with explicit disposable sources. For remote, set
+`OSU_RADIO_SERVER_URL` only to an explicitly chosen existing test server in the
+GUI process; verify `/api/queue` survives shutdown. Never reuse an old server
+address from notes or start a local server in remote mode. Linux runtime and
+hardware acceptance remain open; this minimal CI does not build Qt or promise
+Windows execution.
 
 ## Discord RPC verification
 

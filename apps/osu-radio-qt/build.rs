@@ -12,7 +12,8 @@ fn files_under(root: &Path) -> Result<Vec<PathBuf>, std::io::Error> {
         if path.is_dir() {
             files.extend(files_under(&path)?);
         } else {
-            files.push(path);
+            // QML module entries and resource aliases need URL separators on Windows too.
+            files.push(PathBuf::from(path.to_string_lossy().replace('\\', "/")));
         }
     }
     files.sort();

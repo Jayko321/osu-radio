@@ -146,6 +146,16 @@ fn preferred_text(
     prefer_unicode: bool,
     unknown: &str,
 ) -> String {
+    preferred_optional_text(ordinary, unicode, prefer_unicode)
+        .unwrap_or(unknown)
+        .to_owned()
+}
+
+fn preferred_optional_text<'a>(
+    ordinary: Option<&'a str>,
+    unicode: Option<&'a str>,
+    prefer_unicode: bool,
+) -> Option<&'a str> {
     let (first, second) = if prefer_unicode {
         (unicode, ordinary)
     } else {
@@ -154,8 +164,28 @@ fn preferred_text(
     first
         .filter(|s| !s.trim().is_empty())
         .or_else(|| second.filter(|s| !s.trim().is_empty()))
-        .unwrap_or(unknown)
-        .to_owned()
+}
+
+impl Track {
+    pub(crate) fn system_metadata(
+        &self,
+        preferences: TrackNamePreferences,
+    ) -> osu_radio_media_controls::Metadata {
+        osu_radio_media_controls::Metadata {
+            title: preferred_optional_text(
+                self.title_original.as_deref(),
+                self.title_unicode.as_deref(),
+                preferences.use_unicode_titles,
+            )
+            .map(str::to_owned),
+            artist: preferred_optional_text(
+                self.artist_original.as_deref(),
+                self.artist_unicode.as_deref(),
+                preferences.use_unicode_artists,
+            )
+            .map(str::to_owned),
+        }
+    }
 }
 
 #[must_use]

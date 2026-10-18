@@ -1,10 +1,14 @@
 use super::tests::{assignment, queue_entry};
 use super::*;
+#[cfg(unix)]
+use crate::controller::tests::queue_row;
 use crate::controller::{
     AppCommand,
-    tests::{controller, queue_row, track},
+    tests::{controller, track},
 };
-use crate::models::{QueueAvailability, QueueEntryId, QueueItemRef, QueuePlacement, QueueState};
+use crate::models::{QueueAvailability, QueueEntryId, QueueState};
+#[cfg(unix)]
+use crate::models::{QueueItemRef, QueuePlacement};
 use std::sync::Arc;
 
 fn id(value: i64) -> QueueEntryId {

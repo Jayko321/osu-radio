@@ -4,8 +4,10 @@ tools/**/FodyWeavers.xsd
 /docs/*
 !/docs/agent/
 !/docs/specs/
-/docs/specs/*
 !/docs/specs/*.md
+!/docs/impl/
+/docs/impl/*
+!/docs/impl/*.md
 tools/**/bin/
 tools/**/target/
 tools/**/obj/

@@ -11,6 +11,8 @@ pub mod server;
 pub mod session;
 pub mod view_models;
 
+pub use osu_radio_media_controls as media_controls;
+
 pub use api::{ApiClient, ApiError};
 pub use models::{
     AudioSource, BeatmapSet, DiscoverFolders, DiscoveryDepth, FolderDiscoveryEvent, FolderMarker,

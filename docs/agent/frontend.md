@@ -15,6 +15,7 @@ For a GUI task, use the [osu-radio-gui procedure](../../.agents/skills/osu-radio
 | Qt projection and dispatch | [AppBridge](../../apps/osu-radio-qt/src/app_bridge.rs) | QObject lifecycle and delivery to persistent domain adapters on the Qt thread. |
 | Panels and controls | [QML](../../apps/osu-radio-qt/qml) | Window composition, local searches, focus, popups and presentation. |
 | Artwork | [provider/cache](../../apps/osu-radio-qt/src/artwork.h) | Decode images and retain bounded URLs/QImages in Qt. |
+| System media I/O | [MPRIS/SMTC crate](../../crates/osu-radio-media-controls/src/lib.rs) | Local native translation and resources; [client coordination](../../crates/osu-radio-client/src/controller/system_media.rs) retains playback rules. |
 
 The [client manifest](../../crates/osu-radio-client/Cargo.toml) has no GUI toolkit.
 Qt depends on the client; views do not read osu! files or persistence directly.
@@ -774,12 +775,75 @@ assert editor epochs, cover size/errors/cancellation, revision-specific lookup a
 cleanup, serialized draft exclusion, sort/selection independence from saved order
 and explicit offline playback errors. They use only memory and inert cover bytes.
 
-[`build.rs`](../../apps/osu-radio-qt/build.rs) embeds QML and assets; resource
-loading does not depend on the working directory. Server configuration still does.
+[`build.rs`](../../apps/osu-radio-qt/build.rs) embeds QML and assets, converting
+discovered paths to forward slashes for QML module entries and resource aliases
+on Windows. Resource loading does not depend on the working directory. Server
+configuration still does. The gallery and embedded-asset probes in
+[`launch_smoke.rs`](../../apps/osu-radio-qt/tests/launch_smoke.rs) check component
+resolution and image/font decoding, separately from native desktop interactions.
 Asset origins/licenses are in [`SOURCES.md`](../../apps/osu-radio-qt/assets/SOURCES.md).
 Software-rendered integration probes verify state transitions, not GPU blur,
 native picker interaction, desktop layout or Windows behavior. See the manual
 acceptance matrix in [development](development.md#qt-frontend).
+
+## System media controls
+
+Live Qt automatically connects local MPRIS on Linux or SMTC on Windows after the
+main window exists. There is no toggle or backend selector. Both local-child and
+explicit remote sessions use the client's local playback state. The offline
+gallery never connects. See the approved [boundary](architecture.md#approved-system-media-boundary).
+
+The [public client facade](../../crates/osu-radio-client/src/controller.rs) exposes
+`connect_system_media`, `publish_system_media` and awaited `disconnect_system_media`.
+Connecting starts work; only `Status::Connected` acknowledges native registration.
+The [coordinator](../../crates/osu-radio-client/src/controller/system_media.rs)
+receives ordered native events in its existing loop and publishes the latest
+`Snapshot` without waiting for native I/O. The
+[Player VM](../../crates/osu-radio-client/src/view_models/player.rs) builds metadata,
+capabilities, status and position from the current assignment and matching worker,
+using original optional title/artist fields with current Unicode preferences.
+Loading/error/waiting does not borrow the previous worker's Playing state or
+position. Selected B never changes the published A or redirects system commands.
+Play uses the queue (`audio_source_id: None`); unavailable actions are ignored.
+
+Seek events retain `LaunchKey { entry_id, playback_token }` from callback receipt.
+Client and worker check the current launch; relative seek beyond the known end
+uses the existing Next lane with `expected_token` rechecked before HTTP dispatch.
+MPRIS also rejects mismatched TrackId in SetPosition. SMTC has no track identity
+in its callback, so OS delivery after a switch is outside that protection.
+MPRIS Volume uses existing Settings persistence/debounce, addressing current A in
+individual mode even when B is selected. Windows mixer volume is independent of
+the application's internal slider; SMTC never sends SetVolume.
+
+The [shared media scheduler](../../crates/osu-radio-client/src/controller/media.rs)
+adds current-cover demand even when A is absent from visible rows. One bounded
+HTTP request can serve Qt and the system consumer. Qt still acknowledges its own
+decode/install; a system-only result needs no Qt acknowledgement. Launch, cover
+and generation reject stale bytes before publication. The
+[artwork store](../../crates/osu-radio-media-controls/src/artwork.rs) owns the current
+temporary encoded file. MPRIS publishes an escaped file URI; SMTC creates a native
+stream. Changing identity, missing metadata or shutdown clears old fields/files.
+An unavailable cover preserves transport and other metadata.
+
+[MPRIS](../../crates/osu-radio-media-controls/src/linux/mod.rs) uses the existing
+Tokio runtime and a unique `org.mpris.MediaPlayer2.osu_radio.instance…` name;
+TrackList, playlists, OpenUri, shuffle and repeat are not exported. Position ticks
+do not emit PropertiesChanged; confirmed `seek_serial` changes emit Seeked.
+[SMTC](../../crates/osu-radio-media-controls/src/windows/mod.rs) validates a live,
+same-process top-level HWND and keeps all WinRT operations on an MTA worker.
+Callbacks enqueue events; native I/O stays outside the controller loop.
+
+[Qt lifecycle](../../apps/osu-radio-qt/src/runtime.h) keeps the window alive while
+[runtime detach](../../apps/osu-radio-qt/src/runtime.rs) awaits pending attach and
+native shutdown. Close is retried after acknowledgement; event-loop exit and
+failed launch pump Qt until detach completes before engine/window destruction.
+Final controller shutdown repeats cleanup safely. Fatal native failure reports
+`System media controls:`, disables only this integration until application restart
+and does not reconnect automatically. GUI, HTTP and local audio continue.
+
+[Automated/native evidence and remaining acceptance](development.md#system-media-controls-verification)
+distinguish Windows HWND publication from a real panel, media keys and physical
+audio. Linux runtime execution remains unverified in the current Windows checkout.
 
 ## Queue-rework integration verification
 

@@ -5,6 +5,7 @@ members = [
     "apps/osu-radio-qt",
     "apps/osu-radio-server",
     "crates/osu-radio-client",
+    "crates/osu-radio-media-controls",
     "crates/osu-radio-player",
     "crates/radio-core",
     "crates/radio-db",

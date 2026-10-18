@@ -5,8 +5,6 @@ use crate::controller::Controller;
 use crate::controller::workflow::{Effect, Workflow};
 use crate::controller::{AppUpdate, Completed};
 use crate::describe;
-#[cfg(test)]
-use crate::models::{PlaybackCommand, PlaybackMode};
 use crate::models::{Playlist, PlaylistItem, PlaylistSummary, TrackDifficulty};
 use std::collections::HashMap;
 use std::collections::{HashSet, VecDeque};

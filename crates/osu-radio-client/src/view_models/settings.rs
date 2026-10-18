@@ -807,6 +807,49 @@ impl SettingsViewModel {
         {
             return;
         }
+        self.save_track_volume(id, percent, input, work);
+    }
+    pub(crate) fn set_current_volume(
+        &mut self,
+        volume: f64,
+        input: &SettingsInput<'_>,
+        work: &mut Workflow<'_>,
+    ) {
+        if !volume.is_finite() || !(0.0..=1.0).contains(&volume) {
+            return;
+        }
+        let Some(settings) = self.volume.settings else {
+            return;
+        };
+        #[allow(
+            clippy::as_conversions,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        // Validated finite 0..1, rounded to 0..100 before any state change.
+        let percent = (volume * 100.0).round() as u8;
+        if settings.individual_volume_enabled {
+            if let Some(id) = input
+                .selection
+                .player
+                .assignment
+                .as_ref()
+                .and_then(|assignment| assignment.current_audio_source_id)
+                .filter(|id| *id >= 0)
+            {
+                self.save_track_volume(id, Some(percent), input, work);
+            }
+        } else {
+            self.set_global_volume(percent, input, work);
+        }
+    }
+    fn save_track_volume(
+        &mut self,
+        id: i32,
+        percent: Option<u8>,
+        input: &SettingsInput<'_>,
+        work: &mut Workflow<'_>,
+    ) {
         self.volume.overrides.insert(id, percent);
         work.effect(Effect::TrackVolumeChanged {
             audio_id: id,
