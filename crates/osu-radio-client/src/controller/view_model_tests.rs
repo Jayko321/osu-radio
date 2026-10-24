@@ -1073,3 +1073,61 @@ fn ui_seek_converts_once_while_system_seek_stays_in_source_time() {
             if *position == Duration::from_secs(60)
     ));
 }
+
+#[test]
+fn mute_is_session_player_state_apart_from_every_volume_setting() {
+    let (mut state, updates) = controller();
+    state.replace_tracks(vec![track(1), track(2)], true);
+    state.command(AppCommand::SetGlobalVolume(40));
+    state.settings.volume.pending.clear();
+    let muted = |updates: &std::sync::Mutex<Vec<AppUpdate>>| {
+        updates
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|update| match update {
+                AppUpdate::Player(view) => Some(view.muted),
+                _ => None,
+            })
+    };
+    let player_updates = |updates: &std::sync::Mutex<Vec<AppUpdate>>| {
+        updates
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|update| matches!(update, AppUpdate::Player(_)))
+            .count()
+    };
+    state.command(AppCommand::SetMuted(true));
+    assert_eq!(muted(&updates), Some(true));
+    // No worker means no engine and no audio device.
+    assert!(state.playback.is_none());
+    assert_eq!(state.assignment_volume().to_bits(), 0.4_f32.to_bits());
+    assert!(state.settings.volume.pending.is_empty() && state.settings.volume.saving.is_none());
+    assert_eq!(
+        state
+            .settings
+            .volume
+            .settings
+            .unwrap()
+            .global_volume_percent,
+        40
+    );
+    let count = player_updates(&updates);
+    state.command(AppCommand::SetMuted(true));
+    assert_eq!(
+        player_updates(&updates),
+        count,
+        "a repeated command is a no-op"
+    );
+    // Mute survives a selection change within the session.
+    state.command(AppCommand::SelectTrack(Some(2)));
+    assert!(state.player.muted);
+    // An explicit volume change ends it and applies the new value.
+    state.command(AppCommand::SetVolume(0.7));
+    assert_eq!(muted(&updates), Some(false));
+    assert_eq!(state.assignment_volume().to_bits(), 0.7_f32.to_bits());
+    state.command(AppCommand::SetMuted(false));
+    assert_eq!(muted(&updates), Some(false));
+}

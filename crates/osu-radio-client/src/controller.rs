@@ -81,6 +81,8 @@ pub enum AppCommand {
     SetQueueVisible(bool),
     Seek(Duration),
     SetVolume(f32),
+    /// Session-only mute; never saved and never changes a volume setting.
+    SetMuted(bool),
     SetIndividualVolumeEnabled(bool),
     SetGlobalVolume(u8),
     SetTrackVolume {
@@ -484,13 +486,22 @@ impl Controller {
             AppCommand::Next => self.queue_playback(crate::models::PlaybackCommand::Next),
             AppCommand::Previous => self.queue_playback(crate::models::PlaybackCommand::Previous),
             AppCommand::Seek(position) => self.seek_selected(position),
-            AppCommand::SetVolume(volume) => self.set_selected_volume(volume),
+            AppCommand::SetVolume(volume) => {
+                self.set_selected_volume(volume);
+                self.set_muted(false);
+            }
+            AppCommand::SetMuted(muted) => self.set_muted(muted),
             AppCommand::SetIndividualVolumeEnabled(enabled) => self.set_individual_volume(enabled),
             AppCommand::SetGlobalVolume(percent) => self.set_global_volume(percent),
             AppCommand::SetTrackVolume {
                 audio_id,
                 volume_percent,
-            } => self.set_track_volume(audio_id, volume_percent),
+            } => {
+                self.set_track_volume(audio_id, volume_percent);
+                if volume_percent.is_some() {
+                    self.set_muted(false);
+                }
+            }
             AppCommand::RetryAudioSettings => self.retry_audio_settings(),
             AppCommand::Mods(action) => self.mods_action(action),
             AppCommand::Connect => self.connect(),

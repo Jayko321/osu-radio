@@ -30,8 +30,9 @@ PlaylistPane {
     onCreateRequested: playlistsPane.bridge.playlists.beginPlaylistCreate()
     onEditRequested: id => playlistsPane.bridge.playlists.beginPlaylistEdit(id)
     onSelectRequested: id => playlistsPane.bridge.playlists.selectPlaylist(id)
-    onQueueRequested: id => playlistsPane.bridge.playlists.addPlaylistToQueue(id)
-    onDeleteRequested: id => playlistsPane.bridge.playlists.deletePlaylist(id)
+    onQueueRequested: id => { playlistsPane.shell.expectQueueToast("Playlist added to queue"); playlistsPane.bridge.playlists.addPlaylistToQueue(id); }
+    onPlayRequested: id => playlistsPane.bridge.playlists.playPlaylistFrom(id)
+    onDeleteRequested: id => playlistsPane.shell.deletePlaylist(id)
     onRequestArtwork: id => playlistsPane.bridge.playlists.requestPlaylistArtwork(id)
     onNameEdited: name => playlistsPane.bridge.playlists.setPlaylistEditorName(name)
     onCoverRequested: playlistsPane.bridge.playlists.choosePlaylistCover()
@@ -53,7 +54,24 @@ PlaylistPane {
         selected: playlistsPane.bridge.playlists.selectedPlaylistItemId === playlistItemId
         busy: playlistsPane.bridge.playlists.playlistBusy
         canInsert: playlistsPane.bridge.connected && !playlistsPane.bridge.queue.queueBusy
-        onInsertRequested: next => playlistsPane.bridge.playlists.insertPlaylistItem(playlistItemId, next)
+        canPlay: playlistsPane.bridge.connected && playlistsPane.bridge.settings.audioSettingsLoaded
+        canAddToPlaylist: playlistsPane.bridge.connected
+        onInsertRequested: next => {
+            playlistsPane.shell.expectQueueToast(next ? "Will play next" : "Added to end of queue");
+            playlistsPane.bridge.playlists.insertPlaylistItem(playlistItemId, next);
+        }
+        onPlayRequested: {
+            const player = playlistsPane.bridge.player;
+            const selected = playlistsPane.bridge.playlists.selectedPlaylistItemId === playlistItemId;
+            playlistsPane.bridge.playlists.selectPlaylistItem(playlistItemId);
+            // Open question: a non-selected row that is already the playing item would be paused here.
+            if (!selected || !player.selectedIsPlaying)
+                player.togglePlayback();
+        }
+        onAddToPlaylistRequested: {
+            playlistsPane.bridge.playlists.selectPlaylistItem(playlistItemId);
+            playlistsPane.bridge.playlists.openPlaylistAdd();
+        }
         onClicked: playlistsPane.bridge.playlists.selectPlaylistItem(playlistItemId)
         onRemoveRequested: itemId => playlistsPane.bridge.playlists.removePlaylistItem(itemId)
     }

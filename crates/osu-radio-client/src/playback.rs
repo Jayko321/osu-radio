@@ -51,6 +51,8 @@ pub(crate) enum Command {
         position: Duration,
     },
     SetVolume(f32),
+    /// Session-only: silences the engine without touching the real volume in the snapshot.
+    SetMuted(bool),
     Shutdown,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -240,6 +242,7 @@ struct Core<E> {
     state: Playback,
     mode: crate::models::PlaybackMode,
     parameters: PlaybackParameters,
+    muted: bool,
     feedback: VecDeque<Message>,
     reported: bool,
     started: bool,
@@ -253,6 +256,7 @@ impl<E> Default for Core<E> {
             state: Playback::default(),
             mode: crate::models::PlaybackMode::Stopped,
             parameters: PlaybackParameters::default(),
+            muted: false,
             feedback: VecDeque::new(),
             reported: false,
             started: false,
@@ -260,6 +264,10 @@ impl<E> Default for Core<E> {
     }
 }
 impl<E: Engine> Core<E> {
+    /// What the engine is told; `state.snapshot.volume` keeps the real level.
+    const fn engine_volume(&self, volume: f32) -> f32 {
+        if self.muted { 0.0 } else { volume }
+    }
     #[allow(clippy::too_many_lines)]
     fn command(&mut self, command: Command, generation: u64) -> Option<Download> {
         use crate::models::PlaybackMode;
@@ -292,9 +300,10 @@ impl<E: Engine> Core<E> {
                 self.state.waiting_for_check = waiting_for_check;
                 self.state.snapshot.volume = volume;
                 self.state.snapshot.parameters = parameters;
+                let engine_volume = self.engine_volume(volume);
                 if !restart && let Some(player) = &mut self.player {
                     // Same entry/token: update in place; position and pause are preserved.
-                    let applied = player.volume(volume).and_then(|()| {
+                    let applied = player.volume(engine_volume).and_then(|()| {
                         if parameters == self.parameters {
                             Ok(())
                         } else {
@@ -433,10 +442,18 @@ impl<E: Engine> Core<E> {
                     Err("volume must be a finite value between 0 and 1".into())
                 } else {
                     self.state.snapshot.volume = volume;
+                    let engine_volume = self.engine_volume(volume);
                     self.player
                         .as_mut()
-                        .map_or(Ok(()), |player| player.volume(volume))
+                        .map_or(Ok(()), |player| player.volume(engine_volume))
                 }
+            }
+            Command::SetMuted(muted) => {
+                self.muted = muted;
+                let engine_volume = self.engine_volume(self.state.snapshot.volume);
+                self.player
+                    .as_mut()
+                    .map_or(Ok(()), |player| player.volume(engine_volume))
             }
             Command::Shutdown => return None,
         };
@@ -461,6 +478,7 @@ impl<E: Engine> Core<E> {
     }
     fn load_cached(&mut self) -> Result<(), String> {
         if self.player.is_none() {
+            let engine_volume = self.engine_volume(self.state.snapshot.volume);
             let mut player = match E::new() {
                 Ok(player) => player,
                 Err(error) => {
@@ -468,7 +486,7 @@ impl<E: Engine> Core<E> {
                     return Err(error);
                 }
             };
-            player.volume(self.state.snapshot.volume)?;
+            player.volume(engine_volume)?;
             player.parameters(self.parameters)?;
             self.player = Some(player);
         }
@@ -502,7 +520,11 @@ impl<E: Engine> Core<E> {
     }
     fn refresh(&mut self) {
         if let Some(player) = &self.player {
+            let volume = self.state.snapshot.volume;
             self.state.snapshot = player.snapshot();
+            if self.muted {
+                self.state.snapshot.volume = volume;
+            }
             if let Some(error) = player.output_error() {
                 self.state.error = Some(error);
                 self.report(Message::DeviceFailure(self.state.playback_token));
@@ -1044,6 +1066,56 @@ mod tests {
         assert_eq!(core.state.snapshot.state, PlayerState::Playing);
         assert!(core.state.error.is_none());
         assert_eq!(core.feedback.pop_front(), Some(Message::Started(4)));
+    }
+    #[test]
+    fn mute_silences_the_engine_while_the_real_volume_stays_in_the_snapshot() {
+        let mut core = Core::<FakeEngine>::default();
+        let assign_volume = |core: &mut Core<FakeEngine>, token: u64, volume: f32| {
+            core.command(
+                Command::Assign {
+                    entry_id: None,
+                    waiting_for_check: false,
+                    generation: token,
+                    id: Some(10),
+                    playback_token: token,
+                    mode: PlaybackMode::Playing,
+                    volume,
+                    parameters: PlaybackParameters::default(),
+                },
+                token,
+            );
+        };
+        // Muting without a source never creates an engine (no audio device).
+        core.command(Command::SetMuted(true), 0);
+        assert!(core.player.is_none());
+        core.command(Command::SetMuted(false), 0);
+        assign_volume(&mut core, 1, 0.5);
+        core.command(
+            Command::Loaded {
+                generation: 1,
+                id: 10,
+                result: Ok(file(b"mp3")),
+            },
+            1,
+        );
+        let engine = |core: &Core<FakeEngine>| core.player.as_ref().unwrap().snapshot.volume;
+        assert_eq!(engine(&core).to_bits(), 0.5_f32.to_bits());
+        core.command(Command::SetMuted(true), 1);
+        core.command(Command::SetMuted(true), 1);
+        assert_eq!(engine(&core).to_bits(), 0.0_f32.to_bits());
+        assert_eq!(core.state.snapshot.volume.to_bits(), 0.5_f32.to_bits());
+        core.command(Command::SetVolume(0.7), 1);
+        assert_eq!(engine(&core).to_bits(), 0.0_f32.to_bits());
+        assert_eq!(core.state.snapshot.volume.to_bits(), 0.7_f32.to_bits());
+        // A restart inside the mute (next queue entry) starts silent.
+        assign_volume(&mut core, 2, 0.7);
+        assert_eq!(
+            core.player.as_ref().unwrap().play_volumes.last().copied(),
+            Some(0.0)
+        );
+        core.command(Command::SetMuted(false), 2);
+        assert_eq!(engine(&core).to_bits(), 0.7_f32.to_bits());
+        assert_eq!(core.state.snapshot.volume.to_bits(), 0.7_f32.to_bits());
     }
     #[test]
     fn paused_restore_is_lazy_and_volume_and_file_lifetime_are_preserved() {

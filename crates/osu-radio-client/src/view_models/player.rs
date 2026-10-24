@@ -33,6 +33,8 @@ pub struct PlayerPresentation {
     pub speed_percent: u16,
     /// Presentation duration of the selection even when it is not the current launch.
     pub selected_duration: Option<Duration>,
+    /// Session-only player state; independent of every saved volume.
+    pub muted: bool,
     pub message: String,
 }
 impl Default for PlayerPresentation {
@@ -51,6 +53,7 @@ impl Default for PlayerPresentation {
             duration: None,
             speed_percent: 100,
             selected_duration: None,
+            muted: false,
             message: String::new(),
         }
     }
@@ -82,6 +85,7 @@ pub struct PlayerViewModel {
     pub(crate) pending_start: Option<u64>,
     pub(crate) playback: Playback,
     pub(crate) transport_error: Option<String>,
+    pub(crate) muted: bool,
 }
 pub(crate) enum PrimaryAction {
     Playback(PlaybackCommand),
@@ -421,6 +425,7 @@ impl PlayerViewModel {
             } else {
                 selected.and_then(|track| track.duration).map(to_ui)
             },
+            muted: self.muted,
             message: self.playback.error.clone().unwrap_or_else(|| {
                 if self
                     .assignment

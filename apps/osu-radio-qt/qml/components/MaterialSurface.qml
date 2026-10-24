@@ -49,7 +49,7 @@ Item {
         parent: root
         anchors.fill: parent
         radius: root.radius
-        color: root.kind === "thick" ? "#f20d0d0d" : root.kind === "thin" ? "#80000000" : "#cc121212"
+        color: root.kind === "thick" ? Theme.popup : root.kind === "thin" ? "#80000000" : "#cc121212"
         border.color: Theme.border
         border.width: 1
     }, Item {

@@ -61,7 +61,7 @@ Rectangle {
                 Accessible.name: "Choose playlist cover"
                 onClicked: root.coverRequested()
                 background: Item {
-                    Artwork { anchors.fill: parent; source: root.artworkUrl }
+                    Artwork { anchors.fill: parent; placeholder: false; source: root.artworkUrl }
                     Rectangle { anchors.fill: parent; color: "transparent"; radius: 8; border.color: cover.activeFocus ? Theme.text : Theme.border }
                 }
                 contentItem: Item {

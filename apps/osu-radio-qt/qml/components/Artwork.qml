@@ -6,6 +6,12 @@ Item {
     property url source
     property real radius: 8
     property real imageOpacity: 1
+    // Off for wide card backgrounds, where a centered icon would sit under the text.
+    property bool placeholder: true
+    // A replacement image keeps the previous one visible, so only the first image after an empty source fades in.
+    property real reveal: 0
+    // Zero for a layer that is the underside of a cross-fade, so it never dips the blend.
+    property int revealDuration: 150
     Rectangle { anchors.fill: parent; radius: art.radius; color: Theme.surface }
     Image {
         id: image
@@ -17,6 +23,18 @@ Item {
         verticalAlignment: Image.AlignVCenter
         smooth: true
         visible: false
+        onStatusChanged: {
+            if (status === Image.Ready) fadeIn.restart();
+            else if (status === Image.Null) { fadeIn.stop(); art.reveal = 0; }
+        }
+    }
+    NumberAnimation { id: fadeIn; target: art; property: "reveal"; to: 1; duration: Theme.ms(art.revealDuration) }
+    AppIcon {
+        anchors.centerIn: parent
+        visible: art.placeholder && art.source.toString().length === 0
+        name: "music"
+        color: Theme.muted
+        size: Math.round(Math.min(40, art.width / 2, art.height / 2))
     }
     Rectangle {
         id: mask
@@ -28,7 +46,7 @@ Item {
     }
     MultiEffect {
         anchors.fill: parent
-        opacity: art.imageOpacity
+        opacity: art.imageOpacity * art.reveal
         source: image
         maskEnabled: true
         maskSource: mask

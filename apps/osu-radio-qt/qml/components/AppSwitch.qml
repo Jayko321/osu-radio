@@ -18,8 +18,10 @@ Basic.Switch {
         height: 20
         radius: 10
         color: control.checked ? Theme.accent : Theme.surface
+        Behavior on color { ColorAnimation { duration: Theme.ms(120); easing.type: Theme.easing } }
         Rectangle {
             x: control.checked ? 19 : 2
+            Behavior on x { NumberAnimation { duration: Theme.ms(140); easing.type: Theme.easing } }
             y: 2
             width: 16
             height: 16

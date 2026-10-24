@@ -5,7 +5,7 @@ Basic.Button {
     id: control
     property string variant: "alternate"
     property string iconName: ""
-    property color foreground: variant === "light" ? Theme.background
+    property color foreground: variant === "light" || variant === "danger" ? Theme.background
         : variant === "link" && enabled ? Theme.accent : Theme.text
     implicitHeight: 40
     implicitWidth: Math.max(40, implicitContentWidth + leftPadding + rightPadding)
@@ -25,12 +25,16 @@ Basic.Button {
     palette.buttonText: foreground
     palette.disabled.buttonText: foreground
     opacity: !enabled ? 0.4 : down ? 0.6 : hovered ? 0.8 : 1
+    scale: down ? 0.97 : 1
+    Behavior on opacity { NumberAnimation { duration: Theme.ms(Theme.motionFast); easing.type: Theme.easing } }
+    Behavior on scale { NumberAnimation { duration: Theme.ms(60); easing.type: Theme.easing } }
     background: Rectangle {
         radius: 8
         color: control.variant === "light" ? Theme.text
              : control.variant === "accent" ? Theme.accent
+             : control.variant === "danger" ? Theme.red
              : control.variant === "link" ? "transparent" : Theme.surface
         border.width: control.variant === "link" ? 0 : 1
-        border.color: control.variant === "accent" ? Theme.accent : Theme.border
+        border.color: control.variant === "accent" ? Theme.accent : control.variant === "danger" ? Theme.red : Theme.border
     }
 }

@@ -1,7 +1,6 @@
 pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic as Basic
-import QtQuick.Effects
 
 Basic.Button {
     id: card
@@ -16,7 +15,11 @@ Basic.Button {
     property bool selected: false
     property bool busy: false
     property bool canInsert: true
+    property bool canPlay: true
+    property bool canAddToPlaylist: true
+    signal playRequested()
     signal insertRequested(bool next)
+    signal addToPlaylistRequested()
     signal removeRequested(int itemId)
     height: 76
     padding: 12
@@ -32,46 +35,48 @@ Basic.Button {
         id: itemMenu
         objectName: "playlistItemMenu"
         row: card
+        canPlay: card.canPlay && card.available && !card.busy
         canInsert: card.canInsert && !card.busy
+        canAddToPlaylist: card.canAddToPlaylist && card.available && !card.busy
         showRemove: true
         canRemove: !card.busy
+        onPlayRequested: card.playRequested()
         onInsertRequested: next => card.insertRequested(next)
+        onAddToPlaylistRequested: card.addToPlaylistRequested()
         onRemoveRequested: card.removeRequested(card.playlistItemId)
     }
     background: Item {
-        Artwork { anchors.fill: parent; source: card.artworkUrl; imageOpacity: card.available ? 1 : 0.5 }
+        Artwork { anchors.fill: parent; placeholder: false; source: card.artworkUrl; imageOpacity: card.available ? 1 : 0.5 }
         Rectangle {
             anchors.fill: parent
             radius: 8
             gradient: Gradient {
                 orientation: Gradient.Horizontal
-                GradientStop { position: 0; color: "#ed0e0e0e" }
+                GradientStop { position: 0; color: card.selected ? "#f0241c38" : "#ed0e0e0e" }
                 GradientStop { position: 1; color: "#660e0e0e" }
             }
         }
-        MultiEffect {
-            anchors.fill: selectedFrame
-            source: selectedFrame
-            visible: card.selected
-            shadowEnabled: true
-            shadowColor: "#69c9ff"
-            shadowBlur: 0.7
-            shadowOpacity: 0.8
-            shadowHorizontalOffset: 0
-            shadowVerticalOffset: 0
-            autoPaddingEnabled: true
-        }
         Rectangle {
-            id: selectedFrame
             anchors.fill: parent
             radius: 8
             color: "transparent"
-            border.width: card.selected || card.activeFocus ? 2 : 1
-            border.color: card.selected ? "white" : card.activeFocus || card.hovered ? Theme.border : "transparent"
+            border.width: card.activeFocus ? 2 : 1
+            border.color: card.selected ? Theme.accent : card.activeFocus || card.hovered ? Theme.border : Qt.alpha(Theme.border, 0)
+            Behavior on border.color { ColorAnimation { duration: Theme.ms(Theme.motionFast); easing.type: Theme.easing } }
         }
     }
-    contentItem: Column {
-        spacing: 2
+    contentItem: Item {
+        Text {
+            id: duration
+            anchors.right: parent.right
+            y: subtitleText.y
+            text: card.durationLabel
+            color: card.available ? Theme.text : Theme.muted
+            opacity: card.available ? 0.8 : 1
+            font.family: Theme.fontFamily
+            font.pixelSize: 14
+            font.features: { "tnum": 1 }
+        }
         Text {
             width: parent.width
             text: card.title
@@ -82,7 +87,9 @@ Basic.Button {
             elide: Text.ElideRight
         }
         Text {
-            width: parent.width
+            id: subtitleText
+            y: 24
+            width: parent.width - duration.width - 12
             text: card.subtitle
             color: card.available ? Theme.text : Theme.muted
             font.family: Theme.fontFamily

@@ -43,6 +43,7 @@ AppModal {
             Layout.fillHeight: true
             contentWidth: availableWidth
             clip: true
+            Basic.ScrollBar.vertical: AppScrollBar {}
             Basic.ScrollBar.horizontal.policy: Basic.ScrollBar.AlwaysOff
             Column {
                 width: scroll.availableWidth
@@ -75,6 +76,7 @@ AppModal {
                                 Layout.fillWidth: true
                                 spacing: 6
                                 Text {
+                                    id: pathText
                                     Layout.fillWidth: true
                                     text: row.modelData.path
                                     color: Theme.text
@@ -82,8 +84,7 @@ AppModal {
                                     font.pixelSize: 14
                                     font.weight: Font.Medium
                                     elide: Text.ElideMiddle
-                                    Basic.ToolTip.visible: pathHover.hovered
-                                    Basic.ToolTip.text: text
+                                    AppToolTip { visible: pathHover.hovered; text: pathText.text }
                                     HoverHandler { id: pathHover }
                                 }
                                 RowLayout {
@@ -110,8 +111,7 @@ AppModal {
                                         font.family: Theme.fontFamily
                                         font.pixelSize: 12
                                         elide: Text.ElideRight
-                                        Basic.ToolTip.visible: countHover.hovered && row.modelData.countError.length > 0
-                                        Basic.ToolTip.text: row.modelData.countError
+                                        AppToolTip { visible: countHover.hovered && row.modelData.countError.length > 0; text: row.modelData.countError }
                                         HoverHandler { id: countHover }
                                     }
                                     IconButton {
@@ -122,6 +122,38 @@ AppModal {
                                         visible: row.modelData.countError.length > 0
                                         enabled: !root.applying
                                         onClicked: root.retryCountRequested(row.modelData.markerPath)
+                                    }
+                                    // The count text shrinks first, so the capsule never pushes the path or badge out.
+                                    Rectangle {
+                                        id: status
+                                        objectName: "folderStatus" + row.index
+                                        readonly property bool removing: row.modelData.action === "remove"
+                                        visible: row.modelData.action.length > 0
+                                        Layout.preferredWidth: statusRow.implicitWidth + 20
+                                        implicitHeight: 24
+                                        radius: 12
+                                        color: removing ? Qt.alpha(Theme.red, 0.25) : Theme.accentSoft
+                                        Row {
+                                            id: statusRow
+                                            anchors.centerIn: parent
+                                            spacing: 4
+                                            AppIcon {
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                size: 14
+                                                name: row.modelData.action === "remove" ? "minus" : row.modelData.action === "refresh" ? "rotate-cw" : "check"
+                                                color: status.removing ? Theme.red : Theme.accent
+                                            }
+                                            Text {
+                                                objectName: "folderStatusText" + row.index
+                                                anchors.verticalCenter: parent.verticalCenter
+                                                text: row.modelData.action === "remove" ? "Will be removed"
+                                                    : row.modelData.action === "refresh" ? "Will be refreshed" : "Will be added"
+                                                color: status.removing ? Theme.red : Theme.accent
+                                                font.family: Theme.fontFamily
+                                                font.pixelSize: 11
+                                                font.weight: Font.DemiBold
+                                            }
+                                        }
                                     }
                                 }
                                 Text {
@@ -138,12 +170,12 @@ AppModal {
                                 objectName: "folderRefresh" + row.index
                                 visible: row.modelData.registered
                                 iconName: "rotate-cw"
-                                accessibleName: "Обновить импорт"
+                                accessibleName: "Refresh import"
                                 checkable: true
                                 checked: row.modelData.action === "refresh"
                                 enabled: !root.applying
                                 onClicked: root.refreshRequested(row.modelData.markerPath)
-                                background: Rectangle { radius: 8; color: row.modelData.action === "refresh" ? "#409c7ef8" : "transparent" }
+                                background: Rectangle { radius: 8; color: row.modelData.action === "refresh" ? Theme.accentSoft : "transparent" }
                             }
                             IconButton {
                                 objectName: "folderToggle" + row.index
@@ -153,7 +185,7 @@ AppModal {
                                 checked: row.modelData.action === "add" || row.modelData.action === "remove"
                                 enabled: !root.applying
                                 onClicked: root.toggleRequested(row.modelData.markerPath)
-                                background: Rectangle { radius: 8; color: row.modelData.action === "add" || row.modelData.action === "remove" ? "#409c7ef8" : "transparent" }
+                                background: Rectangle { radius: 8; color: row.modelData.action === "add" || row.modelData.action === "remove" ? Theme.accentSoft : "transparent" }
                             }
                         }
                     }
@@ -169,8 +201,6 @@ AppModal {
                 enabled: !root.applying && !root.picking
                 onClicked: root.browseRequested()
             }
-            Item { Layout.fillWidth: true }
-            AppButton { text: "Need help?"; variant: "link"; onClicked: Qt.openUrlExternally("https://www.google.com") }
         }
         Text {
             Layout.fillWidth: true

@@ -85,6 +85,7 @@ QtObject {
                 onEditRequested: id => fixture.actions.push("edit:" + id)
                 onSelectRequested: id => fixture.actions.push("select:" + id)
                 onQueueRequested: id => fixture.actions.push("queue:" + id)
+                onPlayRequested: id => fixture.actions.push("play:" + id)
                 onDeleteRequested: id => fixture.actions.push("delete:" + id)
                 onRefreshRequested: fixture.actions.push("refresh")
             }
@@ -110,6 +111,9 @@ QtObject {
                 host: fixture
                 tracks: null
                 onRetryRequested: fixture.actions.push("queue-retry")
+                onPlayRequested: id => fixture.actions.push("queue-play:" + id)
+                onRemoveRequested: id => fixture.actions.push("queue-remove:" + id)
+                onMoveRequested: (id, before) => fixture.actions.push("queue-move:" + id + ">" + before)
                 onVisibleEntriesChanged: fixture.viewportChanges++
             }
         }
@@ -135,6 +139,10 @@ QtObject {
             property alias menu: menu
             property alias modal: modal
             property alias modalField: modalField
+            property alias ctx: ctx
+            property alias ctxDestructive: ctxDestructive
+            property alias ctxDisabled: ctxDisabled
+            property var ctxTriggered: []
             Radio.AppButton { id: button; text: "Activate"; onClicked: fixture.presses++ }
             Radio.IconButton { id: icon; iconName: "play"; accessibleName: "Play fixture"; onClicked: fixture.presses++ }
             Radio.AppField { id: field; onTextEdited: fixture.edits++ }
@@ -159,6 +167,12 @@ QtObject {
                 searchable: true
                 onChosen: value => { fixture.menuValue = value; currentIndex = entries.findIndex(entry => entry.id === value); }
                 onQueryEdited: value => { query = value; fixture.menuEdits++; }
+            }
+            Radio.AppContextMenu {
+                id: ctx
+                Radio.AppMenuItem { text: "Plain"; iconName: "play"; onTriggered: fixture.ctxTriggered.push("plain") }
+                Radio.AppMenuItem { id: ctxDestructive; text: "Remove"; iconName: "trash"; destructive: true; onTriggered: fixture.ctxTriggered.push("destructive") }
+                Radio.AppMenuItem { id: ctxDisabled; text: "Off"; iconName: "play"; enabled: false; onTriggered: fixture.ctxTriggered.push("disabled") }
             }
             Radio.AppModal {
                 id: modal
@@ -201,9 +215,11 @@ QtObject {
             width: probe.window.width; height: probe.window.height
             property var seeks: []
             property alias progress: progress
+            property alias fade: fade
+            Radio.CrossfadeSource { id: fade; duration: 100000 }
             Radio.PlaybackProgress {
                 id: progress
-                x: 100; y: 100; width: 400; height: 16
+                x: 100; y: 100; width: 400; height: 24
                 playbackPosition: 40
                 playbackDuration: 160
                 scaleKey: "42:-1:1:150"
@@ -227,6 +243,9 @@ QtObject {
         { query: "pRoJeCt", general: false, audio: false, individual: false, about: true, project: true },
         { query: "MIT", general: false, audio: false, individual: false },
         { query: "github.com", general: false, audio: false, individual: false },
+        { query: "imported from", general: false, audio: false, individual: false },
+        { query: "remembers", general: false, audio: false, individual: false },
+        { query: "its own speed", general: false, audio: false, individual: false },
         { query: "", general: true, audio: true, individual: true, mods: true, about: true, version: true, license: true, project: true },
         { query: "   ", general: true, audio: true, individual: true, mods: true, about: true, version: true, license: true, project: true }
     ]
@@ -306,6 +325,9 @@ QtObject {
         menu.choose(0);
         check(JSON.parse(mock.stateJson).gallery.menu_selected === last, "gallery menu value role uses original index");
         check(window.objectName === "galleryWindow", "standalone gallery root");
+        for (const name of ["demoContextButton", "demoConfirmButton", "demoToastButton", "demoTipButton"])
+            check(findChild(window.contentItem, name) !== null, "gallery shows the " + name + " feedback demo");
+        check(findChild(window.contentItem, "demoContextButton").data.some(o => o.objectName === "demoContextMenu"), "gallery feedback demo includes a context menu");
         const settingsTab = findChild(window.contentItem, "settingsButton");
         check(settingsTab.text === "Settings" && !settingsTab.enabled, "gallery exposes an unavailable Settings tab");
         const sortMenu = findChild(window.contentItem, "demoTrackSortMenu");
@@ -358,11 +380,15 @@ QtObject {
             c.button.forceActiveFocus();
             input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
             check(c.presses === 1, "Space activates the button once");
+            Radio.Theme.motion = false;
             c.button.enabled = false;
             input.mouseClick(c.button);
+            input.mouseMove(c.button, 5, 5);
             input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
-            check(c.presses === 1 && c.button.opacity === 0.4, "disabled button suppresses input");
+            check(c.presses === 1 && c.button.opacity === 0.4, "disabled button suppresses input and ignores hover");
             c.button.enabled = true;
+            check(c.button.opacity === 1 || c.button.opacity === 0.8, "motion off applies button opacity without a transition");
+            Radio.Theme.motion = true;
             for (const variant of ["light", "alternate", "accent", "link"]) {
                 c.button.variant = variant;
                 const expected = variant === "light" ? Radio.Theme.text : variant === "accent" ? Radio.Theme.accent
@@ -396,12 +422,31 @@ QtObject {
             c.toggle.enabled = true;
             input.mouseClick(c.toggle);
             check(!c.toggle.checked && c.toggles === 2, "switch toggles with the pointer");
+            const thumb = c.toggle.indicator.children[0];
+            check(thumb.x === 2, "unchecked thumb rests at the left");
+            Radio.Theme.motion = false;
+            input.mouseClick(c.toggle);
+            check(c.toggle.checked && thumb.x === 19 && c.toggle.indicator.color.toString() === Radio.Theme.accent.toString(), "motion off moves the switch thumb and track at once");
+            input.mouseClick(c.toggle);
+            check(!c.toggle.checked && thumb.x === 2, "motion off returns the thumb at once");
+            Radio.Theme.motion = true;
+            input.mouseClick(c.toggle);
+            check(c.toggle.checked && thumb.x < 19, "motion on slides the thumb instead of jumping");
+            input.mouseClick(c.toggle);
             const row = c.tabs.children.find(child => child.children.length > 1);
             check(row !== undefined, "tabs have rendered choices");
             const second = row.children.find(child => child.text === "Second");
             second.forceActiveFocus();
             input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
             check(c.chosen === 1 && c.tabs.currentIndex === 1 && second.variant === "light", "tab signal selects its original index");
+            const slider = findChild(c.tabs, "tabsIndicator");
+            const first = row.children.find(child => child.text === "First");
+            Radio.Theme.motion = false;
+            c.tabs.currentIndex = 0;
+            check(slider.x === row.x + first.x && slider.width === first.width, "motion off puts the tab indicator under the selected tab at once");
+            c.tabs.currentIndex = 1;
+            check(slider.x === row.x + second.x && slider.width === second.width, "tab indicator follows the selection back");
+            Radio.Theme.motion = true;
             c.tabs.enabled = false;
             input.mouseClick(row.children.find(child => child.text === "First"));
             check(c.chosen === 1, "disabled tabs do not dispatch selection");
@@ -505,6 +550,7 @@ QtObject {
         case 3:
             if (!menu.popup.opened) return;
             check(menu.focusedRow === 1, "menu starts at its selected row");
+            check(menu.popup.modal && menu.popup.dim === false, "dropdown stays modal but does not dim the window");
             input.keyClick(Qt.Key_Space, Qt.NoModifier, 0); stage = 4; break;
         case 4:
             if (menu.popup.visible) return;
@@ -537,7 +583,97 @@ QtObject {
         case 9:
             if (c.modal.visible) return;
             check(c.button.activeFocus, "closing the modal restores the recorded opener");
+            c.ctx.popup(c.button); stage = 10; break;
+        case 10:
+            if (!c.ctx.opened) return;
+            check(c.ctx.itemAt(0).activeFocus, "context menu focuses its first enabled item");
+            check(c.ctxDestructive.foreground === Radio.Theme.red && c.ctxDestructive.contentItem.children[0].color === Radio.Theme.red,
+                "destructive item text uses the red token");
+            check(c.ctx.itemAt(0).foreground === Radio.Theme.text, "ordinary item text uses the text token");
+            input.mouseClick(c.ctxDisabled);
+            check(c.ctx.opened && c.ctxTriggered.length === 0, "disabled item does not activate");
+            input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0); stage = 11; break;
+        case 11:
+            if (c.ctx.visible) return;
+            check(c.button.activeFocus, "Escape returns focus to the row that opened the menu");
+            c.ctx.popup(c.button); stage = 12; break;
+        case 12:
+            if (!c.ctx.opened) return;
+            input.keyClick(Qt.Key_Down, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_Return, Qt.NoModifier, 0); stage = 13; break;
+        case 13:
+            if (c.ctx.visible) return;
+            check(c.ctxTriggered.join() === "destructive" && c.button.activeFocus, "keyboard activates the destructive item and restores focus");
+            check(Radio.Theme.motion, "motion is on by default");
+            c.ctx.popup(c.button);
+            check(c.ctx.opacity < 1 && c.ctx.scale < 1, "context menu opens with a fade and scale, not a jump");
+            stage = 14; break;
+        case 14:
+            if (!c.ctx.opened) return;
+            check(c.ctx.opacity === 1 && c.ctx.scale === 1, "context menu enter transition settles at full size");
+            c.ctx.close();
+            check(c.ctx.visible && !c.ctx.opened, "exit keeps the menu visible until the transition ends");
+            stage = 16; break;
+        case 16:
+            if (c.ctx.visible) return;
+            check(c.button.activeFocus, "menu exit returns focus to the opener");
+            c.ctx.popup(c.button); c.ctx.close(); c.ctx.popup(c.button); c.ctx.close();
+            stage = 17; break;
+        case 17:
+            if (c.ctx.visible) return;
+            check(!c.ctx.opened && c.button.activeFocus, "rapid open, close, open (ignored during exit) and close leaves the menu hidden with focus intact");
+            c.modal.open();
+            check(c.modal.opacity < 1 && c.modal.slide > 0, "modal panel starts faded and shifted");
+            check(c.modal.parent.children.some(item => item.children.some(child => child.objectName === "modalDimmerFade" && child.opacity < 1)), "modal backdrop starts faded");
+            stage = 18; break;
+        case 18: {
+            if (!c.modal.opened) return;
+            check(c.modal.opacity === 1 && c.modal.slide === 0, "modal enter transition settles");
+            check(c.modal.parent.children.some(item => item.children.some(child => child.objectName === "modalDimmerFade" && child.opacity === 1)), "modal backdrop fades in");
+            c.modal.close();
+            stage = 19; break;
+        }
+        case 19:
+            check(c.modal.visible && !c.modal.opened, "modal stays visible through its exit");
+            stage = 20; break;
+        case 20:
+            if (c.modal.visible) return;
+            check(c.button.activeFocus, "modal exit restores opener focus");
+            Radio.Theme.motion = false;
+            c.ctx.popup(c.button);
+            stage = 21; break;
+        case 21:
+            if (!c.ctx.opened) return;
+            check(c.ctx.opacity === 1 && c.ctx.scale === 1, "motion off opens at full opacity");
+            c.ctx.close();
+            stage = 22; break;
+        case 22:
+            // One 10 ms poll is far below the 80 ms exit duration, so only a zero duration passes.
+            check(!c.ctx.visible, "motion off closes without delay");
+            Radio.Theme.motion = true;
+            input.mouseMove(c.icon, 5, 5);
+            stage = 23; break;
+        case 23: {
+            const tip = c.icon.data.find(o => o.objectName === "buttonToolTip");
+            check(tip.delay === 700 && tip.text === "Play fixture", "icon tooltip takes its text from accessibleName with a 700 ms delay");
+            if (!tip.opened) return;
+            c.icon.visible = false;
+            check(!tip.opened, "hiding the owner closes its tooltip");
+            stage = 24; break;
+        }
+        case 24: {
+            const tip = c.icon.data.find(o => o.objectName === "buttonToolTip");
+            if (tip.visible) return;
+            c.icon.visible = true;
+            input.mouseMove(c.button, 5, 5);
+            stage = 25; break;
+        }
+        case 25: {
+            const tip = c.icon.data.find(o => o.objectName === "buttonToolTip");
+            if (tip.visible) return;
+            check(!c.icon.hovered, "tooltip is gone after the pointer leaves");
             finish(); break;
+        }
         }
     }
     function modsProbe(): void {
@@ -722,6 +858,14 @@ QtObject {
             stage = 1; return;
         }
         const c = controls;
+        if (stage === 2) {
+            const bar = c.bar;
+            const indicator = findChild(bar, "tabIndicator");
+            const target = findChild(bar, "playlistsTabButton");
+            if (Math.abs(indicator.x - target.mapToItem(bar, 0, 0).x) > 0.5) return;
+            check(Math.abs(indicator.width - target.width) < 0.5 && c.tabs === 1, "rapid tab switches leave the indicator under the last selected tab");
+            finish(); return;
+        }
         const bar = c.bar;
         const fake = c.windowDouble;
         const resize = c.surface.children.find(child => child.z === 1000);
@@ -775,7 +919,20 @@ QtObject {
         check(c.tabs === 0, "Components navigation retains the Songs index");
         input.mouseClick(close);
         check(fake.closes === 1, "close routes to the window");
-        finish();
+        const indicator = findChild(bar, "tabIndicator");
+        const songs = findChild(bar, "songsTabButton");
+        const playlists = findChild(bar, "playlistsTabButton");
+        check(Math.abs(indicator.x - songs.mapToItem(bar, 0, 0).x) < 0.5, "indicator starts under the selected tab");
+        Radio.Theme.motion = false;
+        input.mouseClick(playlists);
+        check(indicator.x === playlists.mapToItem(bar, 0, 0).x && indicator.width === playlists.width, "motion off puts the window indicator under the tab at once");
+        Radio.Theme.motion = true;
+        input.mouseClick(songs);
+        check(indicator.x > songs.mapToItem(bar, 0, 0).x, "motion on slides the indicator instead of jumping");
+        input.mouseClick(playlists);
+        input.mouseClick(songs);
+        input.mouseClick(playlists);
+        stage = 2;
     }
     function panelProbe(): void {
         if (stage === 0) {
@@ -855,6 +1012,28 @@ QtObject {
         case 6:
             check(findChild(pane, "activePlaylistTitle").text === "Songs" && pane.tracksList.visible
                 && textChild(pane, "This playlist is empty").visible, "detail header and empty track list");
+            {
+                const header = findChild(pane, "playlistDetailHeader");
+                const addQueue = findChild(header, "playlistDetailAddQueue");
+                const play = findChild(header, "playlistDetailPlay");
+                check(header.visible && textChild(header, "0 tracks").visible && !addQueue.enabled && !play.enabled,
+                    "detail header shows the count and disables actions for an empty playlist");
+                pane.trackCount = 1;
+                check(textChild(header, "1 track").visible && addQueue.enabled && play.enabled, "single track uses the singular and enables actions");
+                pane.queueBusy = true;
+                check(!addQueue.enabled && play.enabled, "queue busy gates only Add to queue");
+                pane.queueBusy = false;
+                pane.busy = true;
+                check(!addQueue.enabled && !play.enabled, "busy gates both header actions");
+                pane.busy = false;
+                input.mouseClick(addQueue);
+                input.mouseClick(play);
+                check(c.actions.includes("queue:42") && c.actions.includes("play:42"), "header actions forward the active playlist ID");
+                pane.trackCount = 0;
+                pane.activeId = -1;
+                check(!header.visible, "header hides in the list view");
+                pane.activeId = 42;
+            }
             input.mouseClick(findChild(pane, "playlistBackButton"));
             check(c.actions.includes("select:-1"), "back forwards the sentinel list selection");
             folders.rows = [
@@ -866,6 +1045,17 @@ QtObject {
             if (!folders.opened) return;
             check(folders.hasPending && findChild(folders.contentItem, "folderSelectionRow0").border.color.toString() === Radio.Theme.red.toString()
                 && textChild(folders.contentItem, "Count unavailable").visible, "folder actions and count failure project independently");
+            const status = i => findChild(folders.contentItem, "folderStatusText" + i);
+            check(status(0).text === "Will be removed" && status(1).text === "Will be added"
+                && findChild(folders.contentItem, "folderStatus0").visible, "state capsules name the staged action in words");
+            check(textChild(folders.contentItem, "Need help?") === null, "help link is gone");
+            const stagedRows = folders.rows;
+            const withAction = action => stagedRows.map(r => Object.assign({}, r, { action }));
+            folders.rows = withAction("refresh");
+            check(status(0).text === "Will be refreshed" && findChild(folders.contentItem, "folderStatus1").visible, "refresh capsule appears");
+            folders.rows = withAction("");
+            check(!findChild(folders.contentItem, "folderStatus0").visible && !findChild(folders.contentItem, "folderStatus1").visible, "capsules disappear without a staged action");
+            folders.rows = stagedRows;
             input.mouseClick(findChild(folders.contentItem, "folderRefresh0"));
             input.mouseClick(findChild(folders.contentItem, "folderToggle1"));
             check(c.actions.includes("folder-refresh:/fixture/osu!.db") && c.actions.includes("toggle:/fixture/client.realm"), "folder controls retain marker identities");
@@ -921,10 +1111,15 @@ QtObject {
             if (c.queue.liveDelegates !== 5) return;
             check(c.viewportChanges > 0 && c.queue.mediaDelegates.some(row => row.entryId === "1")
                 && c.queue.mediaDelegates.some(row => row.entryId === "3"), "queue retains duplicate entries and registers viewport demand");
+            check(queueSections(c.queue).join() === "HISTORY,NOW PLAYING,UP NEXT", "queue shows history, current and upcoming sections");
+            check(findChild(c.queue.contentItem, "queueLeft").text === "· 3 left", "queue header counts upcoming rows only");
+            check(findChild(c.queue.contentItem, "queueClearUpcoming") && findChild(c.queue.contentItem, "queueClearAll"), "header keeps both clear actions");
+            queueSectionDropChecks(c);
             c.queueMock.dispatch("queueClearAll", ""); stage = 14; break;
         case 14:
             if (c.queue.liveDelegates !== 0) return;
             check(findChild(c.queue.contentItem, "queueStatus").text === "Queue is empty", "queue shrink releases delegates and restores empty state");
+            check(queueSections(c.queue).length === 0 && !findChild(c.queue.contentItem, "queueLeft").visible, "empty queue has no sections or counter");
             input.mouseClick(findChild(c.queue.contentItem, "queueCloseButton"));
             stage = 15; break;
         case 15:
@@ -1028,7 +1223,7 @@ QtObject {
             if (!menu.opened) return;
             check(menu.count === 3 && menu.itemAt(0).text === "Add to queue"
                 && menu.itemAt(1).text === "Edit" && menu.itemAt(2).text === "Delete", "playlist menu action order");
-            check(menu.width === 236 && menu.background.radius === 12, "rounded playlist menu proportions");
+            check(menu.width === 252 && menu.background.radius === 12, "rounded playlist menu proportions");
             check(menu.itemAt(0).iconName === "add-to-queue" && menu.itemAt(1).iconName === "playlist-edit"
                 && menu.itemAt(2).iconName === "playlist-delete", "supplied trailing icons");
             check(menu.itemAt(2).foreground.toString() === "#ed6666", "Delete is red");
@@ -1040,6 +1235,7 @@ QtObject {
         case 164: {
             const pane = findChild(window.contentItem, "demoPlaylistPane");
             const card = findChild(pane, "playlistList").itemAtIndex(0);
+            if (findChild(card, "playlistActionsMenu").visible) return;
             check(JSON.parse(mock.stateJson).queue.entries.length > 5 && JSON.parse(mock.stateJson).queue.mode === "paused", "Add to queue appends in memory without starting music");
             check(findChild(card, "playlistActionsButton").activeFocus, "menu restores focus to three dots");
             card.forceActiveFocus();
@@ -1120,6 +1316,13 @@ QtObject {
             if (!card) return;
             const menu = findChild(card, "playlistItemMenu");
             if (!menu.opened) return;
+            const frame = card.background.children[card.background.children.length - 1];
+            const wasSelected = card.selected;
+            Radio.Theme.motion = false;
+            card.selected = true;
+            check(frame.border.color.toString() === Radio.Theme.accent.toString() && frame.border.width === (card.activeFocus ? 2 : 1), "selected playlist card uses the shared accent frame");
+            card.selected = wasSelected;
+            Radio.Theme.motion = true;
             const menuOrigin = menu.contentItem.mapToItem(window.contentItem, 0, 0);
             const cardOrigin = card.mapToItem(window.contentItem, 0, 0);
             check(Math.abs(menuOrigin.x - cardOrigin.x) < 20, "keyboard removal menu is anchored to its card");
@@ -1158,8 +1361,18 @@ QtObject {
         }
         case 24: {
             const pane = findChild(window.contentItem, "demoPlaylistPane");
+            const dialog = findChild(window.contentItem, "confirmDialog");
+            if (!dialog.opened) return;
+            check(pane.playlists.length === 2 && dialog.title.startsWith("Delete “"), "Delete asks first and names the playlist");
+            input.mouseClick(findChild(dialog, "confirmAccept"));
+            stage = 25;
+            break;
+        }
+        case 25: {
+            const pane = findChild(window.contentItem, "demoPlaylistPane");
             if (pane.playlists.length !== 1) return;
             check(pane.playlists[0].id === 1, "Delete removes the selected playlist");
+            check(findChild(window.contentItem, "toast").text === "Playlist deleted", "Delete confirms with a toast");
             finish();
             break;
         }
@@ -1229,7 +1442,7 @@ QtObject {
             if (!bridge.settings.folderSelectionOpen || bridge.settings.folderSelectionRows.length === 0 || !dialog.opened
                 || bridge.settings.folderSelectionDiscovering || bridge.settings.folderSelectionRows.some(row => row.countPending)) return;
             const refresh = findChild(dialog.contentItem, "folderRefresh0");
-            check(refresh.accessibleName === "Обновить импорт", "registered row has accessible refresh control");
+            check(refresh.accessibleName === "Refresh import", "registered row has accessible refresh control");
             refresh.forceActiveFocus();
             input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
             stage = 9;
@@ -1264,6 +1477,7 @@ QtObject {
         const general = findChild(pane, "generalSettingsSection");
         const audio = findChild(pane, "audioSettingsSection");
         const about = findChild(pane, "aboutSettingsSection");
+        const discord = findChild(pane, "discordSettingsSection");
         const version = findChild(pane, "aboutVersion");
         const license = findChild(pane, "aboutLicense");
         const project = findChild(pane, "aboutProjectSetting");
@@ -1282,6 +1496,8 @@ QtObject {
             input.mouseClick(findChild(window.contentItem, "settingsButton"));
             check(general.visible && audio.visible && about.visible && individual.visible && !global.visible && !empty.visible,
                 "empty query shows current settings and respects conditional global volume");
+            check(general.y < audio.y && audio.y < discord.y && discord.y < about.y,
+                "sections are ordered General, Audio, Integrations, About");
             check(Qt.application.version === "0.1.0-alpha" && version.text === "Version — " + Qt.application.version,
                 "About shows the nonempty release version from Qt application metadata");
             check(license.text === "License — MIT" && link.text === "https://github.com/Jayko321/osu-radio"
@@ -1313,7 +1529,7 @@ QtObject {
                 "About section/field substring filter: " + expected.query);
             if (about.visible && !expected.general && !expected.audio) {
                 const first = expected.version ? version : expected.license ? license : project;
-                check(about.y === 0 && first.y === findChild(about, "aboutSettingsHeader").height + about.spacing,
+                check(about.y === 0 && first.mapToItem(about, 0, 0).y === findChild(about, "aboutSettingsHeader").height + about.spacing + 16,
                     "hidden About rows/sections leave no gaps: " + expected.query);
             }
             check(empty.visible === (!expected.general && !expected.audio && !expected.about), "empty result state: " + expected.query);
@@ -1429,17 +1645,22 @@ QtObject {
             break;
         case 2:
             check((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) === 0 && bridge.library.libraryMessage === "Nothing found.", "separate search empty state");
+            check(findChild(window.contentItem, "songsEmptyState").visible && findChild(window.contentItem, "songsClearSearch"), "Songs shows its empty state");
             search.text = "retry";
             stage = 3;
             break;
         case 3:
             check(bridge.library.libraryMessage.includes("fixture search"), "search error visible");
+            check(!findChild(window.contentItem, "songsEmptyState").visible, "a load error is not shown as an empty result");
             bridge.library.refreshLibrary();
             stage = 4;
             break;
         case 4:
             check((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) === 1 && bridge.player.selectedAudioId === 42, "refresh retries current query");
-            search.text = "";
+            const clear = findChild(search, "clearSearchButton");
+            check(clear.visible, "clear button follows search text");
+            clear.clicked();
+            check(search.text === "" && !clear.visible, "clear button empties the field and hides");
             stage = 5;
             break;
         case 5:
@@ -1448,6 +1669,7 @@ QtObject {
             break;
         }
     }
+    property var menuRow: null
     function playbackProbe(): void {
         if (!bridge.connected || bridge.library.libraryLoading || !bridge.settings.audioSettingsLoaded) return;
         const play = findChild(window.contentItem, "playPauseButton");
@@ -1508,14 +1730,155 @@ QtObject {
             bridge.library.selectTrack(7);
             stage = 4;
             break;
-        case 4:
+        case 4: {
             if (bridge.player.selectedAudioId !== 7 || bridge.player.loadingAudioId !== -1 || bridge.player.currentAudioId !== -1) return;
             check(bridge.player.playbackMessage.includes("fixture audio unavailable"), "download error is visible beside controls");
             check(bridge.player.currentAudioId === -1 && !progress.enabled, "failed download leaves playback empty");
             check(Math.round(bridge.settings.volume * 100) === 25, "volume survives selection changes and failed download");
+            const songs = findChild(window.contentItem, "songList");
+            for (let i = 0; i < songs.count; ++i) if (songs.itemAtIndex(i) && songs.itemAtIndex(i).audioId === 42) menuRow = songs.itemAtIndex(i);
+            if (!menuRow) return;
+            menuRow.forceActiveFocus();
+            input.keyClick(Qt.Key_Menu, Qt.NoModifier, 0);
+            stage = 5;
+            break;
+        }
+        case 5: {
+            const menu = findChild(menuRow, "songQueueMenu");
+            if (!menu.opened) return;
+            check(bridge.player.selectedAudioId === 7, "menu row differs from the selection");
+            const command = findChild(menuRow, "playQueueTrack");
+            command.forceActiveFocus();
+            input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
+            stage = 6;
+            break;
+        }
+        case 6:
+            if (bridge.player.selectedAudioId !== menuRow.audioId || bridge.player.loadingAudioId !== menuRow.audioId) return;
+            check(bridge.player.currentAudioId === menuRow.audioId, "menu Play selects the row and starts it");
+            stage = 7;
+            break;
+        case 7:
+            if (findChild(menuRow, "songQueueMenu").visible) return;
+            menuRow.forceActiveFocus();
+            input.keyClick(Qt.Key_Menu, Qt.NoModifier, 0);
+            stage = 8;
+            break;
+        case 8:
+            if (!findChild(menuRow, "songQueueMenu").opened) return;
+            findChild(menuRow, "addTrackToPlaylist").forceActiveFocus();
+            input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
+            stage = 9;
+            break;
+        case 9:
+            if (!bridge.playlists.playlistAdding) return;
+            check(bridge.player.selectedAudioId === menuRow.audioId, "Add to playlist opens the dialog for the menu row");
             finish();
             break;
         }
+    }
+    property int quietTicks: 0
+    // True after n further polls, to assert that something did not happen.
+    function quiet(n: int): bool { return ++quietTicks > n; }
+    function hotkeysProbe(): void {
+        if (!bridge.connected || bridge.library.libraryLoading || !bridge.settings.audioSettingsLoaded) return;
+        const settings = bridge.settings;
+        const root = window.contentItem;
+        const search = findChild(root, "songSearch");
+        const volumeButton = findChild(root, "volumeButton");
+        const volumePopup = findChild(root, "volumePopup");
+        const modsButton = findChild(root, "modsButton");
+        const modsPopup = findChild(root, "modsPopup");
+        const part = name => findChild(modsPopup.contentItem, name);
+        const volume = () => Math.round(settings.volume * 100);
+        const mods = () => settings.modsMode + ":" + settings.modsSpeedPercent + ":" + settings.modsAdjustPitch;
+        const badge = () => findChild(root, "modsBadge");
+        const idleIcon = "#eff1f5";
+        const steps = [
+            { act: () => bridge.library.selectTrack(42), until: () => bridge.player.selectedAudioId === 42 && bridge.library.tracks.trackCount === 3,
+              check: () => !search.activeFocus, message: "Songs does not focus the search field" },
+            { act: () => input.keyClick(Qt.Key_F, Qt.ControlModifier, 0), until: () => search.activeFocus, message: "Ctrl+F focuses the Songs search" },
+            { act: () => input.keyClick(Qt.Key_Space, Qt.NoModifier, 0), until: () => quiet(4),
+              check: () => search.text === " " && bridge.player.loadingAudioId === -1 && bridge.player.currentAudioId === -1,
+              message: "Space types into the search field and does not play" },
+            { act: () => search.clear(), until: () => bridge.library.tracks.trackCount === 3 },
+            { act: () => input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0), until: () => !search.activeFocus, message: "Escape leaves the search field" },
+            { act: () => input.keyClick(Qt.Key_Space, Qt.NoModifier, 0), until: () => bridge.player.currentAudioId === 42,
+              message: "Space after Escape starts the selected track" },
+            // Left/Right have no observable effect without a seekable engine; this only proves they are inert.
+            { act: () => { input.keyClick(Qt.Key_Left, Qt.NoModifier, 0); input.keyClick(Qt.Key_Right, Qt.NoModifier, 0); }, until: () => quiet(2),
+              check: () => !bridge.player.canSeek && bridge.player.playbackPosition === 0, message: "arrows without canSeek do nothing" },
+            { act: () => volumeButton.clicked(), until: () => volumePopup.opened && findChild(root, "volumeSlider").activeFocus,
+              check: () => findChild(volumePopup.contentItem, "volumeScope").text === "All tracks", message: "popup names the general volume" },
+            { act: () => input.keyClick(Qt.Key_Left, Qt.NoModifier, 0), until: () => volume() === 99, message: "Left in the open popup moves the slider" },
+            { act: () => input.mouseWheel(volumeButton, 20, 20, 0, -120), until: () => volume() === 94, message: "one wheel notch is exactly -5%" },
+            { act: () => input.mouseWheel(volumePopup.contentItem, 20, 5, 0, 120), until: () => volume() === 99, message: "the wheel also works over the popup" },
+            { act: () => input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0), until: () => !volumePopup.visible && volumeButton.activeFocus },
+            { act: () => settings.changeVolume(0.3), until: () => volume() === 30,
+              check: () => volumeButton.iconName === "volume-1", message: "low volume icon" },
+            { act: () => settings.changeVolume(0), until: () => volume() === 0,
+              check: () => volumeButton.iconName === "volume-x", message: "muted volume icon" },
+            { act: () => settings.changeVolume(0.4), until: () => volume() === 40,
+              check: () => volumeButton.iconName === "volume-2", message: "40% is the normal icon" },
+            // Mute is player state: the saved volume and the slider keep their value throughout.
+            { act: () => input.keyClick(Qt.Key_M, Qt.NoModifier, 0), until: () => bridge.player.muted,
+              check: () => volume() === 40 && volumeButton.iconName === "volume-x" && !settings.audioSettingsCanRetry, message: "M mutes without touching the volume" },
+            { act: () => volumeButton.clicked(), until: () => volumePopup.opened,
+              check: () => findChild(volumePopup.contentItem, "volumePercent").text === "0%"
+                && Math.abs(findChild(volumePopup.contentItem, "volumeSlider").value - 0.4) < 0.001
+                && findChild(volumePopup.contentItem, "muteButton").Accessible.name === "Mute",
+              message: "muted popup shows 0% and keeps the slider value" },
+            { act: () => input.keyClick(Qt.Key_M, Qt.NoModifier, 0), until: () => quiet(2),
+              check: () => bridge.player.muted, message: "M is ignored while the volume popup is open" },
+            { act: () => findChild(volumePopup.contentItem, "muteButton").clicked(), until: () => !bridge.player.muted,
+              check: () => volume() === 40 && volumeButton.iconName === "volume-2" && findChild(volumePopup.contentItem, "volumePercent").text === "40%",
+              message: "the popup button restores the previous level" },
+            { act: () => findChild(volumePopup.contentItem, "muteButton").clicked(), until: () => bridge.player.muted },
+            { act: () => { const slider = findChild(volumePopup.contentItem, "volumeSlider"); slider.value = 0.5; slider.moved(); },
+              until: () => volume() === 50 && !bridge.player.muted, message: "dragging the slider ends mute and applies the new value" },
+            { act: () => input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0), until: () => !volumePopup.visible },
+            { act: () => settings.changeVolume(0.4), until: () => volume() === 40 },
+            { act: () => input.keyClick(Qt.Key_F, Qt.ControlModifier, 0), until: () => search.activeFocus },
+            { act: () => input.keyClick(Qt.Key_M, Qt.NoModifier, 0), until: () => quiet(4),
+              check: () => search.text === "m" && !bridge.player.muted, message: "M types into the search field and does not mute" },
+            { act: () => search.clear(), until: () => bridge.library.tracks.trackCount === 3 },
+            { act: () => input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0), until: () => !search.activeFocus },
+            { act: () => settings.setIndividualVolumeEnabled(true), until: () => settings.individualVolumeEnabled && volume() === 40 },
+            { act: () => input.mouseWheel(volumeButton, 20, 20, 0, -120), until: () => volume() === 35 && settings.volumeHasOverride,
+              message: "the wheel edits the selected track in individual mode" },
+            { act: () => volumeButton.clicked(), until: () => volumePopup.opened,
+              check: () => findChild(volumePopup.contentItem, "volumeScope").text === "This track", message: "popup names the track volume" },
+            { act: () => input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0), until: () => !volumePopup.visible },
+            { act: () => {}, until: () => settings.modsLoaded && settings.modsAvailable,
+              check: () => !badge().visible && modsButton.accessibleName === "Mods (F1)", message: "no badge without mods" },
+            { act: () => input.keyClick(Qt.Key_F1, Qt.NoModifier, 0), until: () => modsPopup.opened && modsPopup.available && part("modsDtButton").activeFocus },
+            { act: () => input.keyClick(Qt.Key_D, Qt.NoModifier, 0), until: () => mods() === "dt:150:false" && badge().visible,
+              check: () => badge().label === "DT 1.5×" && modsButton.accessibleName === "Mods (F1): DT 1.5×" && String(modsButton.icon.color) !== idleIcon,
+              message: "DT shows the accent icon and the 1.5× badge" },
+            { act: () => { const speed = part("modsSpeedSlider"); speed.value = 125; speed.moved(); }, until: () => mods() === "dt:125:false",
+              check: () => badge().label === "DT 1.25×" && modsButton.accessibleName === "Mods (F1): DT 1.25×", message: "badge keeps two decimals only when needed" },
+            { act: () => input.mouseClick(part("modsPitchSwitch")), until: () => mods() === "dt:125:true",
+              check: () => modsButton.accessibleName === "Mods (F1): NC 1.25×", message: "NC is named in the tooltip" },
+            { act: () => input.mouseClick(part("modsClearButton")), until: () => mods() === "none:100:false",
+              check: () => !badge().visible && modsButton.accessibleName === "Mods (F1)" && String(modsButton.icon.color) === idleIcon,
+              message: "clearing mods hides the badge and the accent" },
+            { act: () => input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0), until: () => !modsPopup.visible },
+            { act: () => input.mouseClick(findChild(root, "playlistsTabButton")), until: () => window.selectedTab === 1 },
+            { act: () => input.keyClick(Qt.Key_F, Qt.ControlModifier, 0), until: () => findChild(root, "playlistSearch").activeFocus,
+              message: "Ctrl+F focuses the playlist search" },
+            { act: () => input.mouseClick(findChild(root, "settingsButton")), until: () => window.selectedTab === 2 },
+            { act: () => input.keyClick(Qt.Key_F, Qt.ControlModifier, 0), until: () => findChild(root, "settingsSearch").activeFocus,
+              message: "Ctrl+F focuses the settings search" },
+            { act: () => input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0), until: () => !findChild(root, "settingsSearch").activeFocus },
+        ];
+        if (stage >= steps.length) { finish(); return; }
+        const current = steps[stage];
+        if (!modsStepActed) { current.act(); modsStepActed = true; }
+        if (current.until && !current.until()) return;
+        if (current.check) check(current.check(), current.message || "hotkeys step " + stage);
+        modsStepActed = false;
+        quietTicks = 0;
+        stage++;
     }
     function volumeProbe(): void {
         if (!bridge.connected || bridge.library.libraryLoading) return;
@@ -1622,6 +1985,19 @@ QtObject {
         switch (stage) {
         case 1:
             check(p.enabled && p.value === 40 && p.from === 0 && p.to === 160, "presentation seconds bind unchanged");
+            const fill = p.background.children[0];
+            check(fill.height === p.background.height && fill.height > 0 && fill.width > 0, "played part has the track's height");
+            p.playbackPosition = 0;
+            check(fill.width === 0, "no played part at position zero");
+            p.playbackPosition = 40;
+            const tip = findChild(p, "playbackTip");
+            check(!tip.visible, "no time bubble without the pointer");
+            input.mouseMove(p, p.width / 2, p.height / 2, 0);
+            check(tip.visible && findChild(p, "playbackTipText").text === "1:20", "pointer at 50% shows half the duration: " + findChild(p, "playbackTipText").text);
+            p.enabled = false;
+            check(!tip.visible, "inactive progress shows no time bubble");
+            p.enabled = true;
+            input.mouseMove(p, p.width * 2, p.height / 2, 0);
             drag(0.75);
             check(p.pressed, "press starts a drag");
             p.playbackPosition = 100;
@@ -1659,6 +2035,12 @@ QtObject {
             p.enabled = true; p.forceActiveFocus();
             input.keyClick(Qt.Key_Right, Qt.NoModifier, 0);
             check(c.seeks.length === 1 && c.seeks[0] > 40, "keyboard seek reports one presentation-second value: " + c.seeks);
+            c.fade.source = "qrc:/assets/logos/stable.png";
+            check(c.fade.previous.toString() === "" && c.fade.progress === 1, "first image is shown at once");
+            c.fade.source = "qrc:/assets/logos/lazer.png";
+            check(c.fade.previous.toString().endsWith("stable.png"), "replacement keeps the old image underneath");
+            c.fade.source = "";
+            check(c.fade.previous.toString() === "" && c.fade.progress === 1, "clearing drops the old image at once");
             finish(); break;
         }
     }
@@ -1795,6 +2177,39 @@ QtObject {
         stage++;
     }
     property bool modsStepActed: false
+    function queueSections(panel: var): var {
+        return findChild(panel.contentItem, "queueScroll").contentItem.children
+            .filter(item => item.objectName === "queueSectionLabel" && item.visible).sort((a, b) => a.y - b.y).map(item => item.children[0].text);
+    }
+    // Rows are history, current, upcoming; section labels shift row positions, so drops follow real geometry.
+    function queueSectionDropChecks(c: var): void {
+        const list = findChild(c.queue.contentItem, "queueScroll");
+        const cards = c.queue.mediaDelegates.slice().sort((a, b) => a.index - b.index);
+        const at = (card, offset) => Qt.point(10, card.y - list.contentY + offset);
+        check(cards[0].background.opacity === 0.55 && cards[1].background.opacity === 1, "history is dimmed to 55 percent");
+        const guard = findChild(cards[0], "queueHiddenActionGuard");
+        check(!cards[0].actionsShown && guard.enabled, "idle row hides its actions and swallows pointer input over them");
+        input.mouseMove(cards[0], 100, 40, 0);
+        check(cards[0].actionsShown && !guard.enabled, "hover shows the actions and hands pointer input to them");
+        input.mouseMove(window.contentItem, 2, 2, 0);
+        c.queue.dragId = cards[0].entryId; c.queue.dragging = true;
+        c.queue.updateDrop(at(cards[1], 37));
+        check(c.queue.insertionIndex === 1, "above the current midpoint drops before current");
+        c.queue.updateDrop(at(cards[1], 45));
+        check(c.queue.insertionIndex === 2, "below the current midpoint drops after current");
+        c.queue.updateDrop(at(cards[2], -20));
+        check(c.queue.insertionIndex === 2 && c.queue.insertionY === cards[2].y - 7, "section label gap drops before the next row");
+        c.queue.updateDrop(at(cards[4], 70));
+        check(c.queue.insertionIndex === 5 && c.queue.insertionY === cards[4].y + cards[4].height + 7, "below the last row appends");
+        c.queue.updateDrop(at(cards[1], 45));
+        const before = c.actions.length;
+        c.queue.dropDrag();
+        check(c.actions.length === before + 1 && c.actions[before] === "queue-move:" + cards[0].entryId + ">" + c.queueMock.queueModel.entryIdAt(2), "drop between sections sends one move with the exact anchor");
+        cards[2].forceActiveFocus();
+        input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
+        input.keyClick(Qt.Key_Delete, Qt.NoModifier, 0);
+        check(c.actions.includes("queue-play:" + cards[2].entryId) && c.actions.includes("queue-remove:" + cards[2].entryId), "Enter plays and Delete removes the focused row");
+    }
     function queueCards(panel: var): var {
         return panel.mediaDelegates.filter(row => row.inViewport);
     }
@@ -1821,6 +2236,7 @@ QtObject {
         case 11:
             if (bridge.queue.queueLoading || list.count !== 3 || !queueReady(panel)) return;
             check(bridge.queue.tracks.entryIdAt(0) === "1" && list.itemAtIndex(0).model.isCurrent, "full queue includes current");
+            check(queueSections(panel).join() === "NOW PLAYING,UP NEXT" && findChild(panel.contentItem, "queueLeft").text === "· 2 left", "queue without history has no History section");
             for (let i = 0; i < 6; ++i) {
                 input.keyClick(Qt.Key_Tab, Qt.NoModifier, 0);
                 check(contained(panel.contentItem, window.activeFocusItem), "queue contains Tab focus");
@@ -1831,6 +2247,7 @@ QtObject {
         case 1:
             if (bridge.player.currentAudioId !== 42 || bridge.queue.queueLoading) return;
             check(list.count === 3 && list.itemAtIndex(0).model.isPast, "Next preserves history");
+            check(queueSections(panel).join() === "HISTORY,NOW PLAYING,UP NEXT" && findChild(panel.contentItem, "queueLeft").text === "· 1 left", "live queue shows three sections and the upcoming count");
             input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0); stage = 12; break;
         case 12:
             if (panel.visible) return;
@@ -1905,13 +2322,105 @@ QtObject {
             check(list.count === 4 && store.state.queue.current_entry_id === "4", "offline unavailable removal keeps current");
             list.itemAtIndex(2).forceActiveFocus(); input.keyClick(Qt.Key_Up, Qt.ControlModifier, 0);
             check(store.queueModel.entryIdAt(1) === "3", "offline keyboard move by ID");
+            confirmTarget = findChild(window.contentItem, "confirmDialog");
+            galleryCount = list.count;
             findChild(panel.contentItem, "queueClearUpcoming").clicked();
-            findChild(panel.contentItem, "queueClearAll").clicked();
-            check(list.count === 0, "offline clears use same panel");
+            check(findChild(window.contentItem, "toast").text === "Upcoming cleared" && findChild(window.contentItem, "toast").visible, "Clear upcoming acts at once with a toast and no dialog");
+            check(!confirmTarget.visible && confirmations === 0, "Clear upcoming asks nothing");
+            galleryCount = list.count;
+            findChild(panel.contentItem, "queueClearAll").clicked(); stage = 20; break;
+        case 20:
+            if (!confirmTarget.opened) return;
+            check(window.activeFocusItem === findChild(confirmTarget, "confirmCancel"), "Cancel holds the initial focus");
+            check(list.count === galleryCount && findChild(confirmTarget, "confirmMessage").text.includes("stops playback"), "Clear all waits for confirmation and states what it does");
+            input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0); stage = 21; break;
+        case 21:
+            if (confirmTarget.visible) return;
+            check(confirmations === 0 && list.count === galleryCount && panel.visible, "Escape dismisses the dialog without clearing");
+            findChild(panel.contentItem, "queueClearAll").clicked(); stage = 22; break;
+        case 22:
+            if (!confirmTarget.opened) return;
+            input.mouseClick(findChild(confirmTarget, "confirmCancel")); stage = 23; break;
+        case 23:
+            if (confirmTarget.visible) return;
+            check(confirmations === 0 && list.count === galleryCount, "Cancel does not clear");
+            findChild(panel.contentItem, "queueClearAll").clicked(); stage = 24; break;
+        case 24:
+            if (!confirmTarget.opened) return;
+            input.mouseClick(window.contentItem, 4, 4, Qt.LeftButton, Qt.NoModifier, 0); stage = 25; break;
+        case 25:
+            if (confirmTarget.visible) return;
+            check(confirmations === 0 && list.count === galleryCount, "A click outside dismisses without clearing");
+            findChild(panel.contentItem, "queueClearAll").clicked(); stage = 26; break;
+        case 26:
+            if (!confirmTarget.opened) return;
+            toastShownAt = Date.now();
+            input.mouseClick(findChild(confirmTarget, "confirmAccept")); stage = 27; break;
+        case 27:
+            if (confirmTarget.visible) return;
+            check(confirmations === 1 && list.count === 0, "Confirm clears exactly once");
+            check(findChild(window.contentItem, "toast").text === "Queue cleared", "Clear all shows its toast");
             panel.close(); stage = 2; break;
         case 2:
             if (panel.visible) return;
             check(findChild(window.contentItem, "galleryQueueButton").activeFocus, "offline focus returns");
+            stage = 30; break;
+        case 30: {
+            const toast = findChild(window.contentItem, "toast");
+            if (toast.visible) return;
+            const elapsed = Date.now() - toastShownAt;
+            check(elapsed >= 1000 && elapsed < 2500, "toast stays about one second: " + elapsed + " ms");
+            toast.show("one"); toastShownAt = Date.now(); stage = 31; break;
+        }
+        case 31:
+            if (Date.now() - toastShownAt < 600) return;
+            findChild(window.contentItem, "toast").show("two"); toastRestartedAt = Date.now(); stage = 32; break;
+        case 32: {
+            const toast = findChild(window.contentItem, "toast");
+            if (toast.visible) return;
+            check(toast.text === "two" && Date.now() - toastShownAt >= 1550 && Date.now() - toastRestartedAt >= 1000, "a new call restarts the timer");
+            stage = 33; break;
+        }
+        case 33:
+            watcherProbe(); break;
+        }
+    }
+    property var confirmTarget: null
+    property int confirmations: 0
+    property int galleryCount: 0
+    property double toastShownAt: 0
+    property double toastRestartedAt: 0
+    readonly property Connections confirmConnection: Connections {
+        target: probe.confirmTarget
+        function onConfirmed(): void { probe.confirmations++; }
+    }
+    // Busy and message change in separate notifications; success needs a rise, a fall and no error.
+    readonly property Radio.OperationWatcher watcher: Radio.OperationWatcher {}
+    property var watched: []
+    readonly property Connections watcherConnection: Connections {
+        target: probe.watcher
+        function onSucceeded(text: string): void { probe.watched.push(text); }
+    }
+    property int watcherStep: 0
+    function watcherProbe(): void {
+        switch (watcherStep) {
+        case 0:
+            watcher.expect("ok"); watcher.busy = true; watcher.busy = false; watcherStep = 1; break;
+        case 1:
+            if (watched.length === 0) return;
+            check(watched.join() === "ok", "a quiet busy cycle reports success once");
+            watcher.expect("failed"); watcher.busy = true; watcher.busy = false; watcher.message = "boom"; watcherStep = 2; break;
+        case 2:
+            // The failing message lands in the same turn as the fall, so the verdict must see it.
+            if (watcher.pending.length) return;
+            check(watched.join() === "ok", "an error message suppresses the success toast");
+            watcher.message = ""; watcher.expect("never"); watcherStep = 3; toastShownAt = Date.now(); break;
+        case 3:
+            if (Date.now() - toastShownAt < 1700) return;
+            watcher.busy = true; watcher.busy = false; watcherStep = 4; break;
+        case 4:
+            if (Date.now() - toastShownAt < 1900) return;
+            check(watched.join() === "ok", "a rejected action that never became busy does not claim a later operation");
             finish(); break;
         }
     }
@@ -2037,6 +2546,11 @@ QtObject {
             if (!menu.opened) return;
             const name = insertionStep % 2 === 1 ? "insertQueueTrackNext" : "appendQueueTrack";
             const command = findChild(insertionCard, name);
+            const names = [0, 1, 2, 3, 4].map(i => menu.itemAt(i).objectName || "|");
+            check(names.join() === "playQueueTrack,appendQueueTrack,insertQueueTrackNext,|,addTrackToPlaylist", "track menu item order");
+            check(menu.itemAt(0).text === "Play" && menu.itemAt(4).text === "Add to playlist…", "track menu captions");
+            const remove = findChild(insertionCard, "removePlaylistTrack");
+            check(remove.visible === (insertionStep >= 4) && remove.destructive && (insertionStep < 4 || menu.itemAt(6) === remove), "Remove from playlist only in playlist menu, last and destructive");
             check(command.enabled && command.Accessible.name.length > 0, "insertion command has accessible name");
             check(bridge.library.selectedAudioId === 42 && bridge.playlists.selectedPlaylistItemId === (insertionStep < 4 ? -1 : 11), "context menu never selects its row");
             command.forceActiveFocus();
@@ -2050,6 +2564,9 @@ QtObject {
                 return;
             }
             if (bridge.queue.queueLoading || bridge.queue.tracks.trackCount !== 3 + insertionStep) return;
+            const insertionToast = findChild(window.contentItem, "toast");
+            // Songs and playlist items alternate End and Next, so a stale toast never matches.
+            if (!insertionToast.visible || insertionToast.text !== (insertionStep % 2 === 1 ? "Will play next" : "Added to end of queue")) return;
             check(insertionCard.activeFocus, "command returns focus to source row");
             check(bridge.library.selectedAudioId === 42 && bridge.playlists.selectedPlaylistItemId === (insertionStep < 4 ? -1 : 11), "insertions preserve independent selections");
             check(bridge.player.currentAudioId === 7 && !bridge.player.selectedIsPlaying, "insertions preserve paused current");
@@ -2061,24 +2578,31 @@ QtObject {
         case 20: {
             const card = findChild(pane, "playlistList").itemAtIndex(0);
             if (!card || bridge.playlists.activePlaylistId >= 0) return;
-            card.forceActiveFocus();
-            input.keyClick(Qt.Key_Menu, Qt.NoModifier, 0);
+            input.mouseClick(card, 30, 30, Qt.RightButton, Qt.NoModifier, 0);
             stage = 21; break;
         }
         case 21: {
             const menu = findChild(findChild(pane, "playlistList").itemAtIndex(0), "playlistActionsMenu");
             if (!menu.opened) return;
+            check(menu.previousFocus.objectName === "playlistActionsButton" && menu.count === 3, "right click opens the three-dots actions menu and returns focus to it");
             input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
             stage = 22; break;
         }
         case 22:
             if (bridge.queue.queueBusy || bridge.queue.queueLoading || bridge.queue.tracks.trackCount !== 12) return;
+            // Wait out the previous toast so a visible one below can only come from the rejected insert.
+            if (findChild(window.contentItem, "toast").visible) return;
+            window.expectQueueToast("Added to end of queue");
             bridge.library.insertTrack(999, false);
             stage = 23; break;
         case 23:
             if (bridge.queue.queueBusy || !bridge.queue.queueMessage.includes("fixture insert rejected")) return;
             check(bridge.queue.tracks.trackCount === 12, "failed insertion retains confirmed rows");
             check(bridge.library.selectedAudioId === 42 && bridge.player.currentAudioId === 7, "whole playlist and failure preserve selection/current");
+            toastShownAt = Date.now(); stage = 24; break;
+        case 24:
+            if (Date.now() - toastShownAt < 400) return;
+            check(!findChild(window.contentItem, "toast").visible, "a rejected insertion shows no success toast");
             finish(); break;
         }
     }
@@ -2142,6 +2666,8 @@ QtObject {
             queueRetained = list.itemAtIndex(history + 1);
             queueRetainedArtwork = queueRetained.artworkUrl;
             const handle = findChild(queueRetained, "queueDragHandle");
+            input.mouseMove(handle, 16, 20, 0);
+            check(queueRetained.actionsShown, "hover reveals row actions");
             input.mousePress(handle, 16, 20, Qt.LeftButton, Qt.NoModifier, 0);
             input.mouseMove(handle, 16, 8, 0);
             check(panel.dragging && findChild(panel.contentItem, "queueInsertionIndicator").visible, "handle drag shows insertion indicator");
@@ -2154,6 +2680,7 @@ QtObject {
             check(!panel.dragging && bridge.player.currentAudioId === 7, "drop submits one move without Play");
             // Cancel another drag before release; it must not submit an operation.
             const cancelHandle = findChild(list.itemAtIndex(history + 1), "queueDragHandle");
+            input.mouseMove(cancelHandle, 16, 20, 0);
             input.mousePress(cancelHandle, 16, 20, Qt.LeftButton, Qt.NoModifier, 0);
             const edge = list.mapToItem(cancelHandle, list.width - 16, 1);
             queueSavedY = list.contentY;
@@ -2193,6 +2720,7 @@ QtObject {
             list.forceLayout();
             const checkingRow = list.itemAtIndex(history + 2);
             if (!checkingRow || checkingRow.entryId !== checking) return;
+            input.mouseMove(checkingRow, 40, 40, 0);
             input.mouseClick(findChild(checkingRow, "queuePlayEntry")); stage = 9; break;
         case 9:
             if (bridge.player.currentAudioId !== 103 || bridge.queue.queueLoading) return;
@@ -2207,11 +2735,16 @@ QtObject {
             check(bridge.player.currentAudioId === 10000, "unavailable removal does not Play");
             findChild(panel.contentItem, "queueClearUpcoming").clicked(); stage = 11; break;
         case 11:
-            if (bridge.queue.queueLoading || list.count !== 1) return;
+            if (bridge.queue.queueLoading || list.count !== 1 || !findChild(window.contentItem, "toast").visible) return;
             check(bridge.queue.tracks.entryIdAt(0) === "100000", "clear upcoming keeps current past entry");
-            findChild(panel.contentItem, "queueClearAll").clicked(); stage = 12; break;
+            check(findChild(window.contentItem, "toast").text === "Upcoming cleared", "live Clear upcoming toasts after the server confirms");
+            findChild(panel.contentItem, "queueClearAll").clicked(); stage = 110; break;
+        case 110:
+            if (!findChild(window.contentItem, "confirmDialog").opened) return;
+            check(list.count === 1, "Clear all waits for the dialog");
+            input.mouseClick(findChild(window.contentItem, "confirmAccept")); stage = 12; break;
         case 12:
-            if (bridge.queue.queueLoading || list.count !== 0) return;
+            if (bridge.queue.queueLoading || list.count !== 0 || findChild(window.contentItem, "toast").text !== "Queue cleared") return;
             check(queueResets === 0, "queue never resets model");
             panel.close(); stage = 13; break;
         case 13:
@@ -2461,11 +2994,35 @@ QtObject {
         case 12:
             if ((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) !== 1 || bridge.playlists.playlistMessage.length > 0) return;
             check(bridge.player.selectedSubtitle.includes("Hard"), "context removal retains other difficulty");
-            bridge.playlists.deletePlaylist(2);
+            pane.deleteRequested(2);
+            stage = 130;
+            break;
+        case 130: {
+            const dialog = findChild(window.contentItem, "confirmDialog");
+            if (!dialog.opened) return;
+            check(dialog.title.startsWith("Delete “") && bridge.playlists.playlists.length === 2, "delete waits for confirmation and names the playlist");
+            input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0);
+            stage = 131;
+            break;
+        }
+        case 131: {
+            const dialog = findChild(window.contentItem, "confirmDialog");
+            if (dialog.visible) return;
+            check(bridge.playlists.playlists.length === 2 && !bridge.playlists.playlistBusy, "Escape keeps the playlist");
+            pane.deleteRequested(2);
+            stage = 132;
+            break;
+        }
+        case 132: {
+            const dialog = findChild(window.contentItem, "confirmDialog");
+            if (!dialog.opened) return;
+            input.mouseClick(findChild(window.contentItem, "confirmAccept"));
             stage = 13;
             break;
+        }
         case 13:
             if (bridge.playlists.activePlaylistId >= 0 || bridge.playlists.playlists.length !== 1) return;
+            if (findChild(window.contentItem, "toast").text !== "Playlist deleted") return;
             check(window.selectedTab === 1 && pane.activeId < 0, "deleting active playlist returns to list");
             pane.searchEdited("no-playlist-matches");
             stage = 14;
@@ -2832,7 +3389,10 @@ QtObject {
             list.positionViewAtBeginning();
             if (!list.itemAtIndex(0)) return;
             check(ids()[0] === "9007199254740995" && list.itemAtIndex(0).model.isCurrent, "real clear upcoming keeps current");
-            findChild(panel.contentItem, "queueClearAll").clicked(); stage = 11; break;
+            findChild(panel.contentItem, "queueClearAll").clicked(); stage = 100; break;
+        case 100:
+            if (!findChild(window.contentItem, "confirmDialog").opened) return;
+            input.mouseClick(findChild(window.contentItem, "confirmAccept")); stage = 11; break;
         case 11:
             if (list.count !== 0) return;
             check(!bridge.player.selectedIsPlaying && !bridge.player.canSeek && bridge.player.playbackPosition === 0 && bridge.queue.queueMessage === "", "real clear all stops without errors");
@@ -2863,6 +3423,7 @@ QtObject {
         if (testCase.startsWith("queue-real")) { realQueueProbe(); return; }
         if (testCase.startsWith("queue-managed")) { managedQueueProbe(); return; }
         if (testCase === "volume") { volumeProbe(); return; }
+        if (testCase === "hotkeys") { hotkeysProbe(); return; }
         if (testCase === "playlists") { playlistsProbe(); return; }
         if (testCase === "playlist-covers") { playlistCoversProbe(); return; }
         if (testCase === "playlist-cover-preview") { playlistCoverPreviewProbe(); return; }
@@ -2886,11 +3447,15 @@ QtObject {
         case 0:
             if (bridge.connecting || bridge.connectionStatus.length === 0) return;
             check(!bridge.connected && !bridge.settings.folderBusy, "startup failure state");
+            check(findChild(window.contentItem, "retryConnection").visible && !findChild(window.contentItem, "connectionSpinner").visible, "error banner shows Retry without the spinner");
+            check(findChild(window.contentItem, "body").y === findChild(window.contentItem, "titleBar").height, "connection banner overlays the window");
             stage = 1;
             bridge.connectSession();
             break;
         case 1:
+            if (bridge.connecting) check(!findChild(window.contentItem, "retryConnection").visible, "connecting banner hides Retry");
             if (!bridge.connected || bridge.library.libraryLoading || bridge.settings.foldersLoading) return;
+            check(findChild(window.contentItem, "body").y === findChild(window.contentItem, "titleBar").height, "no layout shift once connected");
             if (bridge.settings.folders.length !== 2 || !bridge.library.libraryMessage.includes("fixture library")) return;
             check((window.selectedTab === 1 ? bridge.playlists.tracks.trackCount : bridge.library.tracks.trackCount) === 0 && !bridge.player.hasSelection, "library failure independent from folders");
             check(bridge.settings.selectedFolderId === 31, "first folder by ID");
@@ -2906,6 +3471,9 @@ QtObject {
             if (!card) return;
             check(card.audioId === 103 && card.title === "Track 103" && card.durationLabel === "02:05", "typed live model roles");
             check(card.subtitle === "Fixture artist | Hard", "shared subtitle role");
+            const songFrame = card.background.children[card.background.children.length - 1];
+            if (card.selectedTrack && songFrame.border.color.toString() !== Radio.Theme.accent.toString()) return; // frame fades in
+            check(card.selectedTrack && songFrame.border.color.toString() === Radio.Theme.accent.toString(), "selected Songs card uses the accent frame");
             check(bridge.player.selectedAudioId === 103 && bridge.player.selectedTitle === "Track 103", "first sorted track uses database ID");
             check(rowChanges > 0, "media uses targeted row notifications");
             const retained = window.mediaDelegates.slice();

@@ -16,5 +16,20 @@ QtObject {
     readonly property color border: "#1af2f4fc"
     readonly property color red: "#ed6666"
     readonly property color green: "#78cc32"
+    readonly property color hover: "#14f2f4fc"
+    readonly property color popup: "#f20d0d0d"
+    readonly property color modal: "#f218181b"
+    readonly property color accentSoft: "#409366ed"
+    readonly property int motionQuick: 80
+    readonly property int motionFast: 120
+    readonly property int motionBase: 160
+    readonly property int motionPanel: 200
+    readonly property int motionSlow: 250
+    readonly property int easing: Easing.OutCubic
+    // Internal switch with no UI setting; durations pass through ms() so it can disable all motion.
+    // Writable only so probes can turn motion off; application code never assigns it.
+    property bool motion: true
     readonly property string fontFamily: regularFont.name || "Poppins"
+
+    function ms(value: int): int { return motion ? value : 0 }
 }

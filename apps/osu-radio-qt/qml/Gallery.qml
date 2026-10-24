@@ -31,6 +31,29 @@ Basic.ApplicationWindow {
     onSelectedTabChanged: store.send(selectedTab === 1 ? "playlistShow" : "playlistLibrary")
     Store { id: store }
     readonly property alias galleryStore: store
+    // The mock store applies actions synchronously, so success is read straight after the send.
+    function toastUnlessFailed(text: string): void {
+        if (!store.state.queue.operation_error) toast.show(text);
+    }
+    function confirm(title: string, message: string, actionText: string, action: var): void {
+        confirmDialog.title = title;
+        confirmDialog.message = message;
+        confirmDialog.actionText = actionText;
+        confirmDialog.action = action;
+        confirmDialog.open();
+    }
+    ConfirmDialog {
+        id: confirmDialog
+        objectName: "confirmDialog"
+        property var action: null
+        scene: applicationScene
+        onConfirmed: if (action) action()
+    }
+    Toast {
+        id: toast
+        objectName: "toast"
+        anchorItem: applicationScene
+    }
 
     QueuePanel {
         id: demoQueue
@@ -42,8 +65,12 @@ Basic.ApplicationWindow {
         onPlayRequested: id => store.send("queuePlay", id)
         onRemoveRequested: id => store.send("queueRemove", id)
         onMoveRequested: (id, before) => store.send("queueMove", {id: id, before_entry_id: before})
-        onClearUpcomingRequested: store.send("queueClearUpcoming")
-        onClearAllRequested: store.send("queueClearAll")
+        onClearUpcomingRequested: { store.send("queueClearUpcoming"); root.toastUnlessFailed("Upcoming cleared"); }
+        onClearAllRequested: root.confirm("Clear the whole queue?",
+            "This removes every track from the queue, including the current track and the history, and stops playback.", "Clear all", () => {
+                store.send("queueClearAll");
+                root.toastUnlessFailed("Queue cleared");
+            })
         onRetryRequested: store.send("queueRefresh")
     }
     component Heading: Text {
@@ -78,6 +105,7 @@ Basic.ApplicationWindow {
             anchors.bottom: parent.bottom
             clip: true
             contentWidth: availableWidth
+            Basic.ScrollBar.vertical: AppScrollBar {}
             Basic.ScrollBar.horizontal.policy: Basic.ScrollBar.AlwaysOff
             Column {
                 id: page
@@ -259,10 +287,15 @@ Basic.ApplicationWindow {
                                     id: demoTrackMenu
                                     objectName: "songQueueMenu"
                                     row: demoTrack
-                                    onInsertRequested: next => store.send("queueInsert", {
-                                        items: [{type: "audio", audio_source_id: demoTrack.index + 1}],
-                                        placement: next ? "next" : "end"
-                                    })
+                                    onPlayRequested: store.send("press")
+                                    onAddToPlaylistRequested: store.send("playlistAddOpen")
+                                    onInsertRequested: next => {
+                                        store.send("queueInsert", {
+                                            items: [{type: "audio", audio_source_id: demoTrack.index + 1}],
+                                            placement: next ? "next" : "end"
+                                        });
+                                        root.toastUnlessFailed(next ? "Will play next" : "Added to end of queue");
+                                    }
                                 }
                             }
                         }
@@ -323,6 +356,38 @@ Basic.ApplicationWindow {
                             AppButton { objectName: "demoOpenPlaylists"; text: "Playlists"; onClicked: { root.selectedTab = 1; store.send("playlistSelect", -1); } }
                             AppButton { objectName: "demoAddToPlaylist"; text: "Add difficulties"; onClicked: store.send("playlistAddOpen") }
                         }
+                    }
+                    DemoSection {
+                        Heading { text: "Feedback" }
+                        Row {
+                            spacing: 12
+                            AppButton {
+                                id: demoContextButton
+                                objectName: "demoContextButton"
+                                text: "Context menu"
+                                onClicked: demoContext.popup(demoContextButton)
+                                AppContextMenu {
+                                    id: demoContext
+                                    objectName: "demoContextMenu"
+                                    AppMenuItem { text: "Play"; iconName: "play"; onTriggered: store.send("press") }
+                                    AppMenuItem { text: "Remove"; iconName: "trash"; destructive: true; onTriggered: toast.show("Removed") }
+                                }
+                            }
+                            AppButton {
+                                objectName: "demoConfirmButton"
+                                text: "Confirm dialog"
+                                variant: "danger"
+                                onClicked: root.confirm("Delete playlist?", "This demo dialog deletes nothing.", "Delete", () => toast.show("Playlist deleted"))
+                            }
+                            AppButton { objectName: "demoToastButton"; text: "Toast"; onClicked: toast.show("Added to end of queue") }
+                            AppButton {
+                                id: demoTipButton
+                                objectName: "demoTipButton"
+                                text: "Tooltip"
+                                AppToolTip { visible: demoTipButton.hovered; text: "Shared tooltip style" }
+                            }
+                        }
+                        Caption { text: "Context menu with a destructive item, confirmation dialog, one-second toast and tooltip." }
                     }
                     DemoSection {
                         Heading { text: "Modal" }
@@ -465,8 +530,16 @@ Basic.ApplicationWindow {
                 onCreateRequested: store.send("playlistBeginCreate")
                 onEditRequested: id => store.send("playlistBeginEdit", id)
                 onSelectRequested: id => store.send("playlistSelect", id)
-                onQueueRequested: id => store.send("playlistQueue", id)
-                onDeleteRequested: id => store.send("playlistDelete", id)
+                onQueueRequested: id => { store.send("playlistQueue", id); root.toastUnlessFailed("Playlist added to queue"); }
+                onPlayRequested: id => store.send("playlistPlay", id)
+                onDeleteRequested: id => {
+                    const playlist = root.playlistView.playlists.find(entry => entry.id === id);
+                    root.confirm("Delete “" + (playlist ? playlist.name : "this playlist") + "”?",
+                        "The playlist and its order will be deleted. Tracks stay in your library.", "Delete", () => {
+                            store.send("playlistDelete", id);
+                            if (!root.playlistView.playlists.some(entry => entry.id === id)) toast.show("Playlist deleted");
+                        });
+                }
                 onNameEdited: name => store.send("playlistEditorName", name)
                 onCoverRequested: store.send("playlistCoverChoose", root.playlistView.editor_epoch)
                 onCoverResetRequested: store.send("playlistCoverReset")
@@ -486,10 +559,15 @@ Basic.ApplicationWindow {
                     durationLabel: "--:--"
                     artworkUrl: ""
                     selected: root.playlistView.selected_item_id === playlistItemId
-                    onInsertRequested: next => store.send("queueInsert", {
-                        items: [{type: "playlist_item", playlist_id: root.playlistView.active_id, item_id: playlistItemId}],
-                        placement: next ? "next" : "end"
-                    })
+                    onInsertRequested: next => {
+                        store.send("queueInsert", {
+                            items: [{type: "playlist_item", playlist_id: root.playlistView.active_id, item_id: playlistItemId}],
+                            placement: next ? "next" : "end"
+                        });
+                        root.toastUnlessFailed(next ? "Will play next" : "Added to end of queue");
+                    }
+                    onPlayRequested: { store.send("playlistItemSelect", playlistItemId); store.send("press"); }
+                    onAddToPlaylistRequested: { store.send("playlistItemSelect", playlistItemId); store.send("playlistAddOpen"); }
                     onClicked: store.send("playlistItemSelect", playlistItemId)
                     onRemoveRequested: itemId => store.send("playlistRemoveItem", itemId)
                 }

@@ -431,7 +431,7 @@ fn every_embedded_image_and_font_decodes_in_the_offline_gallery() {
         "native-assets",
     );
     assert!(
-        output.contains("Embedded asset probe checked 37 resources"),
+        output.contains("Embedded asset probe checked 48 resources"),
         "{output}"
     );
     assert!(
@@ -886,7 +886,7 @@ fn playback_controls_show_loading_errors_and_global_volume_without_a_device() {
             .lines()
             .filter(|line| line.ends_with("/audio"))
             .collect::<Vec<_>>(),
-        ["/api/audio-sources/42/audio"]
+        ["/api/audio-sources/42/audio", "/api/audio-sources/42/audio"]
     );
     assert_child_reaped(directory.path());
 }
@@ -1063,6 +1063,19 @@ fn help_and_invalid_arguments_do_not_initialize_a_gui() {
         "none",
     );
     assert!(output.contains("Unknown or repeated argument"));
+}
+
+#[cfg(unix)]
+#[test]
+fn hotkeys_search_focus_volume_wheel_and_mods_badge_follow_the_player_state() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("isolated hotkeys fixture");
+    let server = directory.path().join("fixture-server");
+    std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fixture");
+    assert_probe(&run(&[], "offscreen", directory.path(), &server, "hotkeys"));
+    assert_child_reaped(directory.path());
 }
 
 #[cfg(unix)]

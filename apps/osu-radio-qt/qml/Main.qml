@@ -50,11 +50,67 @@ Basic.ApplicationWindow {
         scheduleVisibleMedia();
     }
     readonly property alias appBridge: bridge
+    readonly property bool hotkeysBlocked: folderDialog.visible || playlistsDialog.visible || confirmDialog.visible || player.popupOpen
+    // Panels ask the scene, which owns the single dialog and toast, so they stay free of both.
+    function confirm(title: string, message: string, actionText: string, action: var): void {
+        confirmDialog.title = title;
+        confirmDialog.message = message;
+        confirmDialog.actionText = actionText;
+        confirmDialog.action = action;
+        confirmDialog.open();
+    }
+    // Call just before a queue action: the toast shows once the queue operation finishes without an error.
+    function expectQueueToast(text: string): void { queueOperation.expect(text); }
+    function playlistById(id: int): var {
+        return findById(bridge.playlists.playlists, id);
+    }
+    function findById(list: var, id: int): var { return list.find(entry => entry.id === id); }
+    // The playlist is gone from the canonical list once the delete is confirmed by the server.
+    function deletePlaylist(id: int): void {
+        const playlist = playlistById(id);
+        confirm("Delete “" + (playlist ? playlist.name : "this playlist") + "”?",
+            "The playlist and its order will be deleted. Tracks stay in your library.", "Delete", () => {
+                playlistOperation.expect("Playlist deleted", () => !playlistById(id));
+                bridge.playlists.deletePlaylist(id);
+            });
+    }
+    // The search field of the active tab; null where the tab has none (an open playlist, for one).
+    function activeSearch(): Item {
+        const field = selectedTab === 0 ? songsPanel.searchField
+            : selectedTab === 1 ? playlistsPanel.searchField : settingsPanel.searchField;
+        return field && field.visible ? field : null;
+    }
+    function seekBy(seconds: real): void {
+        const state = bridge.player;
+        if (!state.canSeek) return;
+        state.seekPlayback(Math.max(0, Math.min(state.playbackDuration, state.playbackPosition + seconds)));
+    }
+    // Runs only for keys no focused control consumed, so text fields, sliders and buttons keep their own.
+    function handleHotkey(key: int, modifiers: int): bool {
+        if (hotkeysBlocked || (modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) return false;
+        const state = bridge.player;
+        if (key === Qt.Key_Escape) {
+            if (!activeFocusItem || activeFocusItem !== activeSearch()) return false;
+            applicationScene.forceActiveFocus();
+        } else if (key === Qt.Key_Space) {
+            if (state.canPlay && bridge.connected && bridge.settings.audioSettingsLoaded) state.togglePlayback();
+        } else if (key === Qt.Key_M) {
+            state.toggleMute();
+        } else if (key === Qt.Key_Left || key === Qt.Key_Right) {
+            seekBy(key === Qt.Key_Left ? -5 : 5);
+        } else return false;
+        return true;
+    }
     // F1 only opens the menu; D and E belong to the open popup.
     Shortcut {
         sequence: "F1"
-        enabled: !folderDialog.visible && !playlistsDialog.visible
+        enabled: !folderDialog.visible && !playlistsDialog.visible && !confirmDialog.visible
         onActivated: player.openMods()
+    }
+    Shortcut {
+        sequence: "Ctrl+F"
+        enabled: !root.hotkeysBlocked
+        onActivated: { const field = root.activeSearch(); if (field) field.forceActiveFocus(Qt.ShortcutFocusReason); }
     }
     AppBridge {
         id: bridge
@@ -72,9 +128,13 @@ Basic.ApplicationWindow {
     Item {
         id: applicationScene
         anchors.fill: parent
+        // Holds focus when no control does, so Space and arrows work until a field or button takes it.
+        focus: true
+        Keys.onPressed: event => { event.accepted = root.handleHotkey(event.key, event.modifiers); }
 
         WindowBar {
             id: titleBar
+            objectName: "titleBar"
             width: parent.width
             window: root
             selectedTab: root.selectedTab
@@ -84,41 +144,87 @@ Basic.ApplicationWindow {
             onQueueRequested: player.queue.visible ? player.queue.close() : player.queue.open()
         }
 
-        Rectangle {
+        // Overlay: it never takes part in the layout, so the window does not shift when it appears.
+        Item {
             id: connectionBanner
+            readonly property bool shown: !bridge.connected
             anchors.top: titleBar.bottom
             width: parent.width
-            height: visible ? Math.max(connectionText.implicitHeight + 24, 60) : 0
-            visible: !bridge.connected
-            color: Theme.background
-            Text {
-                id: connectionText
-                objectName: "connectionStatus"
-                x: 20
-                anchors.verticalCenter: parent.verticalCenter
-                width: parent.width - connectionRetry.width - 60
-                text: bridge.connectionStatus
-                color: Theme.text
-                font.family: Theme.fontFamily
-                font.pixelSize: 14
-                wrapMode: Text.Wrap
-            }
-            AppButton {
-                id: connectionRetry
-                objectName: "retryConnection"
-                anchors.right: parent.right
-                anchors.rightMargin: 20
-                anchors.verticalCenter: parent.verticalCenter
-                text: "Retry"
-                visible: !bridge.connecting
-                enabled: !bridge.connecting
-                onClicked: bridge.connectSession()
+            height: Math.max(connectionText.implicitHeight + 24, 60)
+            z: 10
+            clip: true
+            visible: shown || bannerContent.opacity > 0
+
+            Rectangle {
+                id: bannerContent
+                width: parent.width
+                height: parent.height
+                y: connectionBanner.shown ? 0 : -height
+                opacity: connectionBanner.shown ? 1 : 0
+                color: "#f81c1416"
+                Behavior on y { NumberAnimation { duration: Theme.ms(Theme.motionBase); easing.type: Theme.easing } }
+                Behavior on opacity { NumberAnimation { duration: Theme.ms(Theme.motionBase); easing.type: Theme.easing } }
+                Rectangle { width: 4; height: parent.height; color: Theme.red }
+                Rectangle { width: parent.width; height: 1; anchors.bottom: parent.bottom; color: Theme.border }
+                Canvas {
+                    id: connectionSpinner
+                    objectName: "connectionSpinner"
+                    x: 24
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 14
+                    height: 14
+                    visible: bridge.connecting
+                    onPaint: {
+                        const ctx = getContext("2d");
+                        ctx.reset();
+                        ctx.lineWidth = 2;
+                        ctx.strokeStyle = Theme.muted;
+                        ctx.beginPath();
+                        ctx.arc(7, 7, 6, 0, Math.PI * 2);
+                        ctx.stroke();
+                        ctx.strokeStyle = Theme.text;
+                        ctx.beginPath();
+                        ctx.arc(7, 7, 6, -Math.PI / 2, 0);
+                        ctx.stroke();
+                    }
+                    RotationAnimator on rotation {
+                        from: 0
+                        to: 360
+                        duration: 800
+                        loops: Animation.Infinite
+                        running: connectionSpinner.visible && connectionBanner.visible
+                    }
+                }
+                Text {
+                    id: connectionText
+                    objectName: "connectionStatus"
+                    x: connectionSpinner.visible ? 48 : 24
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - x - (connectionRetry.visible ? connectionRetry.width + 20 : 0) - 20
+                    text: bridge.connectionStatus
+                    color: Theme.text
+                    font.family: Theme.fontFamily
+                    font.pixelSize: 14
+                    wrapMode: Text.Wrap
+                }
+                AppButton {
+                    id: connectionRetry
+                    objectName: "retryConnection"
+                    anchors.right: parent.right
+                    anchors.rightMargin: 20
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Retry"
+                    visible: !bridge.connecting
+                    enabled: !bridge.connecting
+                    onClicked: bridge.connectSession()
+                }
             }
         }
 
         Item {
             id: body
-            anchors.top: connectionBanner.bottom
+            objectName: "body"
+            anchors.top: titleBar.bottom
             anchors.bottom: parent.bottom
             width: parent.width
             clip: true
@@ -126,17 +232,34 @@ Basic.ApplicationWindow {
             Item {
                 id: backdrop
                 anchors.fill: parent
-                Image {
-                    id: backdropImage
-                    anchors.fill: parent
+                CrossfadeSource {
+                    id: backdropFade
+                    duration: Theme.ms(400)
                     source: String(bridge.player.selectedArtworkUrl)
-                    cache: false
-                    fillMode: Image.PreserveAspectCrop
+                }
+                Item {
+                    id: backdropArt
+                    anchors.fill: parent
                     visible: false
+                    layer.enabled: true
+                    Image {
+                        anchors.fill: parent
+                        source: backdropFade.previous
+                        cache: false
+                        fillMode: Image.PreserveAspectCrop
+                    }
+                    Image {
+                        id: backdropImage
+                        anchors.fill: parent
+                        source: backdropFade.source
+                        opacity: backdropFade.progress
+                        cache: false
+                        fillMode: Image.PreserveAspectCrop
+                    }
                 }
                 MultiEffect {
                     anchors.fill: parent
-                    source: backdropImage
+                    source: backdropArt
                     blurEnabled: true
                     blurMax: 20
                     blur: 1.0
@@ -178,22 +301,28 @@ Basic.ApplicationWindow {
                 radius: 0
                 Rectangle { anchors.fill: parent; color: "transparent"; border.color: Theme.border }
                 SongsPanel {
+                    id: songsPanel
                     anchors.fill: parent
                     visible: root.selectedTab === 0
+                    NumberAnimation on opacity { from: 0; to: 1; duration: Theme.ms(Theme.motionFast); easing.type: Theme.easing; running: songsPanel.visible }
                     bridge: root.appBridge
                     shell: root
                 }
 
                 PlaylistsPanel {
+                    id: playlistsPanel
                     anchors.fill: parent
                     visible: root.selectedTab === 1
+                    NumberAnimation on opacity { from: 0; to: 1; duration: Theme.ms(Theme.motionFast); easing.type: Theme.easing; running: playlistsPanel.visible }
                     bridge: root.appBridge
                     shell: root
                 }
 
                 SettingsPanel {
+                    id: settingsPanel
                     anchors.fill: parent
                     visible: root.selectedTab === 2
+                    NumberAnimation on opacity { from: 0; to: 1; duration: Theme.ms(Theme.motionFast); easing.type: Theme.easing; running: settingsPanel.visible }
                     bridge: root.appBridge
                 }
             }
@@ -231,6 +360,30 @@ Basic.ApplicationWindow {
             if (bridge.playlists.playlistOpen && bridge.playlists.playlistAdding) playlistsDialog.open();
             else playlistsDialog.close();
         }
+    }
+    ConfirmDialog {
+        id: confirmDialog
+        objectName: "confirmDialog"
+        property var action: null
+        scene: applicationScene
+        onConfirmed: if (action) action()
+    }
+    Toast {
+        id: toast
+        objectName: "toast"
+        anchorItem: player
+    }
+    OperationWatcher {
+        id: queueOperation
+        busy: bridge.queue.queueBusy
+        message: bridge.queue.queueMessage
+        onSucceeded: text => toast.show(text)
+    }
+    OperationWatcher {
+        id: playlistOperation
+        busy: bridge.playlists.playlistBusy
+        message: bridge.playlists.playlistMessage
+        onSucceeded: text => toast.show(text)
     }
     FileDialog {
         id: playlistCoverPicker

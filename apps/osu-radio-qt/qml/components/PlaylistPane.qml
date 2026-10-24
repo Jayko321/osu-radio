@@ -23,12 +23,15 @@ Item {
     property int editorId: -1
     property string editorName: ""
     property url editorArtworkUrl
+    readonly property var activePlaylist: playlists.find(playlist => playlist.id === activeId)
     readonly property alias tracksList: tracks
+    readonly property alias searchField: search
     signal searchEdited(string query)
     signal createRequested()
     signal editRequested(int id)
     signal selectRequested(int id)
     signal queueRequested(int id)
+    signal playRequested(int id)
     signal deleteRequested(int id)
     signal requestArtwork(int id)
     signal nameEdited(string name)
@@ -53,10 +56,12 @@ Item {
                 objectName: "playlistSearch"
                 Layout.fillWidth: true
                 leftPadding: 44
+                clearable: true
                 placeholderText: "Type to search playlists..."
                 text: root.query
                 Accessible.name: "Search playlists"
                 onTextEdited: root.searchEdited(text)
+                onCleared: root.searchEdited("")
                 AppIcon { x: 12; anchors.verticalCenter: parent.verticalCenter; name: "search"; color: Theme.muted }
             }
             IconButton {
@@ -93,6 +98,43 @@ Item {
                 accessibleName: "Edit playlist"
                 enabled: root.connected && !root.busy
                 onClicked: root.editRequested(root.activeId)
+            }
+        }
+        RowLayout {
+            objectName: "playlistDetailHeader"
+            Layout.fillWidth: true
+            visible: root.activeId >= 0
+            spacing: 16
+            // Detail can be restored without the list ever having been shown, so ask for the cover here too.
+            onVisibleChanged: if (visible) root.requestArtwork(root.activeId)
+            Artwork {
+                Layout.preferredWidth: 72
+                Layout.preferredHeight: 72
+                radius: 8
+                source: root.activePlaylist ? root.activePlaylist.artworkUrl || "" : ""
+            }
+            Text {
+                objectName: "playlistDetailCount"
+                Layout.fillWidth: true
+                text: root.trackCount + (root.trackCount === 1 ? " track" : " tracks")
+                color: Theme.muted
+                font.family: Theme.fontFamily
+                font.pixelSize: 14
+            }
+            AppButton {
+                objectName: "playlistDetailAddQueue"
+                text: "Add to queue"
+                iconName: "add-to-queue"
+                enabled: root.connected && !root.busy && !root.queueBusy && root.trackCount > 0
+                onClicked: root.queueRequested(root.activeId)
+            }
+            AppButton {
+                objectName: "playlistDetailPlay"
+                variant: "accent"
+                text: "Play"
+                iconName: "play"
+                enabled: root.connected && !root.busy && root.trackCount > 0
+                onClicked: root.playRequested(root.activeId)
             }
         }
         PlaylistEditor {
@@ -148,7 +190,7 @@ Item {
         clip: true
         spacing: 12
         boundsBehavior: Flickable.StopAtBounds
-        Basic.ScrollBar.vertical: Basic.ScrollBar { }
+        Basic.ScrollBar.vertical: AppScrollBar {}
         delegate: Basic.Button {
             id: card
             required property int index
@@ -172,6 +214,13 @@ Item {
                     event.accepted = true;
                 }
             }
+            TapHandler {
+                acceptedButtons: Qt.RightButton
+                onTapped: {
+                    actionsButton.forceActiveFocus();
+                    actions.popup(card, point.position, actions.itemAt(0));
+                }
+            }
             background: Rectangle { radius: 12; color: card.hovered ? Theme.surface : "#200e0e0e"; border.color: card.activeFocus ? Theme.text : Theme.border }
             contentItem: RowLayout {
                 spacing: 16
@@ -180,7 +229,6 @@ Item {
                     Layout.preferredHeight: 72
                     radius: 8
                     source: card.modelData.artworkUrl || ""
-                    AppIcon { anchors.centerIn: parent; name: "music"; color: Theme.muted; visible: !card.modelData.artworkUrl }
                 }
                 ColumnLayout {
                     Layout.fillWidth: true
@@ -191,66 +239,14 @@ Item {
                 IconButton {
                     id: actionsButton
                     objectName: "playlistActionsButton"
-                    text: "⋮"
-                    display: Basic.AbstractButton.TextOnly
-                    font.pixelSize: 26
+                    iconName: "ellipsis-vertical"
                     accessibleName: "Actions for " + card.modelData.name
                     enabled: !root.busy
                     onClicked: { forceActiveFocus(); actions.popup(actionsButton, Qt.point(0, height), actions.itemAt(0)); }
-                    Basic.Menu {
+                    AppContextMenu {
                         id: actions
                         objectName: "playlistActionsMenu"
-                        width: 236
-                        padding: 6
-                        background: Rectangle {
-                            color: "#161616"
-                            radius: 12
-                            border.color: "#333333"
-                        }
-                        component ActionItem: Basic.MenuItem {
-                            id: action
-                            required property string iconName
-                            property color foreground: Theme.text
-                            implicitHeight: 36
-                            leftPadding: 16
-                            rightPadding: 16
-                            font.family: Theme.fontFamily
-                            font.pixelSize: 16
-                            enabled: root.connected && !root.busy
-                            contentItem: Item {
-                                opacity: action.enabled ? 1 : 0.4
-                                Text {
-                                    anchors.left: parent.left
-                                    anchors.right: actionIcon.left
-                                    anchors.rightMargin: 12
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: action.text
-                                    font: action.font
-                                    color: action.foreground
-                                    elide: Text.ElideRight
-                                }
-                                AppIcon {
-                                    id: actionIcon
-                                    anchors.right: parent.right
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    name: action.iconName
-                                    color: action.foreground
-                                    size: 16
-                                }
-                            }
-                            background: Rectangle {
-                                radius: 6
-                                color: action.highlighted ? "#14f2f4fc" : "transparent"
-                            }
-                        }
-                        property Item previousFocus: null
-                        onAboutToShow: previousFocus = actionsButton.activeFocus ? actionsButton : card
-                        onOpened: {
-                            for (let i = 0; i < count; ++i) {
-                                if (itemAt(i).enabled) { currentIndex = i; itemAt(i).forceActiveFocus(); break; }
-                            }
-                        }
-                        onClosed: if (previousFocus) previousFocus.forceActiveFocus()
+                        component ActionItem: AppMenuItem { enabled: root.connected && !root.busy }
                         ActionItem {
                             text: "Add to queue"
                             iconName: "add-to-queue"
@@ -258,7 +254,7 @@ Item {
                             onTriggered: root.queueRequested(card.modelData.id)
                         }
                         ActionItem { text: "Edit"; iconName: "playlist-edit"; onTriggered: root.editRequested(card.modelData.id) }
-                        ActionItem { text: "Delete"; iconName: "playlist-delete"; foreground: Theme.red; onTriggered: root.deleteRequested(card.modelData.id) }
+                        ActionItem { text: "Delete"; iconName: "playlist-delete"; destructive: true; onTriggered: root.deleteRequested(card.modelData.id) }
                     }
                 }
             }
@@ -289,7 +285,7 @@ Item {
         delegate: root.trackDelegate
         currentIndex: -1
         boundsBehavior: Flickable.StopAtBounds
-        Basic.ScrollBar.vertical: Basic.ScrollBar { }
+        Basic.ScrollBar.vertical: AppScrollBar {}
         Text {
             anchors.centerIn: parent
             visible: root.trackCount === 0 && root.message.length === 0

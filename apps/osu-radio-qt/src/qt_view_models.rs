@@ -523,6 +523,7 @@ pub mod ffi {
             READ,
             NOTIFY
         )]
+        #[qproperty(bool, muted, cxx_name = "muted", READ, NOTIFY)]
         #[qproperty(u64, launch_token, cxx_name = "launchToken", READ, NOTIFY)]
         #[qproperty(
             i32,
@@ -535,6 +536,9 @@ pub mod ffi {
         #[qinvokable]
         #[cxx_name = "togglePlayback"]
         fn toggle_playback(self: Pin<&mut PlayerViewModel>);
+        #[qinvokable]
+        #[cxx_name = "toggleMute"]
+        fn toggle_mute(self: Pin<&mut PlayerViewModel>);
         #[qinvokable]
         #[cxx_name = "nextTrack"]
         fn next_track(self: Pin<&mut PlayerViewModel>);
@@ -1924,6 +1928,7 @@ pub struct PlayerViewModelRust {
     pub(crate) playback_position: f64,
     pub(crate) playback_duration: f64,
     pub(crate) playback_speed_percent: i32,
+    pub(crate) muted: bool,
     pub(crate) launch_token: u64,
     pub(crate) playback_position_label: QString,
     pub(crate) playback_message: QString,
@@ -1955,6 +1960,7 @@ impl Default for PlayerViewModelRust {
             playback_position: 0.0,
             playback_duration: 0.0,
             playback_speed_percent: 100,
+            muted: false,
             launch_token: 0,
             playback_position_label: QString::from("00:00"),
             playback_message: QString::default(),
@@ -1984,6 +1990,7 @@ impl ffi::PlayerViewModel {
         playback_speed_percent_changed,
         i32
     );
+    property_setter!(set_muted, muted, muted_changed, bool);
     property_setter!(set_launch_token, launch_token, launch_token_changed, u64);
     pub(crate) fn project_player(
         mut self: Pin<&mut Self>,
@@ -2034,6 +2041,7 @@ impl ffi::PlayerViewModel {
             .set_playback_position_label(QString::from(format_time(state.position)));
         self.as_mut()
             .set_playback_speed_percent(i32::from(state.speed_percent));
+        self.as_mut().set_muted(state.muted);
         // Already in the UI timescale, including a selected track that is not sounding.
         self.as_mut().set_selected_duration_label(QString::from(
             state
@@ -2149,6 +2157,9 @@ impl ffi::PlayerViewModel {
     );
     pub fn toggle_playback(self: Pin<&mut Self>) {
         self.command(AppCommand::TogglePlayback);
+    }
+    pub fn toggle_mute(self: Pin<&mut Self>) {
+        self.command(AppCommand::SetMuted(!self.muted));
     }
     pub fn next_track(self: Pin<&mut Self>) {
         if self.can_next {
@@ -2340,7 +2351,7 @@ pub(crate) struct Row {
     pub(crate) track: Track,
     pub(crate) artwork: QString,
 }
-pub(crate) const ROLES: [(i32, &str); 12] = [
+pub(crate) const ROLES: [(i32, &str); 13] = [
     (256, "audioId"),
     (257, "title"),
     (258, "artist"),
@@ -2353,6 +2364,7 @@ pub(crate) const ROLES: [(i32, &str); 12] = [
     (265, "isCurrent"),
     (266, "isPast"),
     (267, "availability"),
+    (268, "queueSection"),
 ];
 #[derive(Default)]
 pub struct TrackListModelRust {
@@ -2658,6 +2670,12 @@ impl ffi::TrackListModel {
                     _ => "available",
                 },
             )),
+            268 => QVariant::from(&QString::from(match row.queue.as_ref() {
+                Some(q) if q.current => "current",
+                Some(q) if q.past => "history",
+                Some(_) => "upcoming",
+                None => "",
+            })),
             _ => QVariant::default(),
         }
     }

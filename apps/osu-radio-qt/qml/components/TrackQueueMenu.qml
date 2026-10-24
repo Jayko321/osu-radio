@@ -2,16 +2,18 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import QtQuick.Controls.Basic as Basic
 
-Basic.Menu {
+AppContextMenu {
     id: contextMenu
     required property Item row
+    property bool canPlay: true
     property bool canInsert: true
+    property bool canAddToPlaylist: true
     property bool showRemove: false
     property bool canRemove: true
+    signal playRequested()
     signal insertRequested(bool next)
+    signal addToPlaylistRequested()
     signal removeRequested()
-    width: 252
-    padding: 6
     function openAt(position: point): void {
         row.forceActiveFocus();
         popup(row, position);
@@ -22,66 +24,51 @@ Basic.Menu {
             event.accepted = true;
         }
     }
-    onOpened: {
-        for (let i = 0; i < count; ++i) {
-            if (itemAt(i).visible && itemAt(i).enabled) {
-                currentIndex = i;
-                itemAt(i).forceActiveFocus();
-                break;
-            }
-        }
+    component Divider: Basic.MenuSeparator {
+        enabled: false
+        padding: 4
+        topPadding: 4
+        bottomPadding: 4
+        contentItem: Rectangle { implicitHeight: 1; color: Theme.border }
     }
-    onClosed: row.forceActiveFocus()
-    background: Rectangle { color: "#161616"; radius: 12; border.color: "#333333" }
-    component ActionItem: Basic.MenuItem {
-        id: action
-        required property string iconName
-        implicitHeight: 36
-        leftPadding: 16
-        rightPadding: 16
-        font.family: Theme.fontFamily
-        font.pixelSize: 16
-        Accessible.name: text
-        contentItem: Item {
-            opacity: action.enabled ? 1 : 0.4
-            Text {
-                anchors.left: parent.left
-                anchors.right: actionIcon.left
-                anchors.rightMargin: 12
-                anchors.verticalCenter: parent.verticalCenter
-                text: action.text
-                font: action.font
-                color: Theme.text
-                elide: Text.ElideRight
-            }
-            AppIcon {
-                id: actionIcon
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                name: action.iconName
-                size: 16
-            }
-        }
-        background: Rectangle { radius: 6; color: action.highlighted ? "#14f2f4fc" : "transparent" }
+    AppMenuItem {
+        objectName: "playQueueTrack"
+        text: "Play"
+        iconName: "play"
+        enabled: contextMenu.canPlay
+        onTriggered: contextMenu.playRequested()
     }
-    ActionItem {
+    AppMenuItem {
         objectName: "appendQueueTrack"
         text: "Add to end"
         iconName: "add-to-queue"
         enabled: contextMenu.canInsert
         onTriggered: contextMenu.insertRequested(false)
     }
-    ActionItem {
+    AppMenuItem {
         objectName: "insertQueueTrackNext"
         text: "Play next"
         iconName: "skip-forward"
         enabled: contextMenu.canInsert
         onTriggered: contextMenu.insertRequested(true)
     }
-    ActionItem {
+    Divider {}
+    AppMenuItem {
+        objectName: "addTrackToPlaylist"
+        text: "Add to playlist…"
+        iconName: "list-plus"
+        enabled: contextMenu.canAddToPlaylist
+        onTriggered: contextMenu.addToPlaylistRequested()
+    }
+    Divider {
+        visible: contextMenu.showRemove
+        height: visible ? implicitHeight : 0
+    }
+    AppMenuItem {
         objectName: "removePlaylistTrack"
         text: "Remove from playlist"
         iconName: "playlist-delete"
+        destructive: true
         visible: contextMenu.showRemove
         height: visible ? implicitHeight : 0
         enabled: visible && contextMenu.canRemove

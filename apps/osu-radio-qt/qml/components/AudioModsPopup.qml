@@ -22,6 +22,9 @@ Basic.Popup {
     width: 320
     padding: 16
     margins: 12
+    transformOrigin: Basic.Popup.BottomLeft
+    enter: PopupEnter {}
+    exit: PopupExit {}
     modal: true
     dim: false
     focus: true
@@ -32,7 +35,7 @@ Basic.Popup {
         else closeButton.forceActiveFocus(Qt.PopupFocusReason);
     }
     onClosed: if (previousFocus) previousFocus.forceActiveFocus(Qt.PopupFocusReason)
-    background: Rectangle { radius: 12; color: "#f20d0d0d"; border.color: Theme.border }
+    background: PopupSurface {}
     // A control that disables itself (Clear at 1x) drops focus; the scope keeps D and E reachable.
     contentItem: FocusScope {
         implicitWidth: column.implicitWidth

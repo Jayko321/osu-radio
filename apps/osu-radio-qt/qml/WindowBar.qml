@@ -32,12 +32,29 @@ Rectangle {
         onDoubleClicked: bar.toggleMaximized()
     }
 
+    // The selected tab is a light pill that slides under the buttons instead of repainting each one.
+    Rectangle {
+        objectName: "tabIndicator"
+        readonly property Item target: bar.selectedTab === 0 ? songsTab : bar.selectedTab === 1 ? playlistsTab : settingsTab
+        x: tabRow.x + target.x
+        y: tabRow.y + target.y
+        width: target.width
+        height: target.height
+        radius: 8
+        color: Theme.text
+        Behavior on x { NumberAnimation { duration: Theme.ms(180); easing.type: Theme.easing } }
+        Behavior on width { NumberAnimation { duration: Theme.ms(180); easing.type: Theme.easing } }
+    }
+
     Row {
+        id: tabRow
         x: 20
         anchors.verticalCenter: parent.verticalCenter
         spacing: 4
         AppButton {
+            id: songsTab
             height: 34
+            background: Item {}
             objectName: "songsTabButton"
             text: bar.gallery ? "Components" : "Songs"
             iconName: "music"
@@ -49,7 +66,9 @@ Rectangle {
             Accessible.name: text
         }
         AppButton {
+            id: playlistsTab
             height: 34
+            background: Item {}
             objectName: "playlistsTabButton"
             text: "Playlists"
             iconName: "layers"
@@ -61,7 +80,9 @@ Rectangle {
             Accessible.name: "Playlists"
         }
         AppButton {
+            id: settingsTab
             height: 34
+            background: Item {}
             objectName: "settingsButton"
             text: "Settings"
             iconName: "settings-4-line"
@@ -85,8 +106,8 @@ Rectangle {
             height: bar.height
             visible: !bar.gallery
             enabled: bar.queueEnabled
-            iconName: "layers"
-            foreground: bar.queueVisible ? "#c142b0" : Theme.text
+            iconName: "list-music"
+            foreground: bar.queueVisible ? Theme.accent : Theme.text
             accessibleName: bar.queueVisible ? "Hide queue" : "Show queue"
             onClicked: bar.queueRequested()
         }
@@ -96,7 +117,7 @@ Rectangle {
             height: 50
             Accessible.name: "Minimize"
             contentItem: AppIcon { name: "minus"; size: 16; opacity: minimize.hovered ? 1 : 0.62 }
-            background: Rectangle { color: minimize.hovered ? "#14f2f4fc" : "transparent" }
+            background: Rectangle { color: minimize.hovered ? Theme.hover : "transparent" }
             onClicked: bar.window.showMinimized()
         }
         Basic.Button {
@@ -105,7 +126,7 @@ Rectangle {
             height: 50
             Accessible.name: bar.maximized ? "Restore" : "Maximize"
             contentItem: AppIcon { name: bar.maximized ? "copy" : "square"; size: 16; opacity: maximize.hovered ? 1 : 0.62 }
-            background: Rectangle { color: maximize.hovered ? "#14f2f4fc" : "transparent" }
+            background: Rectangle { color: maximize.hovered ? Theme.hover : "transparent" }
             onClicked: bar.toggleMaximized()
         }
         Basic.Button {

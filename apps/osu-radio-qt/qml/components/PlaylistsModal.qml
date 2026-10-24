@@ -58,6 +58,7 @@ AppModal {
             Layout.fillHeight: true
             contentWidth: availableWidth
             clip: true
+            Basic.ScrollBar.vertical: AppScrollBar {}
             ColumnLayout {
                 width: parent.width
                 spacing: 8

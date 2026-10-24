@@ -448,6 +448,9 @@ impl Controller {
                 let _ = sender.send(state);
             })) {
                 Ok((worker, downloads)) => {
+                    if self.player.muted {
+                        worker.send(crate::playback::Command::SetMuted(true));
+                    }
                     self.playback = Some(worker);
                     self.downloads = Some(downloads);
                 }
@@ -827,6 +830,17 @@ impl Controller {
     }
     pub(crate) fn emit_volume(&mut self) {
         self.settings_work(|settings, input, work| settings.emit_volume(input, work));
+    }
+    /// Never starts the worker: with no worker there is no engine to silence yet.
+    pub(crate) fn set_muted(&mut self, muted: bool) {
+        if self.player.muted == muted {
+            return;
+        }
+        self.player.muted = muted;
+        if let Some(worker) = &self.playback {
+            worker.send(crate::playback::Command::SetMuted(muted));
+        }
+        self.emit_player();
     }
     pub(crate) fn set_individual_volume(&mut self, enabled: bool) {
         self.settings_work(|settings, input, work| {

@@ -201,15 +201,59 @@ first item restarts it. Seeking remains local and checks the launch token so a
 delayed same-ID seek cannot affect a duplicate queue item. Volume preferences
 are persisted through the API and applied by the local worker.
 Position updates arrive every 100 ms while playing and state changes immediately.
-Qt's title-bar layers button, immediately before the window controls, opens
+Qt's title-bar `list-music` button (accent while open; no count badge, because a closed queue is not loaded), immediately before the window controls, opens
 [`QueuePanel.qml`](../../apps/osu-radio-qt/qml/components/QueuePanel.qml) over the
 player with a dark gradient and rounded artwork cards showing title, artist and
-duration. The virtualized `ListView` includes history, current and upcoming rows,
-checking/unavailable status and retained unavailable captions. Cards are 82px with
+duration. The virtualized `ListView` includes history, current and upcoming rows
+under History / Now playing / Up next labels (`ListView.section` on the `queueSection`
+role), checking/unavailable status and retained unavailable captions. History rows are
+dimmed to 55%. The header reads "Queue · N left" (upcoming rows, found by bisecting the
+`queueSection` role) with `list-x` Clear upcoming, `trash` Clear all and close icons.
+Row actions (Play, Remove, `grip-vertical` handle) show on hover or focus inside the row,
+otherwise the duration shows; hidden actions ignore the pointer but keep keyboard focus.
+Add/remove/displaced list transitions use `motionBase`. Cards are 82px with
 14px spacing, a 96px cache buffer and no delegate reuse pool. Opening positions
 once on current (or first upcoming/end of history) after loading, without selecting
 or playing. Later role changes preserve scrolling and decoded artwork URLs.
 Close, Escape and outside click dismiss it and restore opener focus.
+
+Control motion (all durations via `Theme.ms()`, curve `Theme.easing`): `AppButton` and
+`IconButton` fade opacity (`motionFast`) and scale to 0.97 while pressed (60 ms); `AppSwitch`
+slides its thumb (140 ms) and fades the track (120 ms); the selected tab is a light pill that
+slides under the buttons in `WindowBar` and `AppTabs` (180 ms; tab buttons keep their
+`variant`, `objectName` and size and have an empty background); a panel shown by a tab
+switch fades in over `motionFast`; selected-card frames in `SongsPanel` and
+`PlaylistTrackCard` fade their colour. Play/pause icons do not cross-fade. No focus rings.
+
+Tooltips are `AppToolTip` children of the hovered item (`AppToolTip { visible: hovered; text: ... }`;
+700 ms delay, `Theme.popup` surface, fades over `motionQuick`, closes with its owner) and every
+vertical scroll bar is `AppScrollBar` (6 px overlay handle, 8 px on hover, no track, `AsNeeded`);
+no production code uses the `Basic.ToolTip.*` attached properties or a bare `Basic.ScrollBar`.
+`AppMenu.showToolTip` gates its full-text tooltip.
+
+`Theme` holds the shared tokens: `hover`, `popup`, `modal`, `accentSoft` (pressed/selected tint),
+durations `motionQuick` 80, `motionFast` 120, `motionBase` 160, `motionPanel` 200, `motionSlow` 250 ms
+and `easing` (OutCubic). Every duration goes through `Theme.ms()`; the internal `Theme.motion`
+flag (no UI setting, probes only) zeroes them. Cards, badges and gradient stops keep a few
+literal colours on purpose: the Stable/Lazer badge colours, folder-row backgrounds and card
+gradients. The connection banner in `Main.qml` is an overlay under the title bar (it never
+shifts the layout): while `bridge.connected` is false it slides in with the status text, a spinner
+during `connecting` and a Retry button otherwise.
+
+The scene (`Main.qml`, and `Gallery.qml` with the mock store) owns one
+[`ConfirmDialog`](../../apps/osu-radio-qt/qml/components/ConfirmDialog.qml) and one
+[`Toast`](../../apps/osu-radio-qt/qml/components/Toast.qml); panels only emit signals or call
+`shell.confirm(...)`, `shell.expectQueueToast(text)` and `shell.deletePlaylist(id)`. Clear all and
+playlist Delete ask first (Cancel holds the initial focus; Escape and an outside click dismiss
+without acting); Clear upcoming acts at once. The toast is a non-modal overlay popup (so the queue
+dimmer does not cover it), shown 1000 ms, restarted by a new call, with no buttons or Undo. Success
+toasts (“Added to end of queue”, “Will play next”, “Playlist added to queue”, “Upcoming
+cleared”, “Queue cleared”, “Playlist deleted”) are inferred in QML by
+[`OperationWatcher`](../../apps/osu-radio-qt/qml/components/OperationWatcher.qml): `queueBusy` or
+`playlistBusy` must rise, then fall without an error message (a deferred check, because busy and
+message are separate notifications). An action rejected before it became busy, or issued while another
+was already busy, shows no toast; errors never toast. Playlist delete succeeds when the id has left
+`playlists`. The mock store applies actions synchronously, so the gallery reads the result at once.
 
 The queue adapter exposes `tracks`, `startIndex`, `queueLoading`, `queueBusy`, `queueMessage`,
 `setQueueVisible(bool)`, `playEntry(QString)`, `removeEntry(QString)`,
@@ -218,7 +262,8 @@ The queue adapter exposes `tracks`, `startIndex`, `queueLoading`, `queueBusy`, `
 including values above JS integer precision; a null anchor means end. Rust rejects
 invalid IDs and non-string anchors before dispatching existing QueueAction.
 Existing roles 256–263 stay unchanged; queue adds 264 `entryId` (string),
-265 `isCurrent`, 266 `isPast` and 267 `availability` (checking/available/unavailable).
+265 `isCurrent`, 266 `isPast`, 267 `availability` (checking/available/unavailable) and
+268 `queueSection` (`history`/`current`/`upcoming`, empty outside the queue).
 `entryIdAt(index)` resolves keyboard/drop anchors. Queue reconciliation uses
 entry identity and standard row insert/remove/move notifications; role updates
 use `dataChanged`. Retained artwork is keyed by entry identity and cover source.
@@ -226,7 +271,7 @@ Library and playlist instances retain their existing behavior.
 
 Play (including checking), remove, both clears and Ctrl+Up/Down dispatch existing
 client operations. The separate drag handle shows an insertion line and scrolls
-at viewport edges; only drop sends one ID/anchor command. Server confirmation
+at viewport edges; the drop index comes from live delegate midpoints, not a fixed row step; only drop sends one ID/anchor command. Server confirmation
 updates order, and cancellation or rejection keeps the confirmed list. Arrow
 navigation changes focus; Enter/Space plays and Delete removes. Child actions do
 not activate the card. QML sends only viewport entry IDs on scroll/model/delegate
@@ -241,8 +286,12 @@ Loading, empty and retryable error states are explicit. Qt model/HTTP/offscreen
 checks and measured virtualization limits are recorded in the
 [T08 report](../impl/queue-rework/T08.md#отчёт-о-выполнении); native Linux/Windows
 input, GPU rendering and physical audio remain T10 acceptance.
-Qt's [progress slider](../../apps/osu-radio-qt/qml/PlayerPanel.qml) fills the elapsed
-portion with `Theme.accent`, following its position during playback and seeking.
+Qt's [progress slider](../../apps/osu-radio-qt/qml/components/PlaybackProgress.qml) fills the elapsed
+portion with `Theme.accent`, following its position during playback and seeking. Its 24 px
+seek zone has a 4 px track (6 px on hover) and shows an `m:ss` bubble at the pointer, or at the
+handle while dragging. A replaced cover and backdrop cross-fade through
+[`CrossfadeSource`](../../apps/osu-radio-qt/qml/components/CrossfadeSource.qml); a change to or
+from an empty source swaps at once.
 Shutdown cancels the event stream and downloads, joins the worker, releases its
 files, then ends the backend session.
 
@@ -384,6 +433,35 @@ Selecting B while A plays edits B without changing A's volume. Shared audio in
 different playlist rows has one setting. Unavailable/no selection disables the
 individual slider; selection/mode changes close the popup and end editing.
 
+The volume button icon follows the level (`volume-x` at 0%, `volume-1` below 40%,
+else `volume-2`) and the popup labels its scope ("This track" / "All tracks"). The
+mouse wheel over the button or the open popup changes volume by 5% per 120 wheel
+units (touchpad deltas accumulate) through the slider's commands. The modes button
+turns accent and shows a speed badge while a mod is active and available; its
+tooltip names the mode ("Mods (F1): DT 1.5×").
+
+Mute is session-only player state, not a volume: `PlayerViewModel.muted`
+(`PlayerPresentation.muted`, Qt `muted` / `toggleMute()`), set by
+`AppCommand::SetMuted`. It is never saved, sends no server request and does not touch
+global or per-track volume. The playback worker takes `Command::SetMuted` and gives the
+engine `0.0` (on assignment, `SetVolume` and engine creation) while `snapshot.volume`
+keeps the real level; unmuting restores it. Muting never starts the worker or opens an
+audio device (a worker created later is told first). It survives track and queue
+changes; the popup's mute button (left of the slider), key **M**, and a volume change
+(`SetVolume`, or `SetTrackVolume` with a value: slider or wheel) end it. While muted the
+button shows `volume-x` and the popup reads 0% with the slider keeping the saved
+value. MPRIS/SMTC and Discord do not see mute. The offline gallery has no player
+surface, so the mock has no mute.
+
+Global keys live in [Main.qml](../../apps/osu-radio-qt/qml/Main.qml). Space (play/pause
+under the `playPauseButton` conditions), M (mute) and ←/→ (seek 5 s, only with `canSeek`) are
+handled by `Keys.onPressed` on the scene, so they run only for keys that no focused
+field, button or slider consumed; they are off while a dialog, the mods or volume popup
+or the queue is open. The scene takes focus at start. Search fields take focus only by
+click or Ctrl+F (the active tab's field; nothing in an open playlist); Escape in that field
+returns focus to the scene. Probe `hotkeys` covers these; seeking itself is not observable
+offscreen.
+
 Edits apply immediately. One serialized save lane coalesces each target's fast
 changes for 200 ms; selection changes finish pending editing. Responses only
 acknowledge saves, so delayed reads/responses cannot undo local edits. Save errors
@@ -484,7 +562,7 @@ and Windows remain manual (T12).
 ## User playlists
 
 Adding a new osu! source imports Stable/Lazer collections into this same tab,
-including empty collections and unavailable difficulties. “Обновить импорт” in
+including empty collections and unavailable difficulties. “Refresh import” in
 the folder modal rereads a registered source and updates each linked playlist's
 name and membership, replacing manual membership edits while preserving custom
 covers, surviving item IDs and order. Disappeared collections and playlists from
@@ -508,6 +586,10 @@ icons and red Delete text. Add to queue calls `append_playlist_to_queue`
 directly through the existing serialized lane, retaining saved order, duplicate
 difficulties, unavailable items and playlist-item identity without a client GET.
 It preserves active playback or pause; an empty/exhausted queue stays stopped.
+An open playlist shows a header under the back/title row: 72×72 cover, track count,
+**Add to queue** (same gating as the card menu) and accent **Play**
+(`playRequested(id)` → `playPlaylistFrom`; enabled when connected, idle and non-empty).
+Unavailable entries are skipped by the backend; a wholly unavailable playlist stays stopped.
 The [offline queue mock](../../crates/osu-radio-client/src/mock/queue.rs) provides
 history, distinct entry IDs, duplicates, checking/unavailable rows, all QueueAction
 mutations, whole-playlist append, and memory-only check completion. Invalid actions
@@ -523,10 +605,10 @@ instead of creating another playlist. Playlist search uses the shared filtered
 projection; the add dialog keeps the complete list of targets.
 
 [`PlaylistTrackCard.qml`](../../apps/osu-radio-qt/qml/components/PlaylistTrackCard.qml)
-shows each concrete difficulty separately with background artwork and a white
-selected border with blue glow. Click selects only; existing Play launches the
+shows each concrete difficulty separately with background artwork, its duration
+and the same accent selected frame and tinted backdrop as the Songs card. Click selects only; existing Play launches the
 selected item. Unavailable entries stay selectable/removable with Play disabled.
-Right click, Menu or Shift+F10 opens removal. Display sorting retains selected
+Right click, Menu or Shift+F10 opens the track menu (see Track insertion menus). Display sorting retains selected
 item identity without changing insertion order or the queue snapshot. Pause,
 resume and seeking match `current_playlist_item_id`, including shared audio.
 
@@ -563,7 +645,18 @@ is shared by Songs (library/search), playlist track cards and offline gallery ex
 Right click, Menu and Shift+F10 open it relative to the source row; Escape or
 activation returns focus to that row. “Add to end” and “Play next” change only
 insertion placement, without selecting the row, starting audio or resuming a pause.
-Playlist removal remains a distinct action in the same menu.
+The menu order is Play, Add to end, Play next, a divider and Add to playlist…;
+playlist track cards add a second divider and a red Remove from playlist. Play and
+Add to playlist… select the row first, then call `togglePlayback()` /
+`openPlaylistAdd()`; commands run in order in one controller loop, so they see the
+new selection. Library Play skips the toggle when the row is already the playing
+current track (a toggle would pause it); a playlist row that is the playing item
+but not selected would still be paused (open question, no adapter change made).
+Right click on a playlist list card opens the same actions menu as its “⋮” icon button. It is built on
+`AppContextMenu`/`AppMenuItem`, as is the playlist card actions menu; popup
+backgrounds (menus, dropdown lists, volume and Mods popups) share `PopupSurface`
+(translucent surface with a soft shadow). `AppMenu` dropdowns are modal but do not
+dim the window.
 
 The Library Qt adapter's `insertTrack(id, next)` sends `QueueItemRef::Audio`;
 the Playlists adapter's `insertPlaylistItem(itemId, next)` sends the active
@@ -581,7 +674,7 @@ input, Windows, physical audio or real-database end-to-end acceptance (T10).
 
 ## Session and server supervision
 
-`Session::start` starts `EmbeddedServer` by default, then creates an `ApiClient` at the reported URL. With `ServerOptions::remote_url`, it connects to that existing server without resolving a local executable or reading local database configuration. Remote URLs must use HTTP(S), have a host, and contain no credentials, query or fragment; a reverse-proxy path prefix is allowed. A read of `GET /api/queue` must succeed within `startup_timeout` before `Connected`; local child startup still uses stdout readiness without an HTTP probe. Cancellation drops the remote request. `Session` exposes `api`, `base_url`, and asynchronous `shutdown`; shutdown/drop only stop an owned child, never an external server. After `Connected`, the GUI loads library and folders independently, each with loading, empty and error states. Songs have a “Refresh library” button in the bottom-left footer, outside the scrolling list; it also retries failures and is disabled while loading. Status messages remain above the list and are hidden when empty. Settings show Retry only after a failure.
+`Session::start` starts `EmbeddedServer` by default, then creates an `ApiClient` at the reported URL. With `ServerOptions::remote_url`, it connects to that existing server without resolving a local executable or reading local database configuration. Remote URLs must use HTTP(S), have a host, and contain no credentials, query or fragment; a reverse-proxy path prefix is allowed. A read of `GET /api/queue` must succeed within `startup_timeout` before `Connected`; local child startup still uses stdout readiness without an HTTP probe. Cancellation drops the remote request. `Session` exposes `api`, `base_url`, and asynchronous `shutdown`; shutdown/drop only stop an owned child, never an external server. After `Connected`, the GUI loads library and folders independently, each with loading, empty and error states. Songs have a “Refresh library” button in the bottom-left footer, outside the scrolling list; it also retries failures and is disabled while loading. Status messages remain above the list and are hidden when empty; an empty result (client text `Nothing found.` or `No songs yet…`, connected, not loading) instead shows a centered empty state with Clear search / Add an osu! folder, and loading with no rows shows four pulsing skeleton cards, so any other text is treated as an error and stays in the status line. Settings show Retry only after a failure.
 
 Qt reads the optional `OSU_RADIO_SERVER_URL` process environment variable in
 [AppBridge](../../apps/osu-radio-qt/src/app_bridge.rs). An empty/invalid value is
@@ -760,8 +853,11 @@ covered by the isolated `XDG_CONFIG_HOME`
 [offscreen probe](../../apps/osu-radio-qt/tests/launch_smoke.rs); Windows native
 storage still requires separate validation. **Audio**
 holds the individual-volume switch, conditional global slider, status and Retry.
-The Settings panel uses the bundled Nunito font, 20px side margins, a search icon
-on the right, 24px section icons and 44px dark fields with 8px corners.
+The Settings panel uses the app font (Poppins), 20px side margins, a search icon
+on the right and 44px dark fields with 8px corners. Sections appear in the order
+General, Audio, Integrations, About; each has a 24px icon with an 18px bold title
+and its rows sit in a bordered 12px-radius card. Hints under osu! folders and the
+two Audio switches are not search keys.
 Settings search trims surrounding whitespace and matches section titles and
 current setting names by case-insensitive substring. A section-title match shows
 all its currently available settings; a setting-name match shows only matching
@@ -822,10 +918,12 @@ uses a 740x620 panel constrained to the window, a scrolling list and fixed Apply
 footer. Rows show bundled Figma Stable/Lazer logos, paths, source badges and
 individual beatmap/difficulty counts. Registered rows are green; plus/minus buttons
 stage or undo additions/removals; registered rows also have an accessible rotate
-button, “Обновить импорт”, to stage a source refresh. Removal and refresh replace each
+button, “Refresh import”, to stage a source refresh. Removal and refresh replace each
 other; pressing the same action again cancels it. Pending actions have outlines. Counts animate
 Computing every 400 ms, include zero, and expose a separate count-error retry.
-Need help opens https://www.google.com through Qt.openUrlExternally.
+A staged add/remove/refresh also shows a status capsule beside the count (“Will be added”,
+“Will be removed”, “Will be refreshed”, with check/minus/rotate-cw icons); the count text
+shrinks first on narrow panels. There is no help link until a real address exists.
 
 The toolkit-free [`SettingsViewModel`](../../crates/osu-radio-client/src/view_models/settings.rs)
 seeds registered rows on each opening, starts Full backend discovery, merges candidates

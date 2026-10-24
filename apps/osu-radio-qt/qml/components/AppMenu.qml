@@ -56,18 +56,24 @@ Basic.ComboBox {
         border.width: 1
         border.color: control.hovered ? Theme.muted : Theme.border
     }
-    Basic.ToolTip.visible: hovered && displayText.length > 45
-    Basic.ToolTip.text: displayText
-    Basic.ToolTip.delay: 700
+    property bool showToolTip: displayText.length > 45
+    AppToolTip {
+        visible: control.hovered && control.showToolTip
+        text: control.displayText
+    }
 
     popup: Basic.Popup {
         id: menuPopup
         y: control.height + 6
         width: control.width
         padding: 8
+        transformOrigin: Basic.Popup.Top
+        enter: PopupEnter {}
+        exit: PopupExit {}
         topMargin: 8
         bottomMargin: 8
         modal: true
+        dim: false
         focus: true
         closePolicy: Basic.Popup.CloseOnEscape | Basic.Popup.CloseOnPressOutside
         onOpened: {
@@ -76,11 +82,7 @@ Basic.ComboBox {
             else options.forceActiveFocus();
         }
         onClosed: control.forceActiveFocus()
-        background: Rectangle {
-            color: "#f20d0d0d"
-            border.color: Theme.border
-            radius: 12
-        }
+        background: PopupSurface {}
         contentItem: Column {
             spacing: control.searchable ? 8 : 0
             AppField {
@@ -109,7 +111,7 @@ Basic.ComboBox {
                 spacing: 4
                 activeFocusOnTab: true
                 keyNavigationEnabled: false
-                Basic.ScrollBar.vertical: Basic.ScrollBar {}
+                Basic.ScrollBar.vertical: AppScrollBar {}
                 Keys.onDownPressed: control.move(1)
                 Keys.onUpPressed: control.move(-1)
                 Keys.onPressed: event => {

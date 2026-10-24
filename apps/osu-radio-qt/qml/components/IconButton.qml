@@ -12,9 +12,12 @@ AppButton {
     Accessible.name: accessibleName
     background: Rectangle {
         radius: 8
-        color: control.hovered ? "#14f2f4fc" : "transparent"
+        color: control.hovered ? Theme.hover : Qt.alpha(Theme.hover, 0)
+        Behavior on color { ColorAnimation { duration: Theme.ms(Theme.motionFast); easing.type: Theme.easing } }
     }
-    Basic.ToolTip.visible: hovered && accessibleName.length > 0
-    Basic.ToolTip.text: accessibleName
-    Basic.ToolTip.delay: 700
+    AppToolTip {
+        objectName: "buttonToolTip"
+        visible: control.hovered && control.accessibleName.length > 0
+        text: control.accessibleName
+    }
 }
