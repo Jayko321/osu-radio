@@ -10,7 +10,9 @@ use cxx_qt_lib::{
 use osu_radio_client::{
     AudioModsState, ModsAction, ModsEdit, ModsEditTarget, Track, TrackNamePreferences,
     controller::{AppCommand, AppController, OperationStatus},
-    models::{AudioModsMode, QueueAvailability, QueueEntryId, QueueItemRef, QueuePlacement},
+    models::{
+        AudioModsMode, QueueAvailability, QueueEntryId, QueueItemRef, QueuePlacement, RepeatMode,
+    },
     view_models::{
         FolderAction, FolderSelection, PlaylistAction, PlaylistTrack, PlaylistsState, QueueAction,
         QueueView,
@@ -503,6 +505,9 @@ pub mod ffi {
         #[qproperty(bool, can_seek, cxx_name = "canSeek", READ, NOTIFY)]
         #[qproperty(bool, can_next, cxx_name = "canNext", READ, NOTIFY)]
         #[qproperty(bool, can_previous, cxx_name = "canPrevious", READ, NOTIFY)]
+        #[qproperty(bool, shuffle, READ, NOTIFY)]
+        #[qproperty(QString, repeat_mode, cxx_name = "repeatMode", READ, NOTIFY)]
+        #[qproperty(bool, can_change_modes, cxx_name = "canChangeModes", READ, NOTIFY)]
         #[qproperty(f64, playback_position, cxx_name = "playbackPosition", READ, NOTIFY)]
         #[qproperty(f64, playback_duration, cxx_name = "playbackDuration", READ, NOTIFY)]
         #[qproperty(
@@ -545,6 +550,12 @@ pub mod ffi {
         #[qinvokable]
         #[cxx_name = "previousTrack"]
         fn previous_track(self: Pin<&mut PlayerViewModel>);
+        #[qinvokable]
+        #[cxx_name = "toggleShuffle"]
+        fn toggle_shuffle(self: Pin<&mut PlayerViewModel>);
+        #[qinvokable]
+        #[cxx_name = "cycleRepeat"]
+        fn cycle_repeat(self: Pin<&mut PlayerViewModel>);
         #[qinvokable]
         #[cxx_name = "seekPlayback"]
         fn seek_playback(self: Pin<&mut PlayerViewModel>, seconds: f64);
@@ -1925,6 +1936,9 @@ pub struct PlayerViewModelRust {
     pub(crate) can_seek: bool,
     pub(crate) can_next: bool,
     pub(crate) can_previous: bool,
+    pub(crate) shuffle: bool,
+    pub(crate) repeat_mode: QString,
+    pub(crate) can_change_modes: bool,
     pub(crate) playback_position: f64,
     pub(crate) playback_duration: f64,
     pub(crate) playback_speed_percent: i32,
@@ -1957,6 +1971,9 @@ impl Default for PlayerViewModelRust {
             can_seek: false,
             can_next: false,
             can_previous: false,
+            shuffle: false,
+            repeat_mode: QString::from("off"),
+            can_change_modes: false,
             playback_position: 0.0,
             playback_duration: 0.0,
             playback_speed_percent: 100,
@@ -2033,6 +2050,14 @@ impl ffi::PlayerViewModel {
         self.as_mut().set_can_seek(state.can_seek);
         self.as_mut().set_can_next(state.can_next);
         self.as_mut().set_can_previous(state.can_previous);
+        self.as_mut().set_shuffle(state.shuffle);
+        self.as_mut()
+            .set_repeat_mode(QString::from(match state.repeat {
+                RepeatMode::Off => "off",
+                RepeatMode::All => "all",
+                RepeatMode::One => "one",
+            }));
+        self.as_mut().set_can_change_modes(state.can_change_modes);
         self.as_mut()
             .set_playback_position(state.position.as_secs_f64());
         self.as_mut()
@@ -2089,6 +2114,14 @@ impl ffi::PlayerViewModel {
     property_setter!(set_can_seek, can_seek, can_seek_changed, bool);
     property_setter!(set_can_next, can_next, can_next_changed, bool);
     property_setter!(set_can_previous, can_previous, can_previous_changed, bool);
+    property_setter!(set_shuffle, shuffle, shuffle_changed, bool);
+    property_setter!(set_repeat_mode, repeat_mode, repeat_mode_changed, QString);
+    property_setter!(
+        set_can_change_modes,
+        can_change_modes,
+        can_change_modes_changed,
+        bool
+    );
     property_setter!(
         set_playback_position,
         playback_position,
@@ -2169,6 +2202,16 @@ impl ffi::PlayerViewModel {
     pub fn previous_track(self: Pin<&mut Self>) {
         if self.can_previous {
             self.command(AppCommand::Previous);
+        }
+    }
+    pub fn toggle_shuffle(self: Pin<&mut Self>) {
+        if self.can_change_modes {
+            self.command(AppCommand::ToggleShuffle);
+        }
+    }
+    pub fn cycle_repeat(self: Pin<&mut Self>) {
+        if self.can_change_modes {
+            self.command(AppCommand::CycleRepeat);
         }
     }
     pub fn seek_playback(self: Pin<&mut Self>, seconds: f64) {

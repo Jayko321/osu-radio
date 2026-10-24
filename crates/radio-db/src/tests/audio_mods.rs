@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     migrations::Migrator,
-    model::{AudioModsMode as Mode, AudioModsProfile as Profile, AudioModsSettings},
+    model::{AudioModsMode as Mode, AudioModsProfile as Profile, AudioModsSettings, PlaybackMode},
 };
 use sea_orm_migration::MigratorTrait;
 
@@ -47,14 +47,20 @@ pub(super) async fn contracts(database: &Database, url: &str) {
         .unwrap();
     let map = database.beatmaps().get(91).await.unwrap();
     let playlist = database.playlists().get(91).await.unwrap();
-    let queue = database.queue().get().await.unwrap();
     let other = Database::connect(url).await.unwrap();
     let (one, two) = tokio::join!(database.migrate(), other.migrate());
     one.unwrap();
     two.unwrap();
     assert_eq!(database.beatmaps().get(91).await.unwrap(), map);
     assert_eq!(database.playlists().get(91).await.unwrap(), playlist);
-    assert_eq!(database.queue().get().await.unwrap(), queue);
+    // The v14 schema predates the queue repository's columns, so the pre-upgrade snapshot is the fixture itself.
+    let queue = database.queue().get().await.unwrap();
+    assert_eq!(
+        (queue.entries.len(), queue.revision, queue.playback_token),
+        (1, 7, 8)
+    );
+    assert_eq!(queue.mode, PlaybackMode::Playing);
+    assert_eq!(queue.launch_source.as_ref().unwrap().audio_source_id, 91);
     assert_eq!(
         database.user_data().audio_settings().await.unwrap(),
         crate::model::AudioSettings {
@@ -169,8 +175,8 @@ pub(super) async fn contracts(database: &Database, url: &str) {
         Some(&ht)
     );
     constraints(database, &source).await;
-    // A downgrade removes only mods and can upgrade again without losing existing models.
-    Migrator::down(&database.connection, Some(1)).await.unwrap();
+    // Downgrading past v15 removes only mods (and the newer queue modes) and re-upgrades without losing models.
+    Migrator::down(&database.connection, Some(2)).await.unwrap();
     database.migrate().await.unwrap();
     assert_eq!(database.beatmaps().get(91).await.unwrap(), map);
     assert_eq!(database.playlists().get(91).await.unwrap(), playlist);

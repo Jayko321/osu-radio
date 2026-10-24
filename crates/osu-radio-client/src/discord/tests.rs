@@ -559,6 +559,25 @@ fn long_paused_artists_preserve_time_and_utf8_limit() {
     assert_eq!(presence.key.artist, "曲");
 }
 
+#[test]
+fn cover_comes_from_first_difficulty_with_a_public_set_id() {
+    let (mut track, playback) = sample(PlayerState::Playing);
+    let presence = |track: &Track| Presence::from_playback(Some(track), &playback).unwrap();
+    assert_eq!(presence(&track).cover_url(), None);
+    let difficulty = |online| crate::models::TrackDifficulty {
+        beatmap_id: 1,
+        beatmap_set_id: 9,
+        beatmap_set_online_id: online,
+        difficulty_name: None,
+        set_has_multiple_audio_sources: false,
+    };
+    track.difficulties = vec![difficulty(None), difficulty(Some(123))];
+    assert_eq!(
+        presence(&track).cover_url().as_deref(),
+        Some("https://assets.ppy.sh/beatmaps/123/covers/list@2x.jpg")
+    );
+}
+
 #[cfg(unix)]
 mod ipc;
 

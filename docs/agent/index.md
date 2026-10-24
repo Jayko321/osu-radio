@@ -118,7 +118,7 @@ The shared services coordinate concrete repositories, installation-owned
 snapshots and shared immutable metadata. Read [database](database.md),
 [backend](backend.md) and the [API skill](../../.agents/skills/osu-radio-api/SKILL.md)
 for those contracts. Hosting, providers, mobile implementation and output-device selection remain open. One shared server queue and automatic advance are implemented;
-Qt's virtualized history/current/upcoming queue panel is implemented; shuffle and repeat remain deferred.
+Qt's virtualized history/current/upcoming queue panel is implemented; shuffle and repeat (Off/All/One, persisted on the server, shown in Qt and MPRIS/SMTC) are implemented, with Linux native widgets and Windows still to be accepted manually.
 
 ## Evidence and maintenance
 

@@ -7,7 +7,7 @@ use crate::controller::workflow::{Effect, Workflow};
 use crate::controller::{AppUpdate, Completed};
 use crate::describe;
 use crate::{
-    models::{PlaybackAssignment, PlaybackCommand, PlaybackMode},
+    models::{PlaybackAssignment, PlaybackCommand, PlaybackMode, RepeatMode},
     playback::{Playback, PlaybackParameters, PlayerState},
 };
 use std::{collections::VecDeque, time::Duration};
@@ -24,6 +24,10 @@ pub struct PlayerPresentation {
     pub can_seek: bool,
     pub can_next: bool,
     pub can_previous: bool,
+    pub shuffle: bool,
+    pub repeat: RepeatMode,
+    /// A connected session has delivered an assignment, so mode commands are accepted.
+    pub can_change_modes: bool,
     /// Presentation time: source position/duration divided by `speed_percent`.
     /// `AppCommand::Seek` takes this same coordinate and converts back exactly once.
     pub position: Duration,
@@ -49,6 +53,9 @@ impl Default for PlayerPresentation {
             can_seek: false,
             can_next: false,
             can_previous: false,
+            shuffle: false,
+            repeat: RepeatMode::Off,
+            can_change_modes: false,
             position: Duration::ZERO,
             duration: None,
             speed_percent: 100,
@@ -117,7 +124,7 @@ impl PlayerViewModel {
         preferences: crate::TrackNamePreferences,
         individual_volume: bool,
     ) -> osu_radio_media_controls::Snapshot {
-        use osu_radio_media_controls::{Capabilities, PlaybackStatus, Snapshot};
+        use osu_radio_media_controls::{Capabilities, PlaybackStatus, Repeat, Snapshot};
         let assignment = self.assignment.as_ref();
         let launch = self.system_launch();
         let track = self.current_track.as_ref().filter(|track| {
@@ -167,6 +174,8 @@ impl PlayerViewModel {
                 0
             },
             volume,
+            shuffle: assignment.is_some_and(|a| a.shuffle),
+            repeat: assignment.map_or(Repeat::Off, |a| a.repeat.into()),
             capabilities: Capabilities {
                 play: ready && has_queue,
                 pause: ready
@@ -176,7 +185,8 @@ impl PlayerViewModel {
                     && launch.is_some()
                     && assignment.is_some_and(|a| a.mode != PlaybackMode::Stopped),
                 next: ready && assignment.is_some_and(|a| a.can_next),
-                previous: ready && assignment.is_some_and(|a| a.can_previous),
+                previous: ready
+                    && (assignment.is_some_and(|a| a.can_previous) || self.previous_restarts()),
                 seek: ready
                     && observed
                     && self.playback.has_source
@@ -186,6 +196,7 @@ impl PlayerViewModel {
                         || assignment
                             .and_then(|a| a.current_audio_source_id)
                             .is_some_and(|id| id >= 0)),
+                set_modes: ready && assignment.is_some(),
             },
             artwork: None,
         }
@@ -228,9 +239,18 @@ impl PlayerViewModel {
                     return;
                 }
             }
+            Event::SetShuffle(enabled) if capabilities.set_modes => {
+                PlaybackCommand::SetShuffle { enabled }
+            }
+            Event::SetRepeat(repeat) if capabilities.set_modes => PlaybackCommand::SetRepeat {
+                mode: repeat.into(),
+            },
             Event::Stop if capabilities.stop => PlaybackCommand::Stop,
             Event::Next if capabilities.next => PlaybackCommand::Next,
-            Event::Previous if capabilities.previous => PlaybackCommand::Previous,
+            Event::Previous if capabilities.previous => {
+                self.previous(input, work);
+                return;
+            }
             Event::SeekAbsolute { launch, position } => {
                 self.system_seek(launch, position, snapshot, work);
                 return;
@@ -269,6 +289,44 @@ impl PlayerViewModel {
             _ => return,
         };
         self.queue_playback(command, input, work);
+    }
+
+    /// Whether Previous would restart the sounding track locally. It then stays available
+    /// even where the server has no previous entry (the first one).
+    pub(crate) fn previous_restarts(&self) -> bool {
+        let sounding = self.system_worker_current()
+            && self.playback.has_source
+            && self.playback.loading_audio_id.is_none()
+            && self.playback.error.is_none()
+            && matches!(
+                self.playback.snapshot.state,
+                PlayerState::Playing | PlayerState::Paused
+            );
+        let shown = scaled(
+            self.playback.snapshot.position,
+            100,
+            speed_percent(self.playback.snapshot.parameters),
+        );
+        self.assignment.is_some() && sounding && shown > Self::PREVIOUS_RESTART_AFTER
+    }
+
+    /// Beyond this shown position, Previous restarts the sounding track instead of leaving it.
+    const PREVIOUS_RESTART_AFTER: Duration = Duration::from_secs(3);
+
+    /// The one Previous rule for the button and system controls: restart locally past
+    /// the threshold, else the server's Previous. The seek keeps pause and sends no `Started`.
+    pub(crate) fn previous(&mut self, input: &PlayerInput<'_>, work: &mut Workflow<'_>) {
+        if let Some(assignment) = &self.assignment
+            && self.previous_restarts()
+        {
+            work.effect(Effect::PlayerCommand(crate::playback::Command::Seek {
+                expected_id: assignment.current_audio_source_id,
+                playback_token: assignment.playback_token,
+                position: Duration::ZERO,
+            }));
+            return;
+        }
+        self.queue_playback(PlaybackCommand::Previous, input, work);
     }
 
     fn system_seek(
@@ -412,7 +470,13 @@ impl PlayerViewModel {
                 && self.playback.has_source
                 && duration.is_some_and(|duration| !duration.is_zero()),
             can_next: self.playback.can_next,
-            can_previous: self.playback.can_previous,
+            can_previous: self.playback.can_previous || self.previous_restarts(),
+            shuffle: self.assignment.as_ref().is_some_and(|state| state.shuffle),
+            repeat: self
+                .assignment
+                .as_ref()
+                .map_or(RepeatMode::Off, |state| state.repeat),
+            can_change_modes: connected && self.assignment.is_some(),
             position: if selected_current {
                 to_ui(self.playback.snapshot.position)
             } else {
@@ -460,6 +524,20 @@ impl PlayerViewModel {
 }
 
 impl PlayerViewModel {
+    pub(crate) fn toggle_shuffle(&mut self, input: &PlayerInput<'_>, work: &mut Workflow<'_>) {
+        let Some(assignment) = &self.assignment else {
+            return;
+        };
+        let enabled = !assignment.shuffle;
+        self.queue_playback(PlaybackCommand::SetShuffle { enabled }, input, work);
+    }
+    pub(crate) fn cycle_repeat(&mut self, input: &PlayerInput<'_>, work: &mut Workflow<'_>) {
+        let Some(assignment) = &self.assignment else {
+            return;
+        };
+        let mode = assignment.repeat.cycled();
+        self.queue_playback(PlaybackCommand::SetRepeat { mode }, input, work);
+    }
     pub(crate) fn queue_playback(
         &mut self,
         command: PlaybackCommand,

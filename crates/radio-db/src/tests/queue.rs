@@ -1,6 +1,6 @@
 use super::*;
 use crate::migrations::Migrator;
-use crate::model::{PlaybackMode, QueueAvailability, QueueEntryId, QueueState};
+use crate::model::{PlaybackMode, QueueAvailability, QueueEntryId, QueueState, RepeatMode};
 use sea_orm_migration::{MigratorTrait, SchemaManager};
 
 pub(super) async fn migration_contracts(database: &Database, url: &str) {
@@ -115,6 +115,9 @@ async fn populated_upgrade(database: &Database, url: &str, index: Option<i64>, m
         assert_eq!(state.waiting_for_check, index < 8 && mode != "stopped");
         assert_eq!(state.revision, 17);
         assert_eq!(state.playback_token, 23);
+        assert!(!state.shuffle && !state.repeat_launch);
+        assert_eq!(state.repeat, RepeatMode::Off);
+        assert!(state.entries.iter().all(|e| e.shuffle_order.is_none()));
         let first = &state.entries[0];
         assert_eq!(first.title.as_deref(), Some("Saved title"));
         assert_eq!(first.title_unicode.as_deref(), Some("保存"));
@@ -236,11 +239,26 @@ async fn repository_contracts(database: &Database, other: &Database, state: &Que
     bad.mode = PlaybackMode::Stopped;
     bad.history_len = 1;
     invalids.push(bad);
+    // Keys exist exactly while shuffle is on.
+    let mut bad = state.clone();
+    bad.entries[0].shuffle_order = Some(1);
+    invalids.push(bad);
+    let mut bad = state.clone();
+    bad.shuffle = true;
+    invalids.push(bad);
+    let mut bad = state.clone();
+    bad.shuffle = true;
+    for (key, entry) in (0..).zip(&mut bad.entries) {
+        entry.shuffle_order = Some(key);
+    }
+    bad.entries[7].shuffle_order = None;
+    invalids.push(bad);
     for bad in invalids {
         assert!(save(database, &bad).await.is_err(), "accepted {bad:?}");
         assert_eq!(database.queue().get().await.unwrap(), *state);
     }
     downgrade_guards(database, state).await;
+    queue_modes_contracts(database, other, state).await;
     save_failure_rolls_back(database, state).await;
     let mut clear = state.clone();
     clear.entries.clear();
@@ -297,7 +315,7 @@ async fn repository_contracts(database: &Database, other: &Database, state: &Que
                 .await
                 .unwrap()
                 .len(),
-            15
+            16
         );
         assert!(
             !SchemaManager::new(&database.connection)
@@ -321,6 +339,48 @@ async fn repository_contracts(database: &Database, other: &Database, state: &Que
         maximum,
         "advisory references never cascade queue snapshots"
     );
+}
+
+// Modes and order keys round-trip, the database rejects bad modes, and v15 cannot hold active modes.
+async fn queue_modes_contracts(database: &Database, other: &Database, state: &QueueState) {
+    let mut modes = state.clone();
+    modes.shuffle = true;
+    modes.repeat = RepeatMode::One;
+    modes.repeat_launch = true;
+    let count = i64::try_from(modes.entries.len()).unwrap();
+    for (key, entry) in (0..count).rev().zip(&mut modes.entries) {
+        entry.shuffle_order = Some(key);
+    }
+    save(database, &modes).await.unwrap();
+    assert_eq!(other.queue().get().await.unwrap(), modes);
+    assert!(
+        database
+            .connection
+            .execute_unprepared("UPDATE playback_queue SET repeat_mode = 'sometimes'")
+            .await
+            .is_err()
+    );
+    assert!(downgrade_to(database, 11).await.is_err());
+    assert_eq!(database.queue().get().await.unwrap(), modes);
+    modes.shuffle = false;
+    modes.repeat = RepeatMode::All;
+    modes.repeat_launch = false;
+    modes
+        .entries
+        .iter_mut()
+        .for_each(|e| e.shuffle_order = None);
+    save(database, &modes).await.unwrap();
+    assert_eq!(other.queue().get().await.unwrap(), modes);
+    assert!(downgrade_to(database, 11).await.is_err());
+    assert_eq!(database.queue().get().await.unwrap(), modes);
+    assert_eq!(
+        Migrator::get_applied_migrations(&database.connection)
+            .await
+            .unwrap()
+            .len(),
+        16
+    );
+    save(database, state).await.unwrap();
 }
 
 async fn migration_rollback(database: &Database) {
@@ -423,7 +483,7 @@ async fn downgrade_guards(database: &Database, state: &QueueState) {
                 .await
                 .unwrap()
                 .len(),
-            15
+            16
         );
         save(database, state).await.unwrap();
     }
@@ -535,7 +595,7 @@ async fn waiting_migration(database: &Database, url: &str) {
             .await
             .unwrap()
             .len(),
-        15
+        16
     );
     assigned.entries[0].availability = QueueAvailability::Available;
     save(database, &assigned).await.unwrap();
@@ -603,7 +663,7 @@ async fn launch_source_migration(database: &Database, url: &str) {
                     .await
                     .unwrap()
                     .len(),
-                15
+                16
             );
         }
         for invalid in [

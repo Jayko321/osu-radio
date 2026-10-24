@@ -354,6 +354,8 @@ pub(super) fn assignment(mode: PlaybackMode) -> PlaybackAssignment {
         playback_token: 5,
         can_next: true,
         can_previous: false,
+        shuffle: false,
+        repeat: crate::models::RepeatMode::Off,
         volume_percent: None,
         mods: None,
     }
@@ -630,6 +632,24 @@ fn worker_start_failure_updates_player_state_and_presentation() {
         PlaybackCommand::PauseIfCurrent { playback_token: 5 }
     );
     assert_eq!(pending.expected_token, Some(5));
+}
+
+#[test]
+fn presentation_reports_modes_and_enables_changes_only_with_connection_and_assignment() {
+    use crate::models::RepeatMode;
+    let mut player = PlayerViewModel::default();
+    let view = |player: &PlayerViewModel, connected| {
+        player.presentation(None, true, connected, true, AudioModsProfile::default())
+    };
+    let none = view(&player, true);
+    assert!(!none.can_change_modes && !none.shuffle && none.repeat == RepeatMode::Off);
+    let mut assigned = assignment(PlaybackMode::Playing);
+    assigned.shuffle = true;
+    assigned.repeat = RepeatMode::One;
+    player.assignment = Some(assigned);
+    let connected = view(&player, true);
+    assert!(connected.can_change_modes && connected.shuffle && connected.repeat == RepeatMode::One);
+    assert!(!view(&player, false).can_change_modes);
 }
 
 #[test]

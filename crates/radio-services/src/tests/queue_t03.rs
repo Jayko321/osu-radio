@@ -527,7 +527,7 @@ async fn history_limit(db: &TestDatabase, playlist: &Playlist, audio: i32) {
                 "unavailable" => None,
                 _ => Some(0),
             };
-            crate::QueueService::replace_in(&tx, playlist.items, start)
+            crate::QueueService::replace_in(&tx, playlist.items, start, operation == "selected")
                 .await
                 .unwrap();
         }

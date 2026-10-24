@@ -193,7 +193,7 @@ Windows interaction.
 ## Deferred decisions
 
 Future settings storage and migration, hosted-source providers/hosting, mobile
-implementation, output-device selection, shuffle and repeat remain undecided.
+implementation and output-device selection remain undecided.
 Qt and the supervised child server are current implementation choices, not
 requirements for every future platform. Linux and Windows are current targets;
 macOS is unverified, Android/iOS are future goals. No dependency upgrade or new

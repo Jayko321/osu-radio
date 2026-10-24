@@ -1,6 +1,14 @@
 use super::SourceType;
 use anyhow::{Context, Result, ensure};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RepeatMode {
+    #[default]
+    Off,
+    All,
+    One,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaybackMode {
     Stopped,
@@ -62,6 +70,8 @@ pub struct QueueEntry {
     pub cover_beatmap_id: Option<i32>,
     pub availability: QueueAvailability,
     pub check_generation: u64,
+    /// Original order key; present on every entry while shuffle is on, absent otherwise.
+    pub shuffle_order: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +90,10 @@ pub struct QueueState {
     pub mode: PlaybackMode,
     pub waiting_for_check: bool,
     pub launch_source: Option<QueueLaunchSource>,
+    pub shuffle: bool,
+    pub repeat: RepeatMode,
+    /// The current launch is a Repeat One restart and must not record listening history.
+    pub repeat_launch: bool,
     pub revision: u64,
     pub playback_token: u64,
     pub last_entry_id: i64,
@@ -94,6 +108,9 @@ impl Default for QueueState {
             mode: PlaybackMode::Stopped,
             waiting_for_check: false,
             launch_source: None,
+            shuffle: false,
+            repeat: RepeatMode::Off,
+            repeat_launch: false,
             revision: 0,
             playback_token: 0,
             last_entry_id: 0,
@@ -167,6 +184,10 @@ impl QueueState {
             );
             i64::try_from(entry.position)?;
             i64::try_from(entry.check_generation)?;
+            ensure!(
+                entry.shuffle_order.is_some() == self.shuffle,
+                "Shuffle order keys must exist exactly while shuffle is on"
+            );
             if let Some(source) = &entry.playlist_source {
                 ensure!(
                     matches!(source.installation_kind.as_str(), "stable" | "lazer")

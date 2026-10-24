@@ -54,6 +54,7 @@ QtObject {
         "qrc:/assets/icons/playlist-edit.svg",
         "qrc:/assets/icons/plug.svg",
         "qrc:/assets/icons/plus.svg",
+        "qrc:/assets/icons/repeat-1.svg",
         "qrc:/assets/icons/repeat-2.svg",
         "qrc:/assets/icons/rotate-cw.svg",
         "qrc:/assets/icons/search-line.svg",

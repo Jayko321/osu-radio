@@ -161,6 +161,11 @@ def verify(binary, root):
         assert tracks[0]["mods"] == MODS and all(t["mods"] is None for t in tracks[1:])
         assert request(base, "GET", "/api/user-data/audio-mods") == GLOBAL_MODS
         assert request(base, "GET", "/api/playback")["mode"] == "stopped"
+        # The Qt probe turned shuffle and repeat All on before exiting; a new server keeps them.
+        assert request(base, "GET", "/api/queue")["shuffle"] is True
+        assert request(base, "GET", "/api/queue")["repeat"] == "all"
+        playback = request(base, "GET", "/api/playback")
+        assert playback["shuffle"] is True and playback["repeat"] == "all"
     assert (root / "source/A.wav").is_file()
     print("Real queue fixture: persistence, library, playlists, dates, volume and mods passed")
 

@@ -50,6 +50,19 @@ fn transport_and_status_translate_without_playback_rules() {
 }
 
 #[test]
+fn repeat_modes_map_both_ways_and_unknown_native_mode_is_ignored() {
+    for (repeat, native) in [
+        (Repeat::Off, MediaPlaybackAutoRepeatMode::None),
+        (Repeat::One, MediaPlaybackAutoRepeatMode::Track),
+        (Repeat::All, MediaPlaybackAutoRepeatMode::List),
+    ] {
+        assert_eq!(repeat_to_native(repeat), native);
+        assert_eq!(repeat_from_native(native), Some(repeat));
+    }
+    assert_eq!(repeat_from_native(MediaPlaybackAutoRepeatMode(99)), None);
+}
+
+#[test]
 fn timeline_units_bounds_missing_duration_and_seek_availability() {
     let mut snapshot = Snapshot {
         launch: Some(FIRST),

@@ -37,6 +37,7 @@ impl From<QueueEntry> for QueueRow {
                     |(beatmap_id, beatmap_set_id)| crate::models::TrackDifficulty {
                         beatmap_id,
                         beatmap_set_id,
+                        beatmap_set_online_id: None,
                         difficulty_name: entry.difficulty_name.clone(),
                         set_has_multiple_audio_sources: false,
                     },

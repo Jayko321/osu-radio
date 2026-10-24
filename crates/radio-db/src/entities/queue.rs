@@ -13,6 +13,9 @@ pub struct Model {
     pub launch_audio_kind: Option<String>,
     pub launch_audio_location: Option<String>,
     pub launch_check_generation: Option<i64>,
+    pub shuffle: bool,
+    pub repeat_mode: String,
+    pub repeat_launch: bool,
     pub revision: i64,
     pub playback_token: i64,
 }

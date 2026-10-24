@@ -5,7 +5,7 @@ use crate::{
     ApiClient, ServerOptions, Session,
     models::{
         AudioModsMode, AudioModsPatch, AudioModsProfile, PlaybackAssignment, PlaybackCommand,
-        QueueAvailability, QueueItemRef, QueuePlacement, QueueState,
+        QueueAvailability, QueueEntryId, QueueItemRef, QueuePlacement, QueueState, RepeatMode,
     },
     view_models::mods::Editor,
 };
@@ -401,6 +401,153 @@ async fn real_server_queue_and_fake_engine_preserve_launches_across_edits_and_re
         !directory.path().join("data").exists(),
         "explicit fixture URL must bypass XDG fallback"
     );
+}
+
+fn entry_ids(queue: &QueueState) -> Vec<QueueEntryId> {
+    queue.entries.iter().map(|e| e.id).collect()
+}
+
+#[tokio::test]
+#[ignore = "needs a built SQLite osu-radio-server and python3; uses a private directory"]
+#[allow(clippy::too_many_lines)] // One scenario follows the modes through server, engine and restart.
+async fn real_server_modes_reorder_only_the_future_repeat_and_survive_restart() {
+    let (directory, options) = prepared();
+    let session = Session::start(options.clone()).await.unwrap();
+    let api = session.api();
+    let (a, b, c) = (
+        audio_of(api, "A").await,
+        audio_of(api, "B").await,
+        audio_of(api, "C").await,
+    );
+    api.clear_queue().await.unwrap();
+    api.append_queue(&[a, b, c, a, b, c]).await.unwrap();
+    let original = entry_ids(&settled(api).await);
+    assert_eq!(original.len(), 6);
+    let mut core = Core::<FakeEngine>::default();
+    let playing = api.play_queue_entry(original[0]).await.unwrap();
+    drive(&mut core, api, &playing).await;
+    let started = confirm(&mut core, api).await;
+    assert!(!started.shuffle && started.repeat == RepeatMode::Off);
+
+    // Shuffle reorders only what follows the current entry; the launch is untouched.
+    let on = api
+        .playback_command(&PlaybackCommand::SetShuffle { enabled: true })
+        .await
+        .unwrap();
+    assert!(on.shuffle);
+    assert_eq!(on.current_entry_id, Some(original[0]));
+    assert_eq!(on.playback_token, started.playback_token);
+    drive(&mut core, api, &on).await;
+    assert!(core.feedback.is_empty());
+    assert_eq!(core.player.as_ref().unwrap().loads, 1);
+    let shuffled = api.queue().await.unwrap();
+    let current = shuffled.history_len;
+    assert_eq!(shuffled.entries[current].id, original[0]);
+    assert_eq!(entry_ids(&shuffled)[..=current], original[..=current]);
+    let mut tail = entry_ids(&shuffled)[current + 1..].to_vec();
+    tail.sort();
+    let mut expected = original[current + 1..].to_vec();
+    expected.sort();
+    assert_eq!(tail, expected, "same entries, only the order may change");
+
+    // Next follows the new order; turning shuffle off restores the original one.
+    let next = api.playback_command(&PlaybackCommand::Next).await.unwrap();
+    assert_eq!(
+        next.current_entry_id,
+        Some(shuffled.entries[current + 1].id)
+    );
+    drive(&mut core, api, &next).await;
+    let confirmed = confirm(&mut core, api).await;
+    let off = api
+        .playback_command(&PlaybackCommand::SetShuffle { enabled: false })
+        .await
+        .unwrap();
+    assert!(!off.shuffle);
+    assert_eq!(off.current_entry_id, next.current_entry_id);
+    assert_eq!(off.playback_token, next.playback_token);
+    let restored = api.queue().await.unwrap();
+    let position = restored.history_len;
+    let future = entry_ids(&restored)[position + 1..].to_vec();
+    let in_original_order = original
+        .iter()
+        .copied()
+        .filter(|id| future.contains(id))
+        .collect::<Vec<_>>();
+    assert_eq!(future.len(), 4);
+    assert_eq!(future, in_original_order);
+
+    // Repeat One restarts the same entry with a new launch and keeps the listening date.
+    let one = api
+        .playback_command(&PlaybackCommand::SetRepeat {
+            mode: RepeatMode::One,
+        })
+        .await
+        .unwrap();
+    assert_eq!(one.repeat, RepeatMode::One);
+    assert_eq!(one.playback_token, confirmed.playback_token);
+    let before = confirmed.track.as_ref().unwrap().last_played_at_ms;
+    assert!(before.is_some());
+    let history = api.queue().await.unwrap().history_len;
+    let again = api
+        .playback_command(&PlaybackCommand::Finished {
+            playback_token: confirmed.playback_token,
+        })
+        .await
+        .unwrap();
+    assert_eq!(again.current_entry_id, confirmed.current_entry_id);
+    assert_ne!(again.playback_token, confirmed.playback_token);
+    assert_eq!(api.queue().await.unwrap().history_len, history);
+    drive(&mut core, api, &again).await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let restarted = confirm(&mut core, api).await;
+    assert_eq!(restarted.track.unwrap().last_played_at_ms, before);
+
+    // Repeat All wraps from the last entry to the first without reordering.
+    api.playback_command(&PlaybackCommand::SetRepeat {
+        mode: RepeatMode::All,
+    })
+    .await
+    .unwrap();
+    let order = entry_ids(&api.queue().await.unwrap());
+    for finish in [true, false] {
+        let last = api.play_queue_entry(*order.last().unwrap()).await.unwrap();
+        drive(&mut core, api, &last).await;
+        confirm(&mut core, api).await;
+        let wrapped = if finish {
+            PlaybackCommand::Finished {
+                playback_token: last.playback_token,
+            }
+        } else {
+            PlaybackCommand::Next
+        };
+        let wrapped = api.playback_command(&wrapped).await.unwrap();
+        assert_eq!(wrapped.current_entry_id, Some(order[0]), "finish={finish}");
+        assert_eq!(entry_ids(&api.queue().await.unwrap()), order);
+        drive(&mut core, api, &wrapped).await;
+        confirm(&mut core, api).await;
+    }
+
+    // Both modes survive a server restart, a fresh client engine and Clear.
+    api.playback_command(&PlaybackCommand::SetShuffle { enabled: true })
+        .await
+        .unwrap();
+    let before = api.queue().await.unwrap();
+    session.shutdown().await.unwrap();
+    let session = Session::start(options).await.unwrap();
+    let api = session.api();
+    let recovered = api.playback().await.unwrap();
+    assert!(recovered.shuffle && recovered.repeat == RepeatMode::All);
+    assert_eq!(api.queue().await.unwrap().entries, before.entries);
+    let mut fresh = Core::<FakeEngine>::default();
+    drive(&mut fresh, api, &recovered).await;
+    assert!(fresh.player.is_none() && fresh.feedback.is_empty());
+    let cleared = api.clear_queue().await.unwrap();
+    assert!(cleared.shuffle && cleared.repeat == RepeatMode::All);
+    assert!(api.queue().await.unwrap().entries.is_empty());
+    let after = api.playback().await.unwrap();
+    assert!(after.shuffle && after.repeat == RepeatMode::All);
+    session.shutdown().await.unwrap();
+    drop(directory);
 }
 
 fn profile(mode: AudioModsMode, speed_percent: u16, adjust_pitch: bool) -> AudioModsProfile {

@@ -104,6 +104,8 @@ pub enum Action {
         available: bool,
     },
     QueuePause,
+    ToggleShuffle,
+    CycleRepeat,
     Playlist(crate::view_models::PlaylistAction),
     FolderReset,
     FolderToggle(String),
@@ -317,6 +319,14 @@ impl MockState {
             }
             Action::QueuePause => {
                 self.queue.pause();
+                true
+            }
+            Action::ToggleShuffle => {
+                self.queue.shuffle = !self.queue.shuffle;
+                true
+            }
+            Action::CycleRepeat => {
+                self.queue.repeat = self.queue.repeat.cycled();
                 true
             }
             Action::Playlist(crate::view_models::PlaylistAction::AddToQueue(id)) => {

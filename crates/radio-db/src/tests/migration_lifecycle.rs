@@ -171,12 +171,12 @@ async fn reversible_migrations_preserve_the_library(database: &Database) {
     .await
     .unwrap();
     assert_schema(database, 4).await;
-    for version in 5..=15 {
+    for version in 5..=16 {
         Migrator::up(&database.connection, Some(1)).await.unwrap();
         assert_schema(database, version).await;
         assert_library(database, &installation, set.id, map.id).await;
     }
-    for version in (4..=14).rev() {
+    for version in (4..=15).rev() {
         Migrator::down(&database.connection, Some(1)).await.unwrap();
         assert_schema(database, version).await;
         assert_library(database, &installation, set.id, map.id).await;
@@ -192,7 +192,7 @@ async fn reversible_migrations_preserve_the_library(database: &Database) {
     assert_schema(database, 4).await;
     assert_library(database, &installation, set.id, map.id).await;
     database.migrate().await.unwrap();
-    assert_schema(database, 15).await;
+    assert_schema(database, 16).await;
     assert_library(database, &installation, set.id, map.id).await;
     assert_eq!(
         database.queue().get().await.unwrap(),
@@ -238,6 +238,10 @@ async fn assert_schema(database: &Database, version: usize) {
         ("playback_queue", "launch_audio_kind", 14),
         ("playback_queue", "launch_audio_location", 14),
         ("playback_queue", "launch_check_generation", 14),
+        ("playback_queue", "shuffle", 16),
+        ("playback_queue", "repeat_mode", 16),
+        ("playback_queue", "repeat_launch", 16),
+        ("queue_entries", "shuffle_order", 16),
         ("user_data", "individual_volume_enabled", 8),
         ("user_data", "global_volume_percent", 8),
         ("user_data", "individual_mods_enabled", 15),

@@ -19,6 +19,7 @@ pub struct LibraryTrack {
 pub struct TrackDifficulty {
     pub beatmap_id: i32,
     pub beatmap_set_id: i32,
+    pub beatmap_set_online_id: Option<i32>,
     pub difficulty_name: Option<String>,
     pub set_has_multiple_audio_sources: bool,
 }
@@ -35,7 +36,12 @@ pub(crate) fn from_sets(sets: Vec<BeatmapSetWithAudio>) -> Vec<LibraryTrack> {
         }
         for map in set.beatmaps {
             if let Some(maps) = map.audio_source_id.and_then(|id| groups.get_mut(&id)) {
-                maps.push((map, set.beatmap_set.id, set.has_multiple_audio_sources));
+                maps.push((
+                    map,
+                    set.beatmap_set.id,
+                    set.beatmap_set.online_id,
+                    set.has_multiple_audio_sources,
+                ));
             }
         }
     }
@@ -43,8 +49,8 @@ pub(crate) fn from_sets(sets: Vec<BeatmapSetWithAudio>) -> Vec<LibraryTrack> {
         .into_iter()
         .map(|id| {
             let mut maps = groups.remove(&id).unwrap_or_default();
-            maps.sort_by_key(|(map, _, _)| map.id);
-            let representative = maps.first().map(|(map, _, _)| map);
+            maps.sort_by_key(|(map, _, _, _)| map.id);
+            let representative = maps.first().map(|(map, _, _, _)| map);
             LibraryTrack {
                 audio_source_id: id,
                 last_played_at_ms: None,
@@ -56,13 +62,14 @@ pub(crate) fn from_sets(sets: Vec<BeatmapSetWithAudio>) -> Vec<LibraryTrack> {
                 artist_unicode: representative.and_then(|map| map.artist_unicode.clone()),
                 cover_beatmap_id: maps
                     .iter()
-                    .find(|(map, _, _)| map.has_cover)
-                    .map(|(map, _, _)| map.id),
+                    .find(|(map, _, _, _)| map.has_cover)
+                    .map(|(map, _, _, _)| map.id),
                 difficulties: maps
                     .into_iter()
-                    .map(|(map, set_id, split)| TrackDifficulty {
+                    .map(|(map, set_id, online_id, split)| TrackDifficulty {
                         beatmap_id: map.id,
                         beatmap_set_id: set_id,
+                        beatmap_set_online_id: online_id,
                         difficulty_name: map.difficulty_name,
                         set_has_multiple_audio_sources: split,
                     })
@@ -102,7 +109,7 @@ mod tests {
                 beatmap_set: BeatmapSet {
                     id: 100,
                     installation_id: 7,
-                    online_id: None,
+                    online_id: Some(1000),
                     hash: None,
                 },
                 audio_sources: vec![audio(20), audio(10)],
@@ -142,18 +149,21 @@ mod tests {
                         TrackDifficulty {
                             beatmap_id: 1,
                             beatmap_set_id: 200,
+                            beatmap_set_online_id: None,
                             difficulty_name: Some("Difficulty 1".into()),
                             set_has_multiple_audio_sources: false
                         },
                         TrackDifficulty {
                             beatmap_id: 21,
                             beatmap_set_id: 100,
+                            beatmap_set_online_id: Some(1000),
                             difficulty_name: Some("Difficulty 21".into()),
                             set_has_multiple_audio_sources: true
                         },
                         TrackDifficulty {
                             beatmap_id: 23,
                             beatmap_set_id: 100,
+                            beatmap_set_online_id: Some(1000),
                             difficulty_name: Some("Difficulty 23".into()),
                             set_has_multiple_audio_sources: true
                         },
@@ -172,6 +182,7 @@ mod tests {
                     difficulties: vec![TrackDifficulty {
                         beatmap_id: 31,
                         beatmap_set_id: 100,
+                        beatmap_set_online_id: Some(1000),
                         difficulty_name: Some("Difficulty 31".into()),
                         set_has_multiple_audio_sources: true
                     }],

@@ -400,6 +400,105 @@ async fn event_heartbeat_detects_a_committed_write_without_notification() {
     assert_eq!(frame.into_data().unwrap().as_ref(), b"\n");
 }
 
+#[tokio::test]
+async fn mode_commands_update_every_response_and_reject_invalid_input_without_changes() {
+    let state = state_with(&[beatmap_set(1, "/modes.mp3")]).await;
+    let id = state
+        .services()
+        .beatmap_sets()
+        .search_tracks("")
+        .await
+        .unwrap()[0]
+        .audio_source_id;
+    let mut body = events(State(state.clone())).await.unwrap().into_body();
+    let initial = assignment_frame(&mut body).await;
+    assert_eq!(
+        (&initial["shuffle"], &initial["repeat"]),
+        (&json!(false), &json!("off"))
+    );
+    let (_, queue) = request(&state, "GET", "/api/queue", Value::Null).await;
+    assert_eq!(
+        (&queue["shuffle"], &queue["repeat"]),
+        (&json!(false), &json!("off"))
+    );
+
+    let shuffled = command_request(&state, json!({"command":"set_shuffle","enabled":true})).await;
+    assert_eq!(shuffled["shuffle"], true);
+    assert_eq!(shuffled["repeat"], "off");
+    assert_eq!(assignment_frame(&mut body).await["shuffle"], true);
+    let repeated = command_request(&state, json!({"command":"set_repeat","mode":"one"})).await;
+    assert_eq!(
+        (&repeated["shuffle"], &repeated["repeat"]),
+        (&json!(true), &json!("one"))
+    );
+    assert_eq!(assignment_frame(&mut body).await["repeat"], "one");
+
+    // Setting the current value again is a no-op without a new revision.
+    assert_eq!(
+        command_request(&state, json!({"command":"set_repeat","mode":"one"})).await["revision"],
+        repeated["revision"]
+    );
+    assert_eq!(
+        command_request(&state, json!({"command":"set_shuffle","enabled":true})).await["revision"],
+        repeated["revision"]
+    );
+
+    for invalid in [
+        json!({"command":"set_repeat","mode":"sideways"}),
+        json!({"command":"set_repeat"}),
+        json!({"command":"set_shuffle","enabled":"yes"}),
+        json!({"command":"set_shuffle","enabled":null}),
+        json!({"command":"set_shuffle","enabled":false,"extra":1}),
+    ] {
+        let (status, _) = request(&state, "POST", "/api/playback/commands", invalid).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let (_, queue) = request(&state, "GET", "/api/queue", Value::Null).await;
+    assert_eq!(
+        (&queue["shuffle"], &queue["repeat"]),
+        (&json!(true), &json!("one"))
+    );
+    assert_eq!(queue["revision"], repeated["revision"]);
+
+    request(
+        &state,
+        "POST",
+        "/api/queue/items",
+        json!({"items":[{"type":"audio","audio_source_id":id}],"placement":"end"}),
+    )
+    .await;
+    let (status, cleared) = request(&state, "DELETE", "/api/queue", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        (&cleared["shuffle"], &cleared["repeat"]),
+        (&json!(true), &json!("one"))
+    );
+    let off = command_request(&state, json!({"command":"set_repeat","mode":"off"})).await;
+    assert_eq!(off["repeat"], "off");
+}
+
+#[tokio::test]
+async fn queue_modes_survive_application_restart_on_the_same_database() {
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("modes.sqlite");
+    let state = AppState::connect(database.to_str().unwrap()).await.unwrap();
+    command_request(&state, json!({"command":"set_shuffle","enabled":true})).await;
+    command_request(&state, json!({"command":"set_repeat","mode":"all"})).await;
+    drop(state);
+
+    let state = AppState::connect(database.to_str().unwrap()).await.unwrap();
+    let (_, queue) = request(&state, "GET", "/api/queue", Value::Null).await;
+    assert_eq!(
+        (&queue["shuffle"], &queue["repeat"]),
+        (&json!(true), &json!("all"))
+    );
+    let (_, playback) = request(&state, "GET", "/api/playback", Value::Null).await;
+    assert_eq!(
+        (&playback["shuffle"], &playback["repeat"]),
+        (&json!(true), &json!("all"))
+    );
+}
+
 #[cfg(feature = "docs")]
 #[tokio::test]
 async fn playback_routes_and_tagged_commands_are_documented() {
@@ -436,6 +535,12 @@ async fn playback_routes_and_tagged_commands_are_documented() {
     assert!(schema.to_string().contains("playback_token"));
     assert!(schema.to_string().contains("previous"));
     assert!(schema.to_string().contains("started"));
+    assert!(schema.to_string().contains("set_shuffle"));
+    assert!(schema.to_string().contains("set_repeat"));
+    assert_eq!(
+        document["components"]["schemas"]["RepeatMode"]["enum"],
+        json!(["off", "all", "one"])
+    );
     assert!(
         document["components"]["schemas"]["TrackResponse"]["properties"]["last_played_at_ms"]
             .is_object()

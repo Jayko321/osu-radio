@@ -299,7 +299,8 @@ Coverage lives in [worker tests](../../crates/osu-radio-client/src/playback.rs),
 [queue VM tests](../../crates/osu-radio-client/src/view_models/queue/tests.rs),
 [stream tests](../../crates/osu-radio-client/src/api/playback_tests.rs), and the
 [Qt probe](../../apps/osu-radio-qt/tests/AdapterProbe.qml). Galleries remain offline.
-Shuffle, repeat and output-device selection remain deferred.
+Output-device selection remains deferred; shuffle and repeat are described in
+[their section](#shuffle-repeat-and-previous).
 Physical output, desktop slider interaction and Windows require separate manual
 checks.
 
@@ -308,6 +309,40 @@ stale-file deletion, ordered Started/Finished feedback, periodic Playing updates
 source replacement, joined shutdown and temporary-file cleanup. Core tests also
 reject nonfinite/out-of-range assignment volume without replacing the current
 source, mode, token or volume. These checks open no audio device.
+
+### Shuffle, repeat and Previous
+
+`PlaybackAssignment` carries `shuffle` and `repeat` ([`RepeatMode`](../../crates/osu-radio-client/src/models.rs),
+`#[serde(default)]`), and `PlaybackCommand::SetShuffle/SetRepeat` send the server commands.
+`AppCommand::ToggleShuffle` and `CycleRepeat` compute the target from the last
+assignment (Off → All → One → Off) in the
+[Player VM](../../crates/osu-radio-client/src/view_models/player.rs); with no
+assignment nothing is queued, and offline `queue_playback` reports the error.
+`PlayerPresentation` exposes `shuffle`, `repeat` and `can_change_modes` (connected
+and an assignment exists). The server owns reordering and repeat transitions; the
+client only displays the answer.
+
+One rule, `PlayerViewModel::previous`, serves the button and the system Previous: if
+the current launch is sounding in the worker and the shown position (speed-scaled, as
+in the panel) is strictly over 3 s, it seeks to 0 with the current token and sends no
+server command (pause is kept, no `Started`); otherwise it sends Previous. Server
+`can_previous` is false on the first entry, so `PlayerViewModel::previous_restarts`
+also enables the button (`PlayerPresentation.can_previous`) and the system
+`capabilities.previous` while that local restart applies: on the first entry Previous is
+available only when the sounding track is past 3 s, and disabled again at 3 s or less
+(the user chose this, 2026-10-24; the queue does not move either way). Covered by
+`previous_stays_available_on_the_first_entry_while_a_local_restart_applies`.
+
+Qt: the player panel's `shuffleButton` and `repeatButton` use the shared
+[`ShuffleModeButton`](../../apps/osu-radio-qt/qml/components/ShuffleModeButton.qml) and
+[`RepeatModeButton`](../../apps/osu-radio-qt/qml/components/RepeatModeButton.qml)
+(icons `shuffle`, `repeat-2` for Off/All, Lucide `repeat-1` for One; accent when on;
+names "Shuffle: off/on", "Repeat: off/all/one"), enabled while `connected &&
+canChangeModes`. The offline gallery shows the same components against the mock
+(`mock::Action::ToggleShuffle/CycleRepeat`); the mock stores the modes but does not
+reorder entries. Checks: Player VM tests in `controller/system_media/tests.rs`,
+`view_model_tests.rs`, `models.rs` and `mock/queue.rs`; Qt adapter probes `playback`
+and `gallery-queue` in [AdapterProbe.qml](../../apps/osu-radio-qt/tests/AdapterProbe.qml).
 
 ## Discord Rich Presence
 
@@ -339,7 +374,7 @@ to 128 UTF-8 bytes. Paused retains title plus a static `Paused • mm:ss • art
 label with no timestamps; resume/seek rebuild start/end timestamps. Discord
 controls progress rendering and the app name; unknown/zero duration omits timers,
 known duration uses second-resolution timestamps. No paths or database IDs are
-sent in Activity.
+sent in Activity; the only extra datum is that public cover URL.
 
 The library supplies Activity serialization and outgoing JSON framing.
 [The socket adapter](../../crates/osu-radio-client/src/discord/transport.rs)
@@ -370,8 +405,11 @@ one retry without artwork on the same connection. Only successful ACK of that
 retry disables artwork for the rest of the worker's process lifetime. A second
 rejection suppresses that key until it changes or IPC reconnects; clear ERROR
 never triggers artwork fallback. Transport stages and ERROR code/message are
-logged to stderr without dumping payloads. No track covers or external uploads
-are required. Linux scans
+logged to stderr without dumping payloads. No uploads are performed. When a
+difficulty of the current track carries a public osu! set ID
+(`beatmap_set_online_id`), the large image is
+`https://assets.ppy.sh/beatmaps/{id}/covers/list@2x.jpg`, fetched by Discord;
+otherwise it stays `osu_radio`. Local-only sets have no such ID. Linux scans
 `XDG_RUNTIME_DIR`/temporary directories, IPC indices 0–9, Discord/Vesktop Flatpak
 and Snap layouts, with Snap runtime-parent support. Windows uses Tokio named
 pipes, indices 0–9. Compatible clients must expose Discord RPC; sandbox permissions
@@ -1039,11 +1077,18 @@ An unavailable cover preserves transport and other metadata.
 
 [MPRIS](../../crates/osu-radio-media-controls/src/linux/mod.rs) uses the existing
 Tokio runtime and a unique `org.mpris.MediaPlayer2.osu_radio.instance…` name;
-TrackList, playlists, OpenUri, shuffle and repeat are not exported. Position ticks
+TrackList, playlists and OpenUri are not exported. `Shuffle` and `LoopStatus` (None/Track/Playlist) read the published snapshot and their setters queue `Event::SetShuffle/SetRepeat`, failing with `NotSupported` unless `capabilities.set_modes`; changes are announced in PropertiesChanged. Position ticks
 do not emit PropertiesChanged; confirmed `seek_serial` changes emit Seeked.
 [SMTC](../../crates/osu-radio-media-controls/src/windows/mod.rs) validates a live,
 same-process top-level HWND and keeps all WinRT operations on an MTA worker.
-Callbacks enqueue events; native I/O stays outside the controller loop.
+Callbacks enqueue events; native I/O stays outside the controller loop. SMTC publishes
+`ShuffleEnabled`/`AutoRepeatMode` with every snapshot and turns
+`ShuffleEnabledChangeRequested`/`AutoRepeatModeChangeRequested` into the same events
+(the Windows code is unbuilt on Linux and unverified).
+The client maps `RepeatMode` ↔ `media_controls::Repeat` in one place (`models.rs`):
+`system_snapshot()` takes modes from the last assignment and sets `set_modes` with the
+other capabilities (ready and an assignment), and `system_event()` turns the events into
+the button commands only when `set_modes` holds.
 
 [Qt lifecycle](../../apps/osu-radio-qt/src/runtime.h) keeps the window alive while
 [runtime detach](../../apps/osu-radio-qt/src/runtime.rs) awaits pending attach and
@@ -1055,7 +1100,7 @@ and does not reconnect automatically. GUI, HTTP and local audio continue.
 
 [Automated/native evidence and remaining acceptance](development.md#system-media-controls-verification)
 distinguish Windows HWND publication from a real panel, media keys and physical
-audio. Linux runtime execution remains unverified in the current Windows checkout.
+audio. `playerctl shuffle/loop` and the SMTC widget are manual checks. Linux runtime execution remains unverified in the current Windows checkout.
 
 ## Queue-rework integration verification
 
@@ -1075,3 +1120,15 @@ and silent append/source restoration. It drives the worker core directly;
 controller/NDJSON sequencing remains covered by the existing VM/route tests.
 Qt playing through a physical device and native Linux/Windows drag, focus, hit
 testing and scaling remain separate user acceptance.
+
+Shuffle/repeat add to both probes without new infrastructure. The client
+`real_server_modes_reorder_only_the_future_repeat_and_survive_restart` follows six
+entries through a real server and the fake engine: shuffle keeps history, current and
+token and reorders only the rest; Next follows the new order; turning it off restores
+the original order; Repeat One restarts the same entry with a new token and the
+listening date stays unchanged; Repeat All wraps from the last entry on Finished and
+Next; modes survive a server restart and Clear. The Qt `queue-real` case clicks the
+real buttons on an empty queue, and the fixture's `verify` step checks that a new
+server still reports shuffle on and repeat `all`. The 3-second Previous rule is not in
+these probes: it lives in the Player VM, which this worker-core harness does not drive,
+and is covered by the controller tests with a fake worker.

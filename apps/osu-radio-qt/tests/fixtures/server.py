@@ -155,7 +155,8 @@ playback = {"current_entry_id": queue_ids[queue_index] if queue else None,
             "track": library([7])[0] if queue else None,
             "duration_ms": 125000 if queue else None,
             "mode": "paused" if queue else "stopped", "revision": 1 if queue else 0,
-            "playback_token": 1 if queue else 0, "can_next": bool(queue), "can_previous": bool(queue)}
+            "playback_token": 1 if queue else 0, "can_next": bool(queue), "can_previous": bool(queue),
+            "shuffle": False, "repeat": "off"}
 if case == "visual-flicker":
     playback.update(current_audio_source_id=1, track=library([1])[0], duration_ms=None)
 
@@ -165,6 +166,15 @@ def playback_command(body):
     command = body["command"]
     with playback_condition:
         if (command in ("finished", "failed") or command == "pause" and "playback_token" in body) and body["playback_token"] != playback["playback_token"]:
+            return dict(playback)
+        if command in ("set_shuffle", "set_repeat"):
+            # Modes never touch the current launch, like the real service.
+            if command == "set_shuffle":
+                playback["shuffle"] = body["enabled"]
+            else:
+                playback["repeat"] = body["mode"]
+            playback["revision"] += 1
+            playback_condition.notify_all()
             return dict(playback)
         if command == "play":
             identifier = body.get("audio_source_id", playback["current_audio_source_id"])

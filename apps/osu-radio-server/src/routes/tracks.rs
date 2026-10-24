@@ -27,6 +27,7 @@ pub(crate) struct TrackResponse {
 pub(crate) struct TrackDifficulty {
     pub beatmap_id: i32,
     pub beatmap_set_id: i32,
+    pub beatmap_set_online_id: Option<i32>,
     pub difficulty_name: Option<String>,
     pub set_has_multiple_audio_sources: bool,
 }
@@ -49,6 +50,7 @@ impl From<radio_services::LibraryTrack> for TrackResponse {
                 .map(|map| TrackDifficulty {
                     beatmap_id: map.beatmap_id,
                     beatmap_set_id: map.beatmap_set_id,
+                    beatmap_set_online_id: map.beatmap_set_online_id,
                     difficulty_name: map.difficulty_name,
                     set_has_multiple_audio_sources: map.set_has_multiple_audio_sources,
                 })
@@ -101,12 +103,14 @@ mod tests {
                 radio_services::TrackDifficulty {
                     beatmap_id: 71,
                     beatmap_set_id: 31,
+                    beatmap_set_online_id: Some(3100),
                     difficulty_name: Some("Hard".into()),
                     set_has_multiple_audio_sources: true,
                 },
                 radio_services::TrackDifficulty {
                     beatmap_id: 72,
                     beatmap_set_id: 32,
+                    beatmap_set_online_id: None,
                     difficulty_name: None,
                     set_has_multiple_audio_sources: false,
                 },
@@ -119,8 +123,8 @@ mod tests {
                 "audio_source_id": 17, "last_played_at_ms": 1_700_000_000_123_i64, "volume_percent": 0, "mods": null,
                 "title": "Title", "title_unicode": "題", "artist": "Artist", "artist_unicode": "演奏者", "cover_beatmap_id": 71,
                 "difficulties": [
-                    {"beatmap_id": 71, "beatmap_set_id": 31, "difficulty_name": "Hard", "set_has_multiple_audio_sources": true},
-                    {"beatmap_id": 72, "beatmap_set_id": 32, "difficulty_name": null, "set_has_multiple_audio_sources": false},
+                    {"beatmap_id": 71, "beatmap_set_id": 31, "beatmap_set_online_id": 3100, "difficulty_name": "Hard", "set_has_multiple_audio_sources": true},
+                    {"beatmap_id": 72, "beatmap_set_id": 32, "beatmap_set_online_id": null, "difficulty_name": null, "set_has_multiple_audio_sources": false},
                 ]
             })
         );

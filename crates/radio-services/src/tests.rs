@@ -902,6 +902,8 @@ mod search;
 mod listening_history;
 mod playlists;
 mod queue;
+mod queue_modes;
+mod queue_repeat;
 mod queue_t02;
 mod queue_t03;
 mod queue_t04;

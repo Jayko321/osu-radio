@@ -1,6 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
-use crate::{BeatmapSet, models::BeatmapDetails};
+use crate::BeatmapSet;
 
 /// Independent local display choices; source metadata stays unchanged.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -89,7 +89,7 @@ impl Track {
 #[must_use]
 pub fn library_tracks(sets: &[BeatmapSet]) -> Vec<Track> {
     let mut order = Vec::new();
-    let mut groups: HashMap<i32, Vec<(&BeatmapDetails, i32, bool)>> = HashMap::new();
+    let mut groups = HashMap::<i32, Vec<_>>::new();
     for set in sets {
         for audio in &set.audio_sources {
             if !groups.contains_key(&audio.id) {
@@ -102,7 +102,7 @@ pub fn library_tracks(sets: &[BeatmapSet]) -> Vec<Track> {
             if let Some(id) = map.audio_source_id
                 && let Some(maps) = groups.get_mut(&id)
             {
-                maps.push((map, set.id, split));
+                maps.push((map, set.id, set.online_id, split));
             }
         }
     }
@@ -110,8 +110,8 @@ pub fn library_tracks(sets: &[BeatmapSet]) -> Vec<Track> {
         .into_iter()
         .map(|id| {
             let mut maps = groups.remove(&id).unwrap_or_default();
-            maps.sort_by_key(|(map, _, _)| map.id);
-            let representative = maps.first().map(|(map, _, _)| *map);
+            maps.sort_by_key(|(map, _, _, _)| map.id);
+            let representative = maps.first().map(|(map, _, _, _)| *map);
             Track::from(crate::models::LibraryTrack {
                 audio_source_id: id,
                 last_played_at_ms: None,
@@ -123,16 +123,19 @@ pub fn library_tracks(sets: &[BeatmapSet]) -> Vec<Track> {
                 artist_unicode: representative.and_then(|map| map.artist_unicode.clone()),
                 cover_beatmap_id: maps
                     .iter()
-                    .find(|(map, _, _)| map.has_cover)
-                    .map(|(map, _, _)| map.id),
+                    .find(|(map, _, _, _)| map.has_cover)
+                    .map(|(map, _, _, _)| map.id),
                 difficulties: maps
                     .into_iter()
-                    .map(|(map, set_id, split)| crate::models::TrackDifficulty {
-                        beatmap_id: map.id,
-                        beatmap_set_id: set_id,
-                        difficulty_name: map.difficulty_name.clone(),
-                        set_has_multiple_audio_sources: split,
-                    })
+                    .map(
+                        |(map, set_id, online_id, split)| crate::models::TrackDifficulty {
+                            beatmap_id: map.id,
+                            beatmap_set_id: set_id,
+                            beatmap_set_online_id: online_id,
+                            difficulty_name: map.difficulty_name.clone(),
+                            set_has_multiple_audio_sources: split,
+                        },
+                    )
                     .collect(),
             })
         })
@@ -249,7 +252,7 @@ impl From<crate::models::LibraryTrack> for Track {
 #[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use crate::AudioSource;
+    use crate::{AudioSource, models::BeatmapDetails};
 
     fn set(ids: &[i32], maps: Vec<BeatmapDetails>) -> BeatmapSet {
         BeatmapSet {

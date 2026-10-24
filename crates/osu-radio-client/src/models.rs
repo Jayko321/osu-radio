@@ -228,6 +228,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn mode_wire_types_match_the_server_contract_and_default_to_off() {
+        use serde_json::json;
+        assert_eq!(
+            serde_json::to_value(PlaybackCommand::SetShuffle { enabled: true }).unwrap(),
+            json!({"command":"set_shuffle","enabled":true})
+        );
+        assert_eq!(
+            serde_json::to_value(PlaybackCommand::SetRepeat {
+                mode: RepeatMode::One
+            })
+            .unwrap(),
+            json!({"command":"set_repeat","mode":"one"})
+        );
+        let legacy = r#"{"current_entry_id":null,"availability":null,"waiting_for_check":false,"mods":null,"current_audio_source_id":null,"track":null,"duration_ms":null,"mode":"stopped","revision":1,"playback_token":0,"can_next":false,"can_previous":false}"#;
+        let assignment: PlaybackAssignment = serde_json::from_str(legacy).unwrap();
+        assert!(!assignment.shuffle && assignment.repeat == RepeatMode::Off);
+        let modern = legacy.replace(
+            r#""mode":"stopped""#,
+            r#""mode":"stopped","shuffle":true,"repeat":"all""#,
+        );
+        let assignment: PlaybackAssignment = serde_json::from_str(&modern).unwrap();
+        assert!(assignment.shuffle && assignment.repeat == RepeatMode::All);
+    }
+
+    #[test]
     fn mods_wire_types_preserve_profiles_and_patch_omissions() {
         use serde_json::json;
         assert_eq!(
@@ -556,6 +581,8 @@ pub struct LibraryTrack {
 pub struct TrackDifficulty {
     pub beatmap_id: i32,
     pub beatmap_set_id: i32,
+    #[serde(default)]
+    pub beatmap_set_online_id: Option<i32>,
     pub difficulty_name: Option<String>,
     pub set_has_multiple_audio_sources: bool,
 }
@@ -662,7 +689,47 @@ pub struct QueueState {
     pub playback_token: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepeatMode {
+    #[default]
+    Off,
+    All,
+    One,
+}
+impl RepeatMode {
+    /// The button cycle: Off → All → One → Off.
+    #[must_use]
+    pub const fn cycled(self) -> Self {
+        match self {
+            Self::Off => Self::All,
+            Self::All => Self::One,
+            Self::One => Self::Off,
+        }
+    }
+}
+
+impl From<RepeatMode> for osu_radio_media_controls::Repeat {
+    fn from(mode: RepeatMode) -> Self {
+        match mode {
+            RepeatMode::Off => Self::Off,
+            RepeatMode::All => Self::All,
+            RepeatMode::One => Self::One,
+        }
+    }
+}
+impl From<osu_radio_media_controls::Repeat> for RepeatMode {
+    fn from(repeat: osu_radio_media_controls::Repeat) -> Self {
+        match repeat {
+            osu_radio_media_controls::Repeat::Off => Self::Off,
+            osu_radio_media_controls::Repeat::All => Self::All,
+            osu_radio_media_controls::Repeat::One => Self::One,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[allow(clippy::struct_excessive_bools)] // Mirrors independent JSON flags of the server contract.
 pub struct PlaybackAssignment {
     pub current_entry_id: Option<QueueEntryId>,
     pub availability: Option<QueueAvailability>,
@@ -676,6 +743,11 @@ pub struct PlaybackAssignment {
     pub track: Option<LibraryTrack>,
     pub duration_ms: Option<u64>,
     pub mode: PlaybackMode,
+    /// Absent from servers that predate queue modes.
+    #[serde(default)]
+    pub shuffle: bool,
+    #[serde(default)]
+    pub repeat: RepeatMode,
     pub revision: u64,
     pub playback_token: u64,
     pub can_next: bool,
@@ -705,6 +777,12 @@ pub enum PlaybackCommand {
     },
     Failed {
         playback_token: u64,
+    },
+    SetShuffle {
+        enabled: bool,
+    },
+    SetRepeat {
+        mode: RepeatMode,
     },
 }
 

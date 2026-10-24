@@ -26,6 +26,8 @@ struct Key {
     speed_bits: u32,
     title: String,
     artist: String,
+    /// Public osu! beatmap set ID whose cover Discord fetches; absent keeps the logo.
+    cover_set: Option<i32>,
     duration: Option<Duration>,
 }
 #[derive(Clone, Debug)]
@@ -79,6 +81,10 @@ impl Presence {
                 speed_bits: speed.to_bits(),
                 title: field(&track.title, "Unknown title"),
                 artist,
+                cover_set: track
+                    .difficulties
+                    .iter()
+                    .find_map(|difficulty| difficulty.beatmap_set_online_id),
                 // Decoder duration is authoritative, not a library estimate.
                 duration: playback
                     .snapshot
@@ -90,6 +96,11 @@ impl Presence {
             position,
             observed: Instant::now(),
         })
+    }
+    fn cover_url(&self) -> Option<String> {
+        self.key
+            .cover_set
+            .map(|id| format!("https://assets.ppy.sh/beatmaps/{id}/covers/list@2x.jpg"))
     }
     fn activity(&self) -> activity::Activity<'_> {
         let mut result = activity::Activity::new()
@@ -233,10 +244,11 @@ impl Rpc for Transport {
     }
     fn set(&mut self, presence: &Presence, artwork: bool) -> Result<String, Error> {
         let mut activity = presence.activity();
+        let cover = presence.cover_url();
         if artwork {
             activity = activity.assets(
                 activity::Assets::new()
-                    .large_image(LOGO_ASSET)
+                    .large_image(cover.as_deref().unwrap_or(LOGO_ASSET))
                     .large_text("osu! radio"),
             );
         }

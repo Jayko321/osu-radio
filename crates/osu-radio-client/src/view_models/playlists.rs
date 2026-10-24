@@ -134,6 +134,7 @@ impl PlaylistItem {
                 .map(|(beatmap_id, beatmap_set_id)| TrackDifficulty {
                     beatmap_id,
                     beatmap_set_id,
+                    beatmap_set_online_id: None,
                     difficulty_name: self.difficulty_name.clone(),
                     set_has_multiple_audio_sources: true,
                 })

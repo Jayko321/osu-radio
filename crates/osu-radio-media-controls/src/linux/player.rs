@@ -21,6 +21,16 @@ fn unsupported() -> fdo::Error {
     fdo::Error::NotSupported("osu! radio does not support this operation".into())
 }
 
+impl Player {
+    fn modes_allowed(&self) -> zbus::Result<()> {
+        if self.snapshots.borrow().capabilities.set_modes {
+            Ok(())
+        } else {
+            Err(unsupported().into())
+        }
+    }
+}
+
 #[allow(clippy::unused_async_trait_impl)] // Match the upstream asynchronous interface signatures.
 impl RootInterface for Player {
     async fn raise(&self) -> fdo::Result<()> {
@@ -147,10 +157,17 @@ impl PlayerInterface for Player {
         Ok(transform::status(self.published.borrow().snapshot.status))
     }
     async fn loop_status(&self) -> fdo::Result<LoopStatus> {
-        Err(unsupported())
+        Ok(transform::loop_status(
+            self.published.borrow().snapshot.repeat,
+        ))
     }
-    async fn set_loop_status(&self, _value: LoopStatus) -> zbus::Result<()> {
-        Err(unsupported().into())
+    async fn set_loop_status(&self, value: LoopStatus) -> zbus::Result<()> {
+        self.modes_allowed()?;
+        send(
+            &self.events,
+            Some(Event::SetRepeat(transform::repeat(value))),
+        );
+        Ok(())
     }
     async fn rate(&self) -> fdo::Result<PlaybackRate> {
         Ok(self.published.borrow().snapshot.rate)
@@ -164,10 +181,12 @@ impl PlayerInterface for Player {
         }
     }
     async fn shuffle(&self) -> fdo::Result<bool> {
-        Err(unsupported())
+        Ok(self.published.borrow().snapshot.shuffle)
     }
-    async fn set_shuffle(&self, _value: bool) -> zbus::Result<()> {
-        Err(unsupported().into())
+    async fn set_shuffle(&self, value: bool) -> zbus::Result<()> {
+        self.modes_allowed()?;
+        send(&self.events, Some(Event::SetShuffle(value)));
+        Ok(())
     }
     async fn metadata(&self) -> fdo::Result<Metadata> {
         Ok(self.published.borrow().metadata.clone())

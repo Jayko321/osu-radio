@@ -1,5 +1,5 @@
 use crate::{
-    ArtworkStore, Backend, Error, Event, EventSender, LaunchKey, PlaybackStatus, Snapshot,
+    ArtworkStore, Backend, Error, Event, EventSender, LaunchKey, PlaybackStatus, Repeat, Snapshot,
 };
 use std::{
     num::NonZeroIsize,
@@ -13,9 +13,10 @@ use tokio::sync::{oneshot, watch};
 use windows::{
     Foundation::{TimeSpan, TypedEventHandler},
     Media::{
-        MediaPlaybackStatus, MediaPlaybackType, PlaybackPositionChangeRequestedEventArgs,
-        SystemMediaTransportControls, SystemMediaTransportControlsButton,
-        SystemMediaTransportControlsButtonPressedEventArgs,
+        AutoRepeatModeChangeRequestedEventArgs, MediaPlaybackAutoRepeatMode, MediaPlaybackStatus,
+        MediaPlaybackType, PlaybackPositionChangeRequestedEventArgs,
+        ShuffleEnabledChangeRequestedEventArgs, SystemMediaTransportControls,
+        SystemMediaTransportControlsButton, SystemMediaTransportControlsButtonPressedEventArgs,
         SystemMediaTransportControlsDisplayUpdater, SystemMediaTransportControlsTimelineProperties,
     },
     Storage::{StorageFile, Streams::RandomAccessStreamReference},
@@ -130,6 +131,16 @@ impl Callbacks {
         button_event(button).is_some_and(|event| self.events.send(event))
     }
 
+    fn shuffle(&self, enabled: bool) -> bool {
+        self.active.load(Ordering::Acquire) && self.events.send(Event::SetShuffle(enabled))
+    }
+
+    fn repeat(&self, mode: MediaPlaybackAutoRepeatMode) -> bool {
+        self.active.load(Ordering::Acquire)
+            && repeat_from_native(mode)
+                .is_some_and(|repeat| self.events.send(Event::SetRepeat(repeat)))
+    }
+
     fn position(&self, launch: Option<LaunchKey>, position: TimeSpan) -> bool {
         self.active.load(Ordering::Acquire)
             && launch.is_some_and(|launch| {
@@ -147,6 +158,8 @@ struct Session {
     callbacks: Callbacks,
     buttons: Option<i64>,
     position: Option<i64>,
+    shuffle: Option<i64>,
+    repeat: Option<i64>,
     last: Option<Snapshot>,
     closed: bool,
 }
@@ -182,6 +195,8 @@ impl Session {
             },
             buttons: None,
             position: None,
+            shuffle: None,
+            repeat: None,
             last: None,
             closed: false,
         };
@@ -211,6 +226,30 @@ impl Session {
                 Ok(())
             }),
         )?);
+        let callbacks = session.callbacks.clone();
+        session.shuffle = Some(session.controls.ShuffleEnabledChangeRequested(
+            &TypedEventHandler::<
+                SystemMediaTransportControls,
+                ShuffleEnabledChangeRequestedEventArgs,
+            >::new(move |_, args| {
+                if let Some(args) = args.as_ref() {
+                    let _ = callbacks.shuffle(args.RequestedShuffleEnabled()?);
+                }
+                Ok(())
+            }),
+        )?);
+        let callbacks = session.callbacks.clone();
+        session.repeat = Some(session.controls.AutoRepeatModeChangeRequested(
+            &TypedEventHandler::<
+                SystemMediaTransportControls,
+                AutoRepeatModeChangeRequestedEventArgs,
+            >::new(move |_, args| {
+                if let Some(args) = args.as_ref() {
+                    let _ = callbacks.repeat(args.RequestedAutoRepeatMode()?);
+                }
+                Ok(())
+            }),
+        )?);
         Ok(session)
     }
 
@@ -232,6 +271,9 @@ impl Session {
         self.controls
             .SetPlaybackStatus(playback_status(snapshot.status))?;
         self.controls.SetPlaybackRate(snapshot.rate)?;
+        self.controls.SetShuffleEnabled(snapshot.shuffle)?;
+        self.controls
+            .SetAutoRepeatMode(repeat_to_native(snapshot.repeat))?;
 
         let display_changed = self.last.as_ref().is_none_or(|last| {
             last.launch != snapshot.launch
@@ -306,6 +348,12 @@ impl Session {
         if let Some(token) = self.position.take() {
             result = result.and(self.controls.RemovePlaybackPositionChangeRequested(token));
         }
+        if let Some(token) = self.shuffle.take() {
+            result = result.and(self.controls.RemoveShuffleEnabledChangeRequested(token));
+        }
+        if let Some(token) = self.repeat.take() {
+            result = result.and(self.controls.RemoveAutoRepeatModeChangeRequested(token));
+        }
         result = result.and(self.controls.SetIsEnabled(false));
         result = result.and(self.controls.SetPlaybackStatus(MediaPlaybackStatus::Closed));
         result = result.and(self.updater.ClearAll());
@@ -327,6 +375,23 @@ const fn button_event(button: SystemMediaTransportControlsButton) -> Option<Even
         SystemMediaTransportControlsButton::Stop => Some(Event::Stop),
         SystemMediaTransportControlsButton::Next => Some(Event::Next),
         SystemMediaTransportControlsButton::Previous => Some(Event::Previous),
+        _ => None,
+    }
+}
+
+const fn repeat_to_native(repeat: Repeat) -> MediaPlaybackAutoRepeatMode {
+    match repeat {
+        Repeat::Off => MediaPlaybackAutoRepeatMode::None,
+        Repeat::One => MediaPlaybackAutoRepeatMode::Track,
+        Repeat::All => MediaPlaybackAutoRepeatMode::List,
+    }
+}
+
+const fn repeat_from_native(mode: MediaPlaybackAutoRepeatMode) -> Option<Repeat> {
+    match mode {
+        MediaPlaybackAutoRepeatMode::None => Some(Repeat::Off),
+        MediaPlaybackAutoRepeatMode::Track => Some(Repeat::One),
+        MediaPlaybackAutoRepeatMode::List => Some(Repeat::All),
         _ => None,
     }
 }

@@ -38,6 +38,17 @@ pub struct Capabilities {
     pub previous: bool,
     pub seek: bool,
     pub set_volume: bool,
+    /// The system may request shuffle and repeat changes.
+    pub set_modes: bool,
+}
+
+/// Source-neutral repeat mode; adapters map it to their platform's vocabulary.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Repeat {
+    #[default]
+    Off,
+    One,
+    All,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -75,6 +86,8 @@ pub struct Snapshot {
     pub seek_serial: u64,
     /// Effective internal player volume, normalized to 0..=1.
     pub volume: f64,
+    pub shuffle: bool,
+    pub repeat: Repeat,
     pub capabilities: Capabilities,
     pub artwork: Option<Artwork>,
 }
@@ -90,6 +103,8 @@ impl Default for Snapshot {
             rate: 1.0,
             seek_serial: 0,
             volume: 0.0,
+            shuffle: false,
+            repeat: Repeat::Off,
             capabilities: Capabilities::default(),
             artwork: None,
         }
@@ -127,6 +142,8 @@ pub enum Event {
         offset_micros: i64,
     },
     SetVolume(f64),
+    SetShuffle(bool),
+    SetRepeat(Repeat),
 }
 
 /// The window owner must keep HWND valid until acknowledged shutdown completes.

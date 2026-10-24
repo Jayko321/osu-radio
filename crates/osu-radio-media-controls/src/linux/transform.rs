@@ -1,6 +1,6 @@
 use super::conversion;
-use crate::{Error, LaunchKey, PlaybackStatus, Snapshot};
-use mpris_server::{Metadata, Property, Time, TrackId};
+use crate::{Error, LaunchKey, PlaybackStatus, Repeat, Snapshot};
+use mpris_server::{LoopStatus, Metadata, Property, Time, TrackId};
 use std::{fmt::Write, path::Path, time::Duration};
 
 #[derive(Clone)]
@@ -48,6 +48,22 @@ pub(super) const fn status(status: PlaybackStatus) -> mpris_server::PlaybackStat
     }
 }
 
+pub(super) const fn loop_status(repeat: Repeat) -> LoopStatus {
+    match repeat {
+        Repeat::Off => LoopStatus::None,
+        Repeat::One => LoopStatus::Track,
+        Repeat::All => LoopStatus::Playlist,
+    }
+}
+
+pub(super) const fn repeat(status: LoopStatus) -> Repeat {
+    match status {
+        LoopStatus::None => Repeat::Off,
+        LoopStatus::Track => Repeat::One,
+        LoopStatus::Playlist => Repeat::All,
+    }
+}
+
 #[allow(clippy::float_cmp)] // Publish any change to the client's volume or actual rate.
 pub(super) fn changes(previous: &Published, current: &Published) -> Vec<Property> {
     let old = &previous.snapshot;
@@ -64,6 +80,12 @@ pub(super) fn changes(previous: &Published, current: &Published) -> Vec<Property
     }
     if old.rate != new.rate {
         properties.push(Property::Rate(new.rate));
+    }
+    if old.shuffle != new.shuffle {
+        properties.push(Property::Shuffle(new.shuffle));
+    }
+    if old.repeat != new.repeat {
+        properties.push(Property::LoopStatus(loop_status(new.repeat)));
     }
     for (changed, property) in [
         (

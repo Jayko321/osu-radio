@@ -33,6 +33,8 @@ fn assignment(id: i32, percent: Option<u8>, revision: u64) -> PlaybackAssignment
         playback_token: revision,
         can_next: true,
         can_previous: true,
+        shuffle: false,
+        repeat: crate::models::RepeatMode::Off,
     }
 }
 

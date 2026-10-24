@@ -306,7 +306,18 @@ The [playback routes](../../apps/osu-radio-server/src/routes/playback.rs) use
 `Services::queue()` exclusively. Each assignment contains
 `{current_entry_id, availability, waiting_for_check, current_audio_source_id,
 current_playlist_item_id, track, volume_percent, mods, duration_ms, mode, revision,
-playback_token, can_next, can_previous}` in REST and NDJSON. `current_entry_id` is
+playback_token, can_next, can_previous, shuffle, repeat}` in REST and NDJSON.
+`shuffle` is a boolean and `repeat` is `off|all|one`; both are always present, also in
+`GET /api/queue` and in the first NDJSON line. `POST /api/playback/commands` accepts
+`{"command":"set_shuffle","enabled":bool}` and `{"command":"set_repeat","mode":"off|all|one"}`
+(missing/unknown fields or values are 422 with no state change; an unchanged value does
+not advance `revision`). `DELETE /api/queue` keeps both modes. Behavior is described in
+[database](database.md#shuffle-and-repeat-modes); an older external server without these
+fields reads as Off/Off on the client (`#[serde(default)]`) and rejects the commands. Route
+tests: `mode_commands_update_every_response_and_reject_invalid_input_without_changes` and
+`queue_modes_survive_application_restart_on_the_same_database` in
+[playback_tests.rs](../../apps/osu-radio-server/src/routes/playback_tests.rs); the OpenAPI
+contract test covers the new required fields and `RepeatMode`. `current_entry_id` is
 a nullable decimal string; availability is null or `checking|available|unavailable`.
 `waiting_for_check` is persisted intent, not inferred from availability: an assigned
 old source may keep playing while its entry's new binding is checking. Duration is
@@ -502,8 +513,8 @@ The compact [tracks route](../../apps/osu-radio-server/src/routes/tracks.rs) ret
 `{audio_source_id, title, title_unicode, artist, artist_unicode, cover_beatmap_id,
 difficulties}`. Text and cover ID are nullable. Representative text comes from the
 lowest beatmap ID, even if null; cover uses the lowest ID with a stored reference.
-Each difficulty is `{beatmap_id, beatmap_set_id, difficulty_name,
-set_has_multiple_audio_sources}`, ordered by beatmap ID; duplicate names with
+Each difficulty is `{beatmap_id, beatmap_set_id, beatmap_set_online_id,
+difficulty_name, set_has_multiple_audio_sources}` (online ID nullable, used for the Discord cover), ordered by beatmap ID; duplicate names with
 different IDs remain. The client retains every difficulty in `Track`, choosing
 ordinary/Unicode/unknown text and unique subtitle names only for multi-audio sets.
 Server and client DTOs are independent. Both router variants register this route.

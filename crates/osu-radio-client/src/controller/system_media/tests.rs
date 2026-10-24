@@ -671,7 +671,11 @@ async fn capability_and_status_matrix_does_not_borrow_old_worker_state() {
         assert_eq!(snapshot.capabilities.stop, stop);
         assert_eq!(snapshot.capabilities.seek, mode != PlaybackMode::Stopped);
         assert!(snapshot.capabilities.play && snapshot.capabilities.next);
-        assert!(!snapshot.capabilities.previous);
+        // The server has no previous entry, but a sounding track past 3 s restarts locally.
+        assert_eq!(
+            snapshot.capabilities.previous,
+            mode != PlaybackMode::Stopped
+        );
         state.system_media_event(Event::PlayPause);
         let expected = if pause {
             crate::models::PlaybackCommand::Pause
@@ -682,6 +686,46 @@ async fn capability_and_status_matrix_does_not_borrow_old_worker_state() {
         };
         assert_eq!(state.player.commands.pop_back().unwrap().command, expected);
     }
+}
+
+#[tokio::test]
+async fn modes_reach_snapshot_and_system_requests_become_commands() {
+    use crate::models::{PlaybackCommand, RepeatMode};
+    use osu_radio_media_controls::Repeat;
+    let (mut state, _http) = connected().await;
+    let snapshot = state.system_media_snapshot();
+    assert!(snapshot.capabilities.set_modes);
+    assert!(!snapshot.shuffle && snapshot.repeat == Repeat::Off);
+    for (mode, repeat) in [
+        (RepeatMode::Off, Repeat::Off),
+        (RepeatMode::All, Repeat::All),
+        (RepeatMode::One, Repeat::One),
+    ] {
+        let assignment = state.player.assignment.as_mut().unwrap();
+        assignment.shuffle = mode == RepeatMode::All;
+        assignment.repeat = mode;
+        let snapshot = state.system_media_snapshot();
+        assert_eq!(snapshot.repeat, repeat);
+        assert_eq!(snapshot.shuffle, mode == RepeatMode::All);
+    }
+    state.system_media_event(Event::SetShuffle(true));
+    assert_eq!(
+        state.player.commands.pop_back().unwrap().command,
+        PlaybackCommand::SetShuffle { enabled: true }
+    );
+    state.system_media_event(Event::SetRepeat(Repeat::One));
+    assert_eq!(
+        state.player.commands.pop_back().unwrap().command,
+        PlaybackCommand::SetRepeat {
+            mode: RepeatMode::One
+        }
+    );
+    // Not ready: no assignment disables the capability and drops the request.
+    state.player.assignment = None;
+    assert!(!state.system_media_snapshot().capabilities.set_modes);
+    state.system_media_event(Event::SetShuffle(false));
+    state.system_media_event(Event::SetRepeat(Repeat::All));
+    assert!(state.player.commands.is_empty());
 }
 
 #[tokio::test]
@@ -1189,4 +1233,173 @@ async fn ordinary_controller_shutdown_also_waits_for_backend_cleanup() {
         .await
         .unwrap()
         .unwrap();
+}
+
+#[tokio::test]
+async fn mode_commands_derive_their_target_from_the_last_assignment_and_share_the_playback_lane() {
+    use crate::models::{PlaybackCommand, RepeatMode};
+    let (mut state, _http) = connected().await;
+    state.command(AppCommand::Next);
+    state.command(AppCommand::ToggleShuffle);
+    let next = state.player.commands.pop_front().unwrap();
+    let shuffle = state.player.commands.pop_front().unwrap();
+    assert_eq!(next.command, PlaybackCommand::Next);
+    assert_eq!(
+        shuffle.command,
+        PlaybackCommand::SetShuffle { enabled: true }
+    );
+    assert!(shuffle.playlist.is_none() && shuffle.queue.is_none());
+
+    state.player.assignment.as_mut().unwrap().shuffle = true;
+    state.command(AppCommand::ToggleShuffle);
+    let off = state.player.commands.pop_front().unwrap();
+    assert_eq!(off.command, PlaybackCommand::SetShuffle { enabled: false });
+
+    for (current, target) in [
+        (RepeatMode::Off, RepeatMode::All),
+        (RepeatMode::All, RepeatMode::One),
+        (RepeatMode::One, RepeatMode::Off),
+    ] {
+        state.player.assignment.as_mut().unwrap().repeat = current;
+        state.command(AppCommand::CycleRepeat);
+        let pending = state.player.commands.pop_front().unwrap();
+        assert_eq!(pending.command, PlaybackCommand::SetRepeat { mode: target });
+    }
+}
+
+#[test]
+fn mode_commands_are_not_sent_without_a_connection_or_assignment() {
+    let (mut state, _) = controller();
+    for command in [AppCommand::ToggleShuffle, AppCommand::CycleRepeat] {
+        state.command(command);
+        assert!(state.player.commands.is_empty() && state.tasks.is_empty());
+    }
+    state.player.assignment = Some(view_model_tests::assignment(PlaybackMode::Playing));
+    state.command(AppCommand::ToggleShuffle);
+    assert!(
+        state.player.commands.is_empty(),
+        "an assignment alone does not make an offline client send"
+    );
+}
+
+#[tokio::test]
+async fn previous_restarts_locally_beyond_three_shown_seconds_for_button_and_system_controls() {
+    use crate::models::PlaybackCommand;
+    let (mut state, http) = connected().await;
+    state.player.assignment.as_mut().unwrap().can_previous = true;
+    // (source position, speed, state, restarts locally)
+    for (position, speed, player_state, restarts) in [
+        (5.0, 1.0, PlayerState::Playing, true),
+        (5.0, 1.0, PlayerState::Paused, true),
+        (3.0, 1.0, PlayerState::Playing, false),
+        (2.0, 1.0, PlayerState::Playing, false),
+        // The threshold uses the shown position: 5 s of source at 2x is 2.5 s.
+        (5.0, 2.0, PlayerState::Playing, false),
+        (3.5, 0.5, PlayerState::Playing, true),
+    ] {
+        state.player.playback.snapshot.position = Duration::from_secs_f64(position);
+        state.player.playback.snapshot.parameters.speed = speed;
+        state.player.playback.snapshot.state = player_state;
+        for system in [false, true] {
+            if system {
+                state.system_media_event(Event::Previous);
+            } else {
+                state.command(AppCommand::Previous);
+            }
+            let queued = state.player.commands.pop_back();
+            assert_eq!(
+                queued.map(|pending| pending.command),
+                (!restarts).then_some(PlaybackCommand::Previous),
+                "{position}s at {speed}x {player_state:?}, system: {system}"
+            );
+        }
+    }
+    // Not sounding in the current worker: always the server's Previous.
+    state.player.playback.snapshot.state = PlayerState::Playing;
+    state.player.playback.snapshot.position = Duration::from_secs(9);
+    state.player.playback.snapshot.parameters.speed = 1.0;
+    for stale in 0..3 {
+        let playback = &mut state.player.playback;
+        playback.loading_audio_id = (stale == 0).then_some(1);
+        playback.has_source = stale != 1;
+        playback.playback_token = if stale == 2 { 4 } else { 5 };
+        state.command(AppCommand::Previous);
+        assert_eq!(
+            state.player.commands.pop_back().unwrap().command,
+            PlaybackCommand::Previous,
+            "case {stale}"
+        );
+    }
+    assert!(
+        !http
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(header, _)| header.starts_with("POST "))
+    );
+}
+
+#[tokio::test]
+async fn previous_stays_available_on_the_first_entry_while_a_local_restart_applies() {
+    let (mut state, _http) = connected().await;
+    state.player.assignment.as_mut().unwrap().can_previous = false;
+    state.player.playback.can_previous = false;
+    state.player.playback.snapshot.state = PlayerState::Playing;
+    let presented = |state: &Controller| {
+        state
+            .player
+            .presentation(
+                None,
+                false,
+                true,
+                true,
+                crate::models::AudioModsProfile::default(),
+            )
+            .can_previous
+    };
+    for (position, available) in [(5, true), (3, false), (2, false)] {
+        state.player.playback.snapshot.position = Duration::from_secs(position);
+        assert_eq!(
+            state.system_media_snapshot().capabilities.previous,
+            available,
+            "{position}s system capability"
+        );
+        assert_eq!(presented(&state), available, "{position}s button");
+        // With no server previous entry the event is dropped unless the restart applies.
+        state.system_media_event(Event::Previous);
+        assert!(state.player.commands.is_empty());
+    }
+    // Not sounding: the server's answer alone decides.
+    state.player.playback.snapshot.position = Duration::from_secs(9);
+    state.player.playback.has_source = false;
+    assert!(!state.system_media_snapshot().capabilities.previous && !presented(&state));
+}
+
+#[tokio::test]
+async fn local_previous_restart_seeks_the_current_launch_without_a_server_command() {
+    let (mut state, http) = connected().await;
+    fake_audio(&mut state).await;
+    state.player.playback.snapshot.position = Duration::from_secs(5);
+    state.command(AppCommand::Seek(Duration::from_secs(5)));
+    update_until(&mut state, |p| p.seek_serial == 1).await;
+    assert_eq!(
+        state.player.playback.snapshot.position,
+        Duration::from_secs(5)
+    );
+    let playing = state.player.playback.snapshot.state;
+    state.command(AppCommand::Previous);
+    update_until(&mut state, |p| p.seek_serial == 2).await;
+    assert_eq!(state.player.playback.snapshot.position, Duration::ZERO);
+    assert_eq!(state.player.playback.snapshot.state, playing);
+    assert!(state.player.commands.is_empty() && state.player.pending_start.is_none());
+    assert!(
+        !http
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(header, _)| header.starts_with("POST "))
+    );
+    state.playback.take().unwrap().shutdown();
 }

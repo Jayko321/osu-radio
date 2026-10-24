@@ -5,7 +5,7 @@ use std::{collections::HashSet, error::Error, fmt};
 use crate::{LibraryTrack, ListeningHistoryService, PlaylistItem};
 pub use radio_db::model::{
     PlaybackMode, QueueAvailability, QueueEntry, QueueEntryId, QueueLaunchSource,
-    QueuePlaylistSource, QueueState,
+    QueuePlaylistSource, QueueState, RepeatMode,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +22,8 @@ pub struct QueueSnapshot {
     pub history_len: usize,
     pub mode: PlaybackMode,
     pub waiting_for_check: bool,
+    pub shuffle: bool,
+    pub repeat: RepeatMode,
     pub revision: u64,
     pub playback_token: u64,
     pub last_entry_id: i64,
@@ -49,6 +51,7 @@ pub struct QueueCheck {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)] // Independent wire flags mirroring the persisted queue state.
 pub struct PlaybackAssignment {
     pub current_entry_id: Option<QueueEntryId>,
     pub availability: Option<QueueAvailability>,
@@ -59,6 +62,8 @@ pub struct PlaybackAssignment {
     pub current_playlist_item_id: Option<i32>,
     pub track: Option<LibraryTrack>,
     pub mode: PlaybackMode,
+    pub shuffle: bool,
+    pub repeat: RepeatMode,
     pub revision: u64,
     pub playback_token: u64,
     pub can_next: bool,
@@ -76,6 +81,8 @@ pub enum PlaybackCommand {
     Started { playback_token: u64 },
     Finished { playback_token: u64 },
     Failed { playback_token: u64 },
+    SetShuffle { enabled: bool },
+    SetRepeat(RepeatMode),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -228,10 +235,12 @@ impl QueueService<'_> {
     ) -> Result<PlaybackAssignment> {
         let mut state = transaction.queue().get().await?;
         if !items.is_empty() {
+            let mut entries = Vec::with_capacity(items.len());
             for item in items {
-                let entry = entry_for_playlist_item(transaction, &mut state, item).await?;
-                state.entries.push(entry);
+                entries.push(entry_for_playlist_item(transaction, &mut state, item).await?);
             }
+            assign_keys(&state, &mut entries, false)?;
+            state.entries.extend(entries);
             state.reindex();
             trim_history(&mut state);
             bump_revision(&mut state)?;
@@ -248,6 +257,7 @@ impl QueueService<'_> {
         transaction: &Transaction,
         items: Vec<PlaylistItem>,
         start: Option<usize>,
+        explicit_start: bool,
     ) -> Result<PlaybackAssignment> {
         ensure!(!items.is_empty(), "Playlist queue is empty");
         ensure!(
@@ -260,29 +270,56 @@ impl QueueService<'_> {
         state.current_entry_id = None;
         state.waiting_for_check = false;
         state.history_len = boundary;
+        let mut entries = Vec::with_capacity(items.len());
         for item in items {
-            let entry = entry_for_playlist_item(transaction, &mut state, item).await?;
-            state.entries.push(entry);
+            entries.push(entry_for_playlist_item(transaction, &mut state, item).await?);
+        }
+        assign_keys(&state, &mut entries, false)?;
+        state.entries.extend(entries);
+        if state.shuffle {
+            let tail = state
+                .entries
+                .get_mut(boundary..)
+                .context("Queue position missing")?;
+            if let Some(start) = start.filter(|_| explicit_start) {
+                // The chosen item plays first; everything else, including earlier items, follows shuffled.
+                tail.get_mut(..=start)
+                    .context("Queue position missing")?
+                    .rotate_right(1);
+                fastrand::shuffle(tail.get_mut(1..).context("Queue position missing")?);
+            } else {
+                fastrand::shuffle(tail);
+            }
         }
         state.reindex();
-        if let Some(start) = start {
-            launch(
-                &mut state,
-                boundary
-                    .checked_add(start)
-                    .context("Queue position exhausted")?,
-                PlaybackMode::Playing,
-            )?;
+        let playable = transaction
+            .audio_sources()
+            .playable_ids(&state.audio_source_ids())
+            .await?;
+        let launch_at = match (state.shuffle, explicit_start) {
+            (true, true) => start.map(|_| boundary),
+            (true, false) => state
+                .entries
+                .iter()
+                .enumerate()
+                .skip(boundary)
+                .find_map(|(i, e)| entry_playable(e, &playable).then_some(i)),
+            (false, _) => start
+                .map(|start| {
+                    boundary
+                        .checked_add(start)
+                        .context("Queue position exhausted")
+                })
+                .transpose()?,
+        };
+        if let Some(index) = launch_at {
+            launch(&mut state, index, PlaybackMode::Playing)?;
         } else {
             state.mode = PlaybackMode::Stopped;
             invalidate(&mut state)?;
         }
         trim_history(&mut state);
         bump_revision(&mut state)?;
-        let playable = transaction
-            .audio_sources()
-            .playable_ids(&state.audio_source_ids())
-            .await?;
         transaction.queue().save(&state).await?;
         assignment(transaction, &state, &playable).await
     }
@@ -324,6 +361,8 @@ impl QueueService<'_> {
             history_len: state.history_len,
             mode: state.mode,
             waiting_for_check: state.waiting_for_check,
+            shuffle: state.shuffle,
+            repeat: state.repeat,
             revision: state.revision,
             playback_token: state.playback_token,
             last_entry_id: state.last_entry_id,
@@ -461,6 +500,7 @@ impl QueueService<'_> {
                 for item in items {
                     entries.push(entry_for_ref(&transaction, &mut state, item).await?);
                 }
+                assign_keys(&state, &mut entries, placement == QueuePlacement::Next)?;
                 state.entries.splice(index..index, entries);
                 state.reindex();
                 playable = transaction
@@ -558,6 +598,7 @@ impl QueueService<'_> {
                 if state.playback_token == playback_token
                     && state.mode != PlaybackMode::Stopped
                     && !state.waiting_for_check
+                    && !state.repeat_launch
                     && let Some(launch) = &state.launch_source
                 {
                     history_changed = ListeningHistoryService::record_started(
@@ -579,7 +620,8 @@ impl QueueService<'_> {
                     play(&mut state, &playable)?;
                 } else {
                     let index = next_index(&state);
-                    let entry = new_entry(&transaction, &mut state, id).await?;
+                    let mut entry = new_entry(&transaction, &mut state, id).await?;
+                    assign_keys(&state, std::slice::from_mut(&mut entry), true)?;
                     state.entries.insert(index, entry);
                     state.reindex();
                     launch(&mut state, index, PlaybackMode::Playing)?;
@@ -652,6 +694,7 @@ fn launch(state: &mut QueueState, index: usize, mode: PlaybackMode) -> Result<()
     state.history_len = index;
     state.mode = mode;
     state.waiting_for_check = entry.availability == QueueAvailability::Checking;
+    state.repeat_launch = false;
     invalidate(state)?;
     bind_launch_source(state);
     Ok(())
@@ -691,12 +734,28 @@ fn forward(
     mode: PlaybackMode,
     playable: &HashSet<i32>,
 ) -> Result<()> {
+    forward_except(state, start, mode, playable, None)
+}
+/// Repeat All continues from the head after the tail; `except` is never chosen, so a failing entry cannot loop.
+fn forward_except(
+    state: &mut QueueState,
+    start: usize,
+    mode: PlaybackMode,
+    playable: &HashSet<i32>,
+    except: Option<usize>,
+) -> Result<()> {
+    let wrapped = if state.repeat == RepeatMode::All {
+        start
+    } else {
+        0
+    };
     if let Some(index) = state
         .entries
         .iter()
         .enumerate()
         .skip(start)
-        .find_map(|(i, e)| entry_playable(e, playable).then_some(i))
+        .chain(state.entries.iter().enumerate().take(wrapped))
+        .find_map(|(i, e)| (Some(i) != except && entry_playable(e, playable)).then_some(i))
     {
         launch(state, index, mode)
     } else {
@@ -713,6 +772,8 @@ fn transition_mode(state: &QueueState) -> PlaybackMode {
 fn apply(state: &mut QueueState, command: PlaybackCommand, playable: &HashSet<i32>) -> Result<()> {
     match command {
         PlaybackCommand::Started { .. } => {}
+        PlaybackCommand::SetShuffle { enabled } => set_shuffle(state, enabled)?,
+        PlaybackCommand::SetRepeat(mode) => state.repeat = mode,
         PlaybackCommand::Play { .. } => play(state, playable)?,
         PlaybackCommand::PauseIfCurrent { playback_token }
             if state.playback_token != playback_token => {}
@@ -751,7 +812,19 @@ fn apply(state: &mut QueueState, command: PlaybackCommand, playable: &HashSet<i3
                 && !state.waiting_for_check
                 && state.playback_token == playback_token
             {
-                forward(state, next_index(state), PlaybackMode::Playing, playable)?;
+                let again = state.current_index().filter(|&i| {
+                    state.repeat == RepeatMode::One
+                        && state
+                            .entries
+                            .get(i)
+                            .is_some_and(|e| entry_playable(e, playable))
+                });
+                if let Some(index) = again {
+                    launch(state, index, PlaybackMode::Playing)?;
+                    state.repeat_launch = true;
+                } else {
+                    forward(state, next_index(state), PlaybackMode::Playing, playable)?;
+                }
             }
         }
         PlaybackCommand::Failed { playback_token } => {
@@ -772,10 +845,68 @@ fn apply(state: &mut QueueState, command: PlaybackCommand, playable: &HashSet<i3
                         .context("Queue position missing")?
                         .availability = QueueAvailability::Unavailable;
                 }
-                forward(state, index.saturating_add(1), state.mode, playable)?;
+                forward_except(
+                    state,
+                    index.saturating_add(1),
+                    state.mode,
+                    playable,
+                    Some(index),
+                )?;
             }
         }
     }
+    Ok(())
+}
+/// Keys give new entries a place in the original order: before everything for next, after for end.
+fn assign_keys(state: &QueueState, entries: &mut [QueueEntry], front: bool) -> Result<()> {
+    if !state.shuffle {
+        return Ok(());
+    }
+    let count = i64::try_from(entries.len())?;
+    let keys = state.entries.iter().filter_map(|e| e.shuffle_order);
+    let first = if front {
+        keys.min().unwrap_or(0).checked_sub(count)
+    } else {
+        keys.max().map_or(Some(0), |key| key.checked_add(1))
+    }
+    .context("Queue order keys exhausted")?;
+    for (offset, entry) in (0_i64..).zip(entries) {
+        entry.shuffle_order = Some(
+            first
+                .checked_add(offset)
+                .context("Queue order keys exhausted")?,
+        );
+    }
+    Ok(())
+}
+/// Past entries and the current one never move; only the tail is shuffled or restored.
+fn set_shuffle(state: &mut QueueState, enabled: bool) -> Result<()> {
+    if state.shuffle == enabled {
+        return Ok(());
+    }
+    let from = next_index(state);
+    if enabled {
+        for entry in &mut state.entries {
+            entry.shuffle_order = Some(i64::try_from(entry.position)?);
+        }
+        fastrand::shuffle(
+            state
+                .entries
+                .get_mut(from..)
+                .context("Queue position missing")?,
+        );
+    } else {
+        state
+            .entries
+            .get_mut(from..)
+            .context("Queue position missing")?
+            .sort_by_key(|e| e.shuffle_order);
+        for entry in &mut state.entries {
+            entry.shuffle_order = None;
+        }
+    }
+    state.shuffle = enabled;
+    state.reindex();
     Ok(())
 }
 fn next_index(state: &QueueState) -> usize {
@@ -855,12 +986,18 @@ async fn assignment(
             .and_then(|e| e.playlist_item_id.or(e.migration_playlist_item_id)),
         track,
         mode: state.mode,
+        shuffle: state.shuffle,
+        repeat: state.repeat,
         revision: state.revision,
         playback_token: state.playback_token,
         can_next: state
             .entries
             .iter()
-            .skip(next_index(state))
+            .skip(if state.repeat == RepeatMode::All {
+                0
+            } else {
+                next_index(state)
+            })
             .any(|e| entry_playable(e, playable)),
         can_previous: state
             .entries
@@ -946,6 +1083,7 @@ async fn entry_for_playlist_item(
             QueueAvailability::Unavailable
         },
         check_generation: 0,
+        shuffle_order: None,
     })
 }
 
@@ -1004,6 +1142,7 @@ async fn new_entry(
             QueueAvailability::Checking
         },
         check_generation: 0,
+        shuffle_order: None,
     })
 }
 fn track_from_entry(entry: &QueueEntry, audio_source_id: i32) -> LibraryTrack {
@@ -1023,6 +1162,7 @@ fn track_from_entry(entry: &QueueEntry, audio_source_id: i32) -> LibraryTrack {
             .map(|(beatmap_id, beatmap_set_id)| crate::TrackDifficulty {
                 beatmap_id,
                 beatmap_set_id,
+                beatmap_set_online_id: None,
                 difficulty_name: entry.difficulty_name.clone(),
                 set_has_multiple_audio_sources: true,
             })
@@ -1050,5 +1190,15 @@ async fn track_for_entry(
     track.title_unicode.clone_from(&entry.title_unicode);
     track.artist.clone_from(&entry.artist);
     track.artist_unicode.clone_from(&entry.artist_unicode);
+    // Entry-derived difficulties only store the local set ID.
+    if let Some(difficulty) = track.difficulties.first_mut()
+        && difficulty.beatmap_set_online_id.is_none()
+    {
+        difficulty.beatmap_set_online_id = transaction
+            .beatmap_sets()
+            .get(difficulty.beatmap_set_id)
+            .await?
+            .and_then(|set| set.online_id);
+    }
     Ok(track)
 }

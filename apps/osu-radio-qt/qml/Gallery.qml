@@ -475,12 +475,20 @@ Basic.ApplicationWindow {
                     AppButton { objectName: "galleryQueueError"; text: "Queue operation error"; onClicked: { store.send("queuePlay", "5"); demoQueue.open(); } }
                 }
                 DemoSection {
+                    Heading { text: "Playback modes" }
+                    Row {
+                        spacing: 8
+                        ShuffleModeButton { objectName: "galleryShuffleButton"; active: store.state.modes.shuffle; enabled: !root.demo.disabled; onClicked: store.send("toggleShuffle") }
+                        RepeatModeButton { objectName: "galleryRepeatButton"; mode: store.state.modes.repeat; enabled: !root.demo.disabled; onClicked: store.send("cycleRepeat") }
+                    }
+                }
+                DemoSection {
                     Heading { text: "Lucide icons" }
                     Flow {
                         width: parent.width
                         spacing: 20
                         Repeater {
-                            model: ["music", "arrow-left", "settings", "search", "chevron-down", "pencil", "plus", "circle-plus", "layers", "play", "skip-back", "skip-forward", "shuffle", "repeat-2", "volume-2", "gauge", "rotate-cw", "minus", "square", "copy", "x"]
+                            model: ["music", "arrow-left", "settings", "search", "chevron-down", "pencil", "plus", "circle-plus", "layers", "play", "skip-back", "skip-forward", "shuffle", "repeat-1", "repeat-2", "volume-2", "gauge", "rotate-cw", "minus", "square", "copy", "x"]
                             Column {
                                 id: iconSample
                                 required property string modelData

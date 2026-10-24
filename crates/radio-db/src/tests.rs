@@ -479,7 +479,7 @@ async fn concurrent_schema_changes(database: &Database, url: &str) {
                 .await
                 .unwrap()
                 .len(),
-            15
+            16
         );
         let (reset, migrate) = tokio::join!(database.reset(), other.migrate());
         reset.unwrap();

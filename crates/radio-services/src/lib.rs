@@ -35,7 +35,7 @@ mod user_data;
 pub use queue::{
     PlaybackAssignment, PlaybackCommand, PlaybackMode, QueueAvailability, QueueCheck, QueueEntry,
     QueueEntryId, QueueError, QueueItemRef, QueueLaunchSource, QueuePlacement, QueuePlaylistSource,
-    QueueService, QueueSnapshot, QueueSnapshotEntry, QueueState,
+    QueueService, QueueSnapshot, QueueSnapshotEntry, QueueState, RepeatMode,
 };
 pub use tag::TagService;
 

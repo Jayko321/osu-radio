@@ -26,6 +26,8 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
     }
     let [a, b, c, x] = <[i32; 4]>::try_from(ids).unwrap();
     Box::pin(super::queue_t02::contracts(database, other, [a, b, c, x])).await;
+    Box::pin(super::queue_modes::contracts(database, other, [a, b, c, x])).await;
+    super::queue_repeat::contracts(database, [a, b, c]).await;
     validation_is_atomic(database, a).await;
     upcoming_tracks_follow_queue_order(database, [a, b, c]).await;
     insertion_and_history(database, [a, b, c, x]).await;

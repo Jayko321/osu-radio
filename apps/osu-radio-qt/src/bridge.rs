@@ -4,7 +4,7 @@ use crate::runtime::ffi as native;
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QString, QVariant};
 use osu_radio_client::mock::{Action, MockState};
-use osu_radio_client::models::{AudioModsMode, QueueItemRef, QueuePlacement};
+use osu_radio_client::models::{AudioModsMode, QueueItemRef, QueuePlacement, RepeatMode};
 use osu_radio_client::view_models::{PlaylistAction, QueueAction};
 use osu_radio_client::{ModsAction, ModsEdit, ModsEditTarget};
 use serde_json::json;
@@ -56,6 +56,14 @@ fn snapshot(state: &MockState) -> QString {
             "revision": state.queue.view.revision,
             "playback_token": state.queue.view.playback_token,
             "operation_error": state.queue.view.operation_error,
+        },
+        "modes": {
+            "shuffle": state.queue.shuffle,
+            "repeat": match state.queue.repeat {
+                RepeatMode::Off => "off",
+                RepeatMode::All => "all",
+                RepeatMode::One => "one",
+            },
         },
         "gallery": state.gallery,
         "tracks": state.tracks,
@@ -183,6 +191,8 @@ fn action_from_qml(action: &str, value: String) -> Option<Action> {
         "queueClearUpcoming" => Action::Queue(QueueAction::ClearUpcoming),
         "queueClearAll" => Action::Queue(QueueAction::ClearAll),
         "queueRefresh" => Action::Queue(QueueAction::Refresh),
+        "toggleShuffle" => Action::ToggleShuffle,
+        "cycleRepeat" => Action::CycleRepeat,
         "trackSort" => Action::SetTrackSort(crate::app_bridge::track_sort_from_index(
             value.parse().ok()?,
         )?),

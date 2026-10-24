@@ -309,6 +309,7 @@ playback.
 | Adjustable speed and pitch (DT/HT/NC) | Rows for database, server (docs on/off), client (`mock` off/on), player, media-controls and Qt, then the opt-in probes below | Profiles, wire shape, gate/parameters, time scale and popup have layer tests. The real-server probe covers storage → HTTP → worker parameters across restart/reimport with a **fake engine**; sound quality, native F1/D/E, live drag and Windows need manual acceptance. |
 | Persisted individual/global volume | Repository/service checks on SQLite/PostgreSQL, both server router variants, client mock off/on and Qt offscreen/lint | Verify defaults, upgrade/reimport, shared audio, A/B selection, debounce/retry/stale replies, volume before play and shutdown flush. Physical output and Linux/Windows slider checks remain manual. |
 | Persisted playback queue and assignment protocol | Repository/service tests on each backend, server tests with and without `docs`, client tests with and without `mock`, Qt tests and QML lint below | Use disposable databases; verify recovery, duplicates, stale callbacks/downloads, reconnect and current metadata outside search. Physical output and Windows remain separate. |
+| Shuffle and repeat modes (queue, wire, client, Qt, MPRIS/SMTC) | Rows for database (SQLite and PostgreSQL), services (both), server (docs on/off), client (`mock` off/on), media-controls and Qt offscreen/lint, then the two opt-in queue probes and the Linux protocol harness below | Shuffle/unshuffle, repeat transitions, history suppression, persistence/downgrade, wire fields, Player VM commands and Previous rule, Qt buttons and MPRIS properties have layer tests; the real-server probes add HTTP → fake engine → restart. Physical sound, desktop `playerctl`, native widgets and everything on Windows (including SMTC, which has not even been compiled on Linux) are manual. |
 | Queue integration with the real embedded server | Build SQLite server, then run the two opt-in queue probes below | Private SQLite/WAV/NDJSON fixtures; Qt on pause and client with a fake engine. No physical output or native desktop acceptance. |
 | Client formatting, state, readiness parsing | `cargo test -p osu-radio-client --lib --locked` | [Client tests](../../crates/osu-radio-client/src/lib.rs), [Track tests](../../crates/osu-radio-client/src/view_models/track.rs), [readiness tests](../../crates/osu-radio-client/src/server.rs) and controller tests; process fixtures are isolated. |
 | Server changes, default docs | `cargo clippy -p osu-radio-server --all-targets --locked` | Compiles the documentation-enabled router; does not launch the server. |
@@ -328,7 +329,11 @@ producer is scoped to each child server; a real helper is unnecessary for these 
 cargo build -p osu-radio-server -p osu-radio-qt --locked
 cargo test -p osu-radio-qt --locked --test launch_smoke real_backend_queue_survives_restart_and_preserves_exact_entry_actions -- --ignored
 cargo test -p osu-radio-client --lib --locked real_server_queue_and_fake_engine_preserve_launches_across_edits_and_reimport -- --ignored
+cargo test -p osu-radio-client --lib --locked real_server_modes -- --ignored
 ```
+
+The last command is the shuffle/repeat probe. The Qt probe's `queue-real` case also
+clicks the mode buttons, and the fixture's `verify` step reads the modes from a new server.
 
 Executed results, R1–R11 evidence and manual Linux/Windows steps are recorded in
 [T10](../impl/queue-rework/T10.md#отчёт-о-выполнении), separately from this check matrix.

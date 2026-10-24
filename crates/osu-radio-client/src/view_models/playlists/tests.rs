@@ -255,6 +255,8 @@ async fn playback_uses_item_identity_and_mutations_ignore_a_different_open_playl
         playback_token: 9,
         can_next: true,
         can_previous: true,
+        shuffle: false,
+        repeat: crate::models::RepeatMode::Off,
     });
     state.playlist_action(PlaylistAction::TogglePlayback);
     let resume = state.player.commands.pop_front().unwrap();
@@ -297,6 +299,7 @@ async fn add_dialog_keeps_concrete_difficulties_and_failed_requests_keep_retryab
         .map(|item| TrackDifficulty {
             beatmap_id: item.beatmap_id.unwrap(),
             beatmap_set_id: 10,
+            beatmap_set_online_id: None,
             difficulty_name: item.difficulty_name.clone(),
             set_has_multiple_audio_sources: false,
         })

@@ -115,3 +115,28 @@ fn rate_changes_preserve_source_coordinates_and_metadata() -> Result<(), Error> 
     assert!(Published::new(invalid, None, "instance1_0").is_err());
     Ok(())
 }
+
+#[test]
+fn modes_map_both_ways_and_diff_reports_each_change() -> Result<(), Error> {
+    use crate::Repeat;
+    for (repeat, status) in [
+        (Repeat::Off, LoopStatus::None),
+        (Repeat::One, LoopStatus::Track),
+        (Repeat::All, LoopStatus::Playlist),
+    ] {
+        assert_eq!(loop_status(repeat), status);
+        assert_eq!(self::repeat(status), repeat);
+    }
+    let old = Published::new(snapshot(), None, "instance1_0")?;
+    let mut next = old.snapshot.clone();
+    next.shuffle = true;
+    let shuffled = Published::new(next.clone(), None, "instance1_0")?;
+    assert_eq!(changes(&old, &shuffled), [Property::Shuffle(true)]);
+    next.repeat = Repeat::All;
+    let looped = Published::new(next, None, "instance1_0")?;
+    assert_eq!(
+        changes(&shuffled, &looped),
+        [Property::LoopStatus(LoopStatus::Playlist)]
+    );
+    Ok(())
+}

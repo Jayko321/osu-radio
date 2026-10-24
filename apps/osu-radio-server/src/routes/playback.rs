@@ -34,6 +34,35 @@ impl From<radio_services::PlaybackMode> for PlaybackMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
+pub(crate) enum RepeatMode {
+    Off,
+    All,
+    One,
+}
+
+impl From<radio_services::RepeatMode> for RepeatMode {
+    fn from(mode: radio_services::RepeatMode) -> Self {
+        match mode {
+            radio_services::RepeatMode::Off => Self::Off,
+            radio_services::RepeatMode::All => Self::All,
+            radio_services::RepeatMode::One => Self::One,
+        }
+    }
+}
+
+impl From<RepeatMode> for radio_services::RepeatMode {
+    fn from(mode: RepeatMode) -> Self {
+        match mode {
+            RepeatMode::Off => Self::Off,
+            RepeatMode::All => Self::All,
+            RepeatMode::One => Self::One,
+        }
+    }
+}
+
 /// A positive BIGINT carried as a decimal string, never a JSON number.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
@@ -145,6 +174,8 @@ pub(crate) struct QueueResponse {
     history_len: usize,
     mode: PlaybackMode,
     waiting_for_check: bool,
+    shuffle: bool,
+    repeat: RepeatMode,
     revision: u64,
     playback_token: u64,
 }
@@ -156,6 +187,8 @@ impl From<QueueSnapshot> for QueueResponse {
             history_len: queue.history_len,
             mode: queue.mode.into(),
             waiting_for_check: queue.waiting_for_check,
+            shuffle: queue.shuffle,
+            repeat: queue.repeat.into(),
             revision: queue.revision,
             playback_token: queue.playback_token,
         }
@@ -164,6 +197,7 @@ impl From<QueueSnapshot> for QueueResponse {
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
+#[allow(clippy::struct_excessive_bools)] // Mirrors independent JSON flags of the wire contract.
 pub(crate) struct PlaybackResponse {
     #[cfg_attr(feature = "docs", schema(required = true))]
     current_entry_id: Option<EntryId>,
@@ -183,6 +217,8 @@ pub(crate) struct PlaybackResponse {
     #[cfg_attr(feature = "docs", schema(required = true))]
     duration_ms: Option<u64>,
     mode: PlaybackMode,
+    shuffle: bool,
+    repeat: RepeatMode,
     revision: u64,
     playback_token: u64,
     can_next: bool,
@@ -218,6 +254,8 @@ impl PlaybackResponse {
             track: assignment.track.map(TrackResponse::from),
             duration_ms,
             mode: assignment.mode.into(),
+            shuffle: assignment.shuffle,
+            repeat: assignment.repeat.into(),
             revision: assignment.revision,
             playback_token: assignment.playback_token,
             can_next: assignment.can_next,
@@ -294,6 +332,8 @@ pub(crate) enum CommandRequest {
     Started { playback_token: u64 },
     Finished { playback_token: u64 },
     Failed { playback_token: u64 },
+    SetShuffle { enabled: bool },
+    SetRepeat { mode: RepeatMode },
 }
 
 impl From<CommandRequest> for PlaybackCommand {
@@ -312,6 +352,8 @@ impl From<CommandRequest> for PlaybackCommand {
             CommandRequest::Started { playback_token } => Self::Started { playback_token },
             CommandRequest::Finished { playback_token } => Self::Finished { playback_token },
             CommandRequest::Failed { playback_token } => Self::Failed { playback_token },
+            CommandRequest::SetShuffle { enabled } => Self::SetShuffle { enabled },
+            CommandRequest::SetRepeat { mode } => Self::SetRepeat(mode.into()),
         }
     }
 }

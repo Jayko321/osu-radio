@@ -24,6 +24,7 @@ pub struct Model {
     pub cover_beatmap_id: Option<i32>,
     pub availability: String,
     pub check_generation: i64,
+    pub shuffle_order: Option<i64>,
 }
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {}

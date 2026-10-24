@@ -335,7 +335,7 @@ Item {
                 anchors.centerIn: parent
                 // Leaves room for the volume and mods buttons at the minimum window width.
                 spacing: Math.max(8, Math.min(28, (player.contentWidth - 390) / 4))
-                IconButton { objectName: "shuffleButton"; anchors.verticalCenter: parent.verticalCenter; iconName: "shuffle"; accessibleName: "Shuffle (unavailable)"; enabled: false }
+                ShuffleModeButton { objectName: "shuffleButton"; anchors.verticalCenter: parent.verticalCenter; active: player.bridge.player.shuffle; enabled: player.bridge.connected && player.bridge.player.canChangeModes; onClicked: player.bridge.player.toggleShuffle() }
                 IconButton { objectName: "previousTrackButton"; anchors.verticalCenter: parent.verticalCenter; iconName: "skip-back"; accessibleName: "Previous track"; enabled: player.bridge.connected && player.bridge.player.canPrevious; onClicked: player.bridge.player.previousTrack() }
                 IconButton {
                     width: 48
@@ -348,7 +348,7 @@ Item {
                     background: Rectangle { radius: 24; color: Theme.accent }
                 }
                 IconButton { objectName: "nextTrackButton"; anchors.verticalCenter: parent.verticalCenter; iconName: "skip-forward"; accessibleName: "Next track"; enabled: player.bridge.connected && player.bridge.player.canNext; onClicked: player.bridge.player.nextTrack() }
-                IconButton { objectName: "repeatButton"; anchors.verticalCenter: parent.verticalCenter; iconName: "repeat-2"; accessibleName: "Repeat (unavailable)"; enabled: false }
+                RepeatModeButton { objectName: "repeatButton"; anchors.verticalCenter: parent.verticalCenter; mode: player.bridge.player.repeatMode; enabled: player.bridge.connected && player.bridge.player.canChangeModes; onClicked: player.bridge.player.cycleRepeat() }
             }
             IconButton { anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter; iconName: "circle-plus"; objectName: "addToPlaylistButton"; accessibleName: "Add to playlist"; enabled: player.bridge.player.canAddPlaylist && player.bridge.connected; onClicked: player.bridge.playlists.openPlaylistAdd() }
         }

@@ -33,8 +33,8 @@ migration for subsequent changes.
 | `audio_volume` | Composite primary key `(audio_kind, source_location)` and absolute integer `volume_percent` in 0–100. No library foreign key. |
 | `audio_mods` | Composite primary key `(audio_kind, source_location)` and checked mode/speed/pitch profile. No library foreign key. |
 | `listening_history` | Composite primary key `(audio_kind, source_location)` using the audio source's existing identity; UTC millisecond timestamp and last acknowledged playback token. No library foreign key. |
-| `playback_queue` | Singleton `id = 1`; nullable current entry ID, `history_len` boundary, playback mode, persisted `waiting_for_check`, nullable launch audio ID/kind/location/generation without foreign keys, BIGINT revision/token and retained last issued entry ID. |
-| `queue_entries` | Positive permanent BIGINT ID; unique dense position, independent audio/playlist source keys, nullable advisory IDs, ordinary/Unicode caption and difficulty snapshots, availability and check generation. No library/playlist foreign keys or deletion cascades. |
+| `playback_queue` | Singleton `id = 1`; nullable current entry ID, `history_len` boundary, playback mode, persisted `waiting_for_check`, nullable launch audio ID/kind/location/generation without foreign keys, BIGINT revision/token, retained last issued entry ID, and the shuffle/repeat modes (`shuffle`, checked `repeat_mode` `off\|all\|one`, `repeat_launch`). |
+| `queue_entries` | Positive permanent BIGINT ID; unique dense position, independent audio/playlist source keys, nullable advisory IDs, ordinary/Unicode caption and difficulty snapshots, availability and check generation, and nullable `shuffle_order` (set on every row exactly while shuffle is on). No library/playlist foreign keys or deletion cascades. |
 | `playlists` | Generated `i32` ID and nonempty trimmed name; equal names are allowed. Nullable custom PNG and a retained monotonic cover revision; optional unique source/collection provenance independent of installation deletion. |
 | `playlist_items` | Generated `i32` ID; required playlist with deletion cascade; unique `(playlist_id, source_kind, beatmap_hash)`, explicit native/MD5 hash kind and saved ordinary/Unicode title and artist plus difficulty. No library foreign key. |
 
@@ -328,6 +328,50 @@ Automated T02 evidence is recorded in [the card](../impl/queue-rework/T02.md).
 insertions/edits, checks, history boundaries, source-keyed projections and rollback;
 [repository contracts](../../crates/radio-db/src/tests/queue.rs) cover v12→v13/reopen and
 downgrade guards. Physical audio, Qt and native Windows acceptance are separate.
+
+### Shuffle and repeat modes
+
+The additive [v16 migration](../../crates/radio-db/src/migrations/m20261024_000016_queue_modes.rs)
+adds `playback_queue.shuffle`, `repeat_mode` (SQL `CHECK` on `off|all|one`) and
+`repeat_launch`, plus nullable `queue_entries.shuffle_order`. Upgrading a populated
+v11–v15 queue keeps entries, current, revision and token; the modes start Off/Off and
+every key is NULL. Model: `radio_db::model::RepeatMode`, `QueueState.shuffle/repeat/
+repeat_launch`, `QueueEntry.shuffle_order`. `QueueState::validate()` (called by `save`)
+requires `shuffle_order.is_some() == state.shuffle` for every entry. `repeat_launch`
+has no SQL constraint; the service keeps it consistent. Downgrade below v16 succeeds
+only for Off/Off (the queue is kept); shuffle or repeat other than Off refuses before
+changing the schema. Contracts: [migration/repository tests](../../crates/radio-db/src/tests/queue.rs)
+and [migration lifecycle](../../crates/radio-db/src/tests/migration_lifecycle.rs) on
+SQLite and disposable PostgreSQL.
+
+[QueueService](../../crates/radio-services/src/queue.rs) owns the rules, with
+`PlaybackCommand::SetShuffle { enabled }` and `SetRepeat(RepeatMode)`:
+
+- Enabling shuffle assigns each entry `shuffle_order` = its position and shuffles only
+  `next_index()..` (`fastrand`); history, current, token and launch are untouched.
+  Disabling stably sorts that same range by key and clears keys, so the original
+  order (including after `Move`/`Remove`) returns. Repeating the current value is a
+  no-op without a revision. Unavailable future entries are shuffled with the rest and
+  never become current. Shuffling them with the rest is the user's decision (2026-10-24).
+- Insertions while shuffled get keys below the minimum ("Play next", library Play)
+  or above the maximum ("Add to end", whole-playlist append), so they show immediately
+  and land after the current / at the end once shuffle is turned off.
+- Starting a playlist (`replace_in`, with the explicit-start flag from
+  `PlaylistService::play`) shuffles its future part when shuffle is on: an explicit
+  start item is first and the rest follow in random order; without it the whole
+  playlist is shuffled and the first available entry of the new order starts.
+- Repeat One: `Finished` on an available current entry relaunches the same entry with
+  a new token and sets `repeat_launch`; `Started` for that launch writes no listening
+  history, and any other launch clears the flag. Failed, Next and Previous follow
+  the list and keep the mode. Repeat All: `Finished` and `Next` on the last available
+  entry continue from position 0 without reordering, `can_next` is true there, and a
+  failed or only entry cannot loop forever (`Stopped` instead). Previous on the first
+  entry restarts it under both modes.
+- `Clear` and `Recover` keep both modes.
+
+Evidence: [mode tests](../../crates/radio-services/src/tests/queue_modes.rs) and
+[repeat tests](../../crates/radio-services/src/tests/queue_repeat.rs), also on
+PostgreSQL. Shuffle checks assert sets and boundaries, never a specific permutation.
 
 ## Audio volume settings
 

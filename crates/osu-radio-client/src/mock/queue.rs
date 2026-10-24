@@ -2,6 +2,7 @@
 use crate::{
     models::{
         PlaybackMode, QueueAvailability, QueueEntry, QueueEntryId, QueueItemRef, QueuePlacement,
+        RepeatMode,
     },
     view_models::{QueueAction, QueueRow, QueueView},
 };
@@ -9,12 +10,17 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MockQueue {
     pub view: QueueView,
+    /// Display-only: the demonstration list is never reordered or wrapped.
+    pub shuffle: bool,
+    pub repeat: RepeatMode,
     next_id: i64,
 }
 impl Default for MockQueue {
     fn default() -> Self {
         let mut queue = Self {
             view: QueueView::default(),
+            shuffle: false,
+            repeat: RepeatMode::Off,
             next_id: 1,
         };
         for (audio, availability) in [
@@ -319,6 +325,19 @@ mod tests {
     use crate::mock::{Action, MockState};
     fn id(value: i64) -> QueueEntryId {
         QueueEntryId::new(value).unwrap()
+    }
+    #[test]
+    fn modes_toggle_offline_without_touching_the_list() {
+        let mut state = MockState::default();
+        let before = state.queue.view.clone();
+        assert!(state.apply(Action::ToggleShuffle));
+        assert!(state.queue.shuffle);
+        for expected in [RepeatMode::All, RepeatMode::One, RepeatMode::Off] {
+            assert!(state.apply(Action::CycleRepeat));
+            assert_eq!(state.queue.repeat, expected);
+        }
+        assert!(state.apply(Action::ToggleShuffle) && !state.queue.shuffle);
+        assert_eq!(state.queue.view, before);
     }
     #[test]
     fn memory_queue_preserves_history_duplicates_and_errors_and_all_edit_operations() {

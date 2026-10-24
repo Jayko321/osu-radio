@@ -431,7 +431,7 @@ fn every_embedded_image_and_font_decodes_in_the_offline_gallery() {
         "native-assets",
     );
     assert!(
-        output.contains("Embedded asset probe checked 48 resources"),
+        output.contains("Embedded asset probe checked 49 resources"),
         "{output}"
     );
     assert!(
@@ -887,6 +887,22 @@ fn playback_controls_show_loading_errors_and_global_volume_without_a_device() {
             .filter(|line| line.ends_with("/audio"))
             .collect::<Vec<_>>(),
         ["/api/audio-sources/42/audio", "/api/audio-sources/42/audio"]
+    );
+    let commands = std::fs::read_to_string(directory.path().join("playback_commands"))
+        .expect("playback commands");
+    let modes = commands
+        .lines()
+        .filter(|line| line.contains("set_"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        modes,
+        [
+            r#"{"command": "set_shuffle", "enabled": true}"#,
+            r#"{"command": "set_repeat", "mode": "all"}"#,
+            r#"{"command": "set_repeat", "mode": "one"}"#,
+            r#"{"command": "set_repeat", "mode": "off"}"#,
+            r#"{"command": "set_shuffle", "enabled": false}"#,
+        ]
     );
     assert_child_reaped(directory.path());
 }

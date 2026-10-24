@@ -78,6 +78,10 @@ pub enum AppCommand {
     Stop,
     Next,
     Previous,
+    /// Inverts shuffle relative to the last server assignment.
+    ToggleShuffle,
+    /// Cycles repeat Off → All → One → Off relative to the last server assignment.
+    CycleRepeat,
     SetQueueVisible(bool),
     Seek(Duration),
     SetVolume(f32),
@@ -484,7 +488,9 @@ impl Controller {
             }),
             AppCommand::Stop => self.queue_playback(crate::models::PlaybackCommand::Stop),
             AppCommand::Next => self.queue_playback(crate::models::PlaybackCommand::Next),
-            AppCommand::Previous => self.queue_playback(crate::models::PlaybackCommand::Previous),
+            AppCommand::Previous => self.previous(),
+            AppCommand::ToggleShuffle => self.toggle_shuffle(),
+            AppCommand::CycleRepeat => self.cycle_repeat(),
             AppCommand::Seek(position) => self.seek_selected(position),
             AppCommand::SetVolume(volume) => {
                 self.set_selected_volume(volume);

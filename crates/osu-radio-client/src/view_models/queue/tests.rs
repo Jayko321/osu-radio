@@ -31,6 +31,7 @@ pub(super) fn assignment(
             difficulties: vec![TrackDifficulty {
                 beatmap_id: id,
                 beatmap_set_id: 1,
+                beatmap_set_online_id: None,
                 difficulty_name: None,
                 set_has_multiple_audio_sources: false,
             }],
@@ -41,6 +42,8 @@ pub(super) fn assignment(
         playback_token: token,
         can_next: true,
         can_previous: true,
+        shuffle: false,
+        repeat: crate::models::RepeatMode::Off,
     }
 }
 

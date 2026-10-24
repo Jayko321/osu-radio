@@ -10,7 +10,7 @@ use mpris_server::{
 };
 use osu_radio_media_controls::{
     Artwork, ArtworkKey, Capabilities, Event, EventReceiver, LaunchKey, MediaControls,
-    Metadata as Text, NativeContext, PlaybackStatus, Snapshot, Status,
+    Metadata as Text, NativeContext, PlaybackStatus, Repeat, Snapshot, Status,
 };
 use std::{
     error::Error,
@@ -211,6 +211,7 @@ fn initial() -> Snapshot {
             previous: true,
             seek: true,
             set_volume: true,
+            set_modes: true,
         },
         artwork: Some(Artwork {
             key: ArtworkKey {
@@ -447,6 +448,81 @@ async fn protocol_exchange() -> Result {
     assert!(names(&connection).await?.is_empty());
     assert!(player.call::<_, _, ()>("Play", &()).await.is_err());
     assert_eq!(events.recv().await, None);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Linux and a private dbus-daemon; never uses the desktop bus"]
+async fn modes_follow_snapshot_and_requests_become_events() -> Result {
+    if !child("modes_follow_snapshot_and_requests_become_events")? {
+        return Ok(());
+    }
+    let connection = observer().await?;
+    let mut state = initial();
+    state.capabilities.set_modes = false;
+    let (mut controls, mut events) = MediaControls::connect(NativeContext::Linux, state.clone())?;
+    connected(&controls).await?;
+    let services = names(&connection).await?;
+    let name = services.first().ok_or("MPRIS name")?;
+    let player = proxy(&connection, name, PLAYER).await?;
+    assert!(!player.get_property::<bool>("Shuffle").await?);
+    assert_eq!(player.get_property::<String>("LoopStatus").await?, "None");
+
+    // Without the capability the setters fail and queue nothing.
+    assert!(player.set_property("Shuffle", true).await.is_err());
+    assert!(player.set_property("LoopStatus", "Track").await.is_err());
+
+    state.capabilities.set_modes = true;
+    assert!(controls.publish(state.clone()));
+    // Capability changes publish no property, so wait for the setter to accept.
+    bounded(async {
+        while player.set_property("Shuffle", true).await.is_err() {
+            sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    event(&mut events, Event::SetShuffle(true)).await?;
+    for (text, repeat) in [
+        ("None", Repeat::Off),
+        ("Track", Repeat::One),
+        ("Playlist", Repeat::All),
+    ] {
+        player.set_property("LoopStatus", text).await?;
+        event(&mut events, Event::SetRepeat(repeat)).await?;
+    }
+    // An unknown value is rejected by the interface and queues nothing.
+    assert!(player.set_property("LoopStatus", "Bogus").await.is_err());
+
+    let properties = proxy(&connection, name, "org.freedesktop.DBus.Properties").await?;
+    let mut changed = properties.receive_signal("PropertiesChanged").await?;
+    for (text, repeat) in [("Track", Repeat::One), ("Playlist", Repeat::All)] {
+        state.shuffle = !state.shuffle;
+        state.repeat = repeat;
+        assert!(controls.publish(state.clone()));
+        let signal = next_signal(&mut changed).await?;
+        let (_, values, _): (
+            String,
+            std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+            Vec<String>,
+        ) = signal.body().deserialize()?;
+        assert_eq!(
+            <&str>::try_from(values.get("LoopStatus").ok_or("loop signal")?)?,
+            text
+        );
+        assert_eq!(
+            bool::try_from(values.get("Shuffle").ok_or("shuffle signal")?)?,
+            state.shuffle
+        );
+        assert_eq!(player.get_property::<String>("LoopStatus").await?, text);
+        assert_eq!(player.get_property::<bool>("Shuffle").await?, state.shuffle);
+    }
+    // Nothing from the rejected calls was queued.
+    assert!(
+        timeout(Duration::from_millis(120), events.recv())
+            .await
+            .is_err()
+    );
+    bounded(controls.shutdown()).await?;
     Ok(())
 }
 

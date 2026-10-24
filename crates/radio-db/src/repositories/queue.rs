@@ -2,7 +2,7 @@ use crate::{
     entities::{queue, queue_entry},
     model::{
         PlaybackMode, QueueAvailability, QueueEntry, QueueEntryId, QueueLaunchSource,
-        QueuePlaylistSource, QueueState, SourceType,
+        QueuePlaylistSource, QueueState, RepeatMode, SourceType,
     },
 };
 use anyhow::{Context, Result, bail, ensure};
@@ -16,7 +16,7 @@ impl QueueRepository<'_> {
     pub async fn get(&self) -> Result<QueueState> {
         let rows = self.connection.query_all_raw(Statement::from_string(
             self.connection.get_database_backend(),
-            "SELECT q.id AS q_id, q.current_entry_id AS q_current_entry_id, q.history_len AS q_history_len, q.last_entry_id AS q_last_entry_id, q.mode AS q_mode, q.waiting_for_check AS q_waiting_for_check, q.launch_audio_source_id AS q_launch_audio_source_id, q.launch_audio_kind AS q_launch_audio_kind, q.launch_audio_location AS q_launch_audio_location, q.launch_check_generation AS q_launch_check_generation, q.revision AS q_revision, q.playback_token AS q_playback_token, e.* FROM playback_queue q LEFT JOIN queue_entries e ON TRUE WHERE q.id = 1 ORDER BY e.position",
+            "SELECT q.id AS q_id, q.current_entry_id AS q_current_entry_id, q.history_len AS q_history_len, q.last_entry_id AS q_last_entry_id, q.mode AS q_mode, q.waiting_for_check AS q_waiting_for_check, q.launch_audio_source_id AS q_launch_audio_source_id, q.launch_audio_kind AS q_launch_audio_kind, q.launch_audio_location AS q_launch_audio_location, q.launch_check_generation AS q_launch_check_generation, q.shuffle AS q_shuffle, q.repeat_mode AS q_repeat_mode, q.repeat_launch AS q_repeat_launch, q.revision AS q_revision, q.playback_token AS q_playback_token, e.* FROM playback_queue q LEFT JOIN queue_entries e ON TRUE WHERE q.id = 1 ORDER BY e.position",
         )).await?;
         let first = rows
             .first()
@@ -52,6 +52,14 @@ impl QueueRepository<'_> {
                 (None, None, None, None) => None,
                 _ => bail!("Incomplete queue launch source"),
             },
+            shuffle: row.shuffle,
+            repeat: match row.repeat_mode.as_str() {
+                "off" => RepeatMode::Off,
+                "all" => RepeatMode::All,
+                "one" => RepeatMode::One,
+                _ => bail!("Invalid persisted repeat mode"),
+            },
+            repeat_launch: row.repeat_launch,
             mode: match row.mode.as_str() {
                 "stopped" => PlaybackMode::Stopped,
                 "paused" => PlaybackMode::Paused,
@@ -118,6 +126,14 @@ impl QueueRepository<'_> {
                 .as_ref()
                 .map(|s| i64::try_from(s.check_generation))
                 .transpose()?),
+            shuffle: Set(state.shuffle),
+            repeat_mode: Set(match state.repeat {
+                RepeatMode::Off => "off",
+                RepeatMode::All => "all",
+                RepeatMode::One => "one",
+            }
+            .into()),
+            repeat_launch: Set(state.repeat_launch),
             current_entry_id: Set(state.current_entry_id.map(QueueEntryId::get)),
             history_len: Set(i64::try_from(state.history_len)?),
             last_entry_id: Set(state.last_entry_id),
@@ -176,6 +192,7 @@ fn entry_from_row(row: queue_entry::Model) -> Result<QueueEntry> {
             _ => bail!("Invalid queue availability"),
         },
         check_generation: u64::try_from(row.check_generation)?,
+        shuffle_order: row.shuffle_order,
     })
 }
 fn entry_to_row(e: &QueueEntry) -> Result<queue_entry::ActiveModel> {
@@ -209,5 +226,6 @@ fn entry_to_row(e: &QueueEntry) -> Result<queue_entry::ActiveModel> {
         }
         .into()),
         check_generation: Set(i64::try_from(e.check_generation)?),
+        shuffle_order: Set(e.shuffle_order),
     })
 }

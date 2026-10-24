@@ -911,6 +911,15 @@ impl Controller {
     ) {
         self.queue_work(|queue, input, work| queue.queue_loaded(request, result, input, work));
     }
+    pub(crate) fn previous(&mut self) {
+        self.player_work(crate::view_models::player::PlayerViewModel::previous);
+    }
+    pub(crate) fn toggle_shuffle(&mut self) {
+        self.player_work(crate::view_models::player::PlayerViewModel::toggle_shuffle);
+    }
+    pub(crate) fn cycle_repeat(&mut self) {
+        self.player_work(crate::view_models::player::PlayerViewModel::cycle_repeat);
+    }
     pub(crate) fn queue_playback(&mut self, command: PlaybackCommand) {
         self.player_work(|player, input, work| player.queue_playback(command, input, work));
     }

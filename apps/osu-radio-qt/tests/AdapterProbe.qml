@@ -1680,10 +1680,10 @@ QtObject {
             check(bridge.player.currentAudioId === -1 && bridge.player.loadingAudioId === -1, "selection alone does not start audio");
             check(play.enabled && play.accessibleName === "Play", "selected track can play");
             check(!progress.enabled && bridge.player.playbackPositionLabel === "00:00", "noncurrent selection has no seeking");
-            check(!findChild(window.contentItem, "shuffleButton").enabled && !findChild(window.contentItem, "repeatButton").enabled,
-                "unavailable transport modes stay disabled");
+            check(findChild(window.contentItem, "shuffleButton") !== null && findChild(window.contentItem, "repeatButton") !== null,
+                "transport mode buttons exist");
             window.width = 1024; window.height = 640;
-            stage = 10;
+            stage = 30;
             break;
         case 10: {
             const panel = findChild(window.contentItem, "playerPane");
@@ -1774,6 +1774,51 @@ QtObject {
             if (!bridge.playlists.playlistAdding) return;
             check(bridge.player.selectedAudioId === menuRow.audioId, "Add to playlist opens the dialog for the menu row");
             finish();
+            break;
+        case 30: {
+            // Modes: icon, accessible name and accent per state, and the Off -> All -> One -> Off cycle through the adapter.
+            const shuffle = findChild(window.contentItem, "shuffleButton");
+            const repeat = findChild(window.contentItem, "repeatButton");
+            if (!bridge.player.canChangeModes) return;
+            check(shuffle.enabled && repeat.enabled, "mode buttons are enabled when connected with an assignment");
+            check(!bridge.player.shuffle && shuffle.accessibleName === "Shuffle: off" && shuffle.iconName === "shuffle" && shuffle.foreground === Radio.Theme.text,
+                "shuffle starts off");
+            check(bridge.player.repeatMode === "off" && repeat.accessibleName === "Repeat: off" && repeat.iconName === "repeat-2" && repeat.foreground === Radio.Theme.text,
+                "repeat starts off");
+            shuffle.clicked();
+            stage = 31;
+            break;
+        }
+        case 31: {
+            if (!bridge.player.shuffle) return;
+            const shuffle = findChild(window.contentItem, "shuffleButton");
+            check(shuffle.accessibleName === "Shuffle: on" && shuffle.foreground === Radio.Theme.accent && shuffle.enabled, "shuffle on is named and highlighted");
+            findChild(window.contentItem, "repeatButton").clicked();
+            stage = 32;
+            break;
+        }
+        case 32: {
+            if (bridge.player.repeatMode !== "all") return;
+            const repeat = findChild(window.contentItem, "repeatButton");
+            check(repeat.accessibleName === "Repeat: all" && repeat.iconName === "repeat-2" && repeat.foreground === Radio.Theme.accent, "repeat all");
+            repeat.clicked();
+            stage = 33;
+            break;
+        }
+        case 33: {
+            if (bridge.player.repeatMode !== "one") return;
+            const repeat = findChild(window.contentItem, "repeatButton");
+            check(repeat.accessibleName === "Repeat: one" && repeat.iconName === "repeat-1" && repeat.foreground === Radio.Theme.accent, "repeat one");
+            repeat.clicked();
+            findChild(window.contentItem, "shuffleButton").clicked();
+            stage = 34;
+            break;
+        }
+        case 34:
+            if (bridge.player.repeatMode !== "off" || bridge.player.shuffle) return;
+            check(findChild(window.contentItem, "repeatButton").iconName === "repeat-2" && findChild(window.contentItem, "shuffleButton").accessibleName === "Shuffle: off",
+                "modes return to off");
+            stage = 10;
             break;
         }
     }
@@ -2304,6 +2349,19 @@ QtObject {
         const store = window.galleryStore;
         switch (stage) {
         case 0:
+            // Offline modes: the mock store applies synchronously and the shared buttons follow it.
+            const shuffle = findChild(window.contentItem, "galleryShuffleButton");
+            const repeat = findChild(window.contentItem, "galleryRepeatButton");
+            check(shuffle.enabled && repeat.enabled && shuffle.accessibleName === "Shuffle: off" && repeat.accessibleName === "Repeat: off" && repeat.iconName === "repeat-2",
+                "offline modes start off");
+            shuffle.clicked();
+            check(shuffle.accessibleName === "Shuffle: on" && shuffle.foreground === Radio.Theme.accent, "offline shuffle toggles");
+            for (const [mode, icon] of [["all", "repeat-2"], ["one", "repeat-1"], ["off", "repeat-2"]]) {
+                repeat.clicked();
+                check(repeat.accessibleName === "Repeat: " + mode && repeat.iconName === icon, "offline repeat cycles to " + mode);
+            }
+            shuffle.clicked();
+            check(shuffle.accessibleName === "Shuffle: off", "offline shuffle toggles back");
             findChild(window.contentItem, "galleryQueueButton").forceActiveFocus();
             findChild(window.contentItem, "galleryQueueButton").clicked(); stage = 1; break;
         case 1:
@@ -3396,6 +3454,13 @@ QtObject {
         case 11:
             if (list.count !== 0) return;
             check(!bridge.player.selectedIsPlaying && !bridge.player.canSeek && bridge.player.playbackPosition === 0 && bridge.queue.queueMessage === "", "real clear all stops without errors");
+            // Modes go through the real server; the fixture verifies they persist after this process exits.
+            check(bridge.player.canChangeModes && !bridge.player.shuffle && bridge.player.repeatMode === "off", "real modes start off and are changeable on an empty queue");
+            findChild(window.contentItem, "shuffleButton").clicked();
+            findChild(window.contentItem, "repeatButton").clicked(); stage = 12; break;
+        case 12:
+            if (!bridge.player.shuffle || bridge.player.repeatMode !== "all") return;
+            check(findChild(window.contentItem, "shuffleButton").accessibleName === "Shuffle: on" && findChild(window.contentItem, "repeatButton").accessibleName === "Repeat: all", "real server answers drive the mode buttons");
             finish(); break;
         }
     }

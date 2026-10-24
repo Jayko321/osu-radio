@@ -231,7 +231,9 @@ impl PlaylistService<'_> {
         let start = playlist.items.iter().position(|item| {
             start_item_id.map_or_else(|| item.audio_source_id.is_some(), |id| item.id == id)
         });
-        let result = QueueService::replace_in(&transaction, playlist.items, start).await?;
+        let result =
+            QueueService::replace_in(&transaction, playlist.items, start, start_item_id.is_some())
+                .await?;
         transaction.commit().await?;
         Ok(result)
     }

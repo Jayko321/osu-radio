@@ -21,7 +21,7 @@ pub use tag::{SetTag, Tag};
 mod queue;
 pub use queue::{
     PlaybackMode, QueueAvailability, QueueEntry, QueueEntryId, QueueLaunchSource,
-    QueuePlaylistSource, QueueState,
+    QueuePlaylistSource, QueueState, RepeatMode,
 };
 mod playlist;
 pub use playlist::{Playlist, PlaylistBeatmap, PlaylistItem, PlaylistSummary};
