@@ -21,8 +21,8 @@ pub use models::{
 pub use server::{EmbeddedServer, ServerError, ServerOptions};
 pub use session::{Session, StartError};
 pub use view_models::{
-    LibraryViewModel, PlayerViewModel, PlaylistsViewModel, QueueViewModel, SettingsViewModel,
-    Track, TrackNamePreferences,
+    AudioModsState, LibraryViewModel, ModsAction, ModsEdit, ModsEditTarget, PlayerViewModel,
+    PlaylistsViewModel, QueueViewModel, SettingsViewModel, Track, TrackNamePreferences,
 };
 
 /// The state of one thing a UI is showing. Frontends differ in how they render it, not in the

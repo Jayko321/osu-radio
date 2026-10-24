@@ -8,9 +8,9 @@ use cxx_qt_lib::{
     QString, QVariant,
 };
 use osu_radio_client::{
-    Track, TrackNamePreferences,
+    AudioModsState, ModsAction, ModsEdit, ModsEditTarget, Track, TrackNamePreferences,
     controller::{AppCommand, AppController, OperationStatus},
-    models::{QueueAvailability, QueueEntryId, QueueItemRef, QueuePlacement},
+    models::{AudioModsMode, QueueAvailability, QueueEntryId, QueueItemRef, QueuePlacement},
     view_models::{
         FolderAction, FolderSelection, PlaylistAction, PlaylistTrack, PlaylistsState, QueueAction,
         QueueView,
@@ -365,6 +365,20 @@ pub mod ffi {
             NOTIFY
         )]
         #[qproperty(f32, volume, cxx_name = "volume", READ, NOTIFY)]
+        #[qproperty(
+            bool,
+            individual_mods_enabled,
+            cxx_name = "individualModsEnabled",
+            READ,
+            NOTIFY
+        )]
+        #[qproperty(bool, mods_loaded, cxx_name = "modsLoaded", READ, NOTIFY)]
+        #[qproperty(bool, mods_available, cxx_name = "modsAvailable", READ, NOTIFY)]
+        #[qproperty(QString, mods_mode, cxx_name = "modsMode", READ, NOTIFY)]
+        #[qproperty(i32, mods_speed_percent, cxx_name = "modsSpeedPercent", READ, NOTIFY)]
+        #[qproperty(bool, mods_adjust_pitch, cxx_name = "modsAdjustPitch", READ, NOTIFY)]
+        #[qproperty(bool, mods_saving, cxx_name = "modsSaving", READ, NOTIFY)]
+        #[qproperty(QString, mods_message, cxx_name = "modsMessage", READ, NOTIFY)]
         type SettingsViewModel = super::SettingsViewModelRust;
         #[qinvokable]
         #[cxx_name = "setDiscordRichPresence"]
@@ -396,6 +410,33 @@ pub mod ffi {
         #[qinvokable]
         #[cxx_name = "retryAudioSettings"]
         fn retry_audio_settings(self: Pin<&mut SettingsViewModel>);
+        #[qinvokable]
+        #[cxx_name = "setIndividualModsEnabled"]
+        fn change_individual_mods(self: Pin<&mut SettingsViewModel>, enabled: bool);
+        #[qinvokable]
+        #[cxx_name = "beginModsEdit"]
+        fn begin_mods_edit(self: Pin<&mut SettingsViewModel>);
+        #[qinvokable]
+        #[cxx_name = "finishModsEdit"]
+        fn finish_mods_edit(self: Pin<&mut SettingsViewModel>);
+        #[qinvokable]
+        #[cxx_name = "cycleDtMod"]
+        fn cycle_dt_mod(self: Pin<&mut SettingsViewModel>);
+        #[qinvokable]
+        #[cxx_name = "toggleHtMod"]
+        fn toggle_ht_mod(self: Pin<&mut SettingsViewModel>);
+        #[qinvokable]
+        #[cxx_name = "setModSpeed"]
+        fn set_mod_speed(self: Pin<&mut SettingsViewModel>, percent: i32);
+        #[qinvokable]
+        #[cxx_name = "setModAdjustPitch"]
+        fn set_mod_adjust_pitch(self: Pin<&mut SettingsViewModel>, adjust: bool);
+        #[qinvokable]
+        #[cxx_name = "clearMods"]
+        fn clear_mods(self: Pin<&mut SettingsViewModel>);
+        #[qinvokable]
+        #[cxx_name = "retryMods"]
+        fn retry_mods(self: Pin<&mut SettingsViewModel>);
         #[qinvokable]
         #[cxx_name = "selectFolder"]
         fn select_folder(self: Pin<&mut SettingsViewModel>, id: i32);
@@ -475,6 +516,14 @@ pub mod ffi {
         #[qproperty(bool, selected_available, cxx_name = "selectedAvailable", READ, NOTIFY)]
         #[qproperty(bool, can_add_playlist, cxx_name = "canAddPlaylist", READ, NOTIFY)]
         #[qproperty(bool, can_play, cxx_name = "canPlay", READ, NOTIFY)]
+        #[qproperty(
+            i32,
+            playback_speed_percent,
+            cxx_name = "playbackSpeedPercent",
+            READ,
+            NOTIFY
+        )]
+        #[qproperty(u64, launch_token, cxx_name = "launchToken", READ, NOTIFY)]
         #[qproperty(
             i32,
             selected_playlist_item_id,
@@ -1283,6 +1332,17 @@ pub struct SettingsViewModelRust {
     pub(crate) audio_settings_message: QString,
     pub(crate) audio_settings_can_retry: bool,
     pub(crate) volume: f32,
+    pub(crate) individual_mods_enabled: bool,
+    pub(crate) mods_loaded: bool,
+    pub(crate) mods_available: bool,
+    pub(crate) mods_mode: QString,
+    pub(crate) mods_speed_percent: i32,
+    pub(crate) mods_adjust_pitch: bool,
+    pub(crate) mods_saving: bool,
+    pub(crate) mods_message: QString,
+    /// Latest addressee from the client; an open editor captures it once and addresses every edit to it.
+    pub(crate) mods_target: Option<ModsEditTarget>,
+    pub(crate) mods_edit: Option<ModsEditTarget>,
     pub(crate) folders: VariantList,
     pub(crate) selected_folder_id: i32,
     pub(crate) folder_message: QString,
@@ -1315,6 +1375,16 @@ impl Default for SettingsViewModelRust {
             audio_settings_message: QString::default(),
             audio_settings_can_retry: false,
             volume: 1.0,
+            individual_mods_enabled: false,
+            mods_loaded: false,
+            mods_available: false,
+            mods_mode: QString::from("none"),
+            mods_speed_percent: 100,
+            mods_adjust_pitch: false,
+            mods_saving: false,
+            mods_message: QString::default(),
+            mods_target: None,
+            mods_edit: None,
             folders: VariantList::default(),
             selected_folder_id: -1,
             folder_message: QString::default(),
@@ -1452,11 +1522,73 @@ impl ffi::SettingsViewModel {
             state.error
         }));
     }
+    pub(crate) fn project_audio_mods(mut self: Pin<&mut Self>, state: AudioModsState) {
+        // Retry/finish only bump the epoch of the same addressee; another addressee must not inherit an open editor.
+        let edit = match (self.mods_edit, state.target) {
+            (Some(open), Some(latest)) if open.audio_id == latest.audio_id => Some(latest),
+            _ => None,
+        };
+        let profile = state.selected_profile;
+        let mut this = self.as_mut();
+        this.as_mut().rust_mut().mods_target = state.target;
+        this.as_mut().rust_mut().mods_edit = edit;
+        this.as_mut()
+            .set_individual_mods_enabled(state.settings.individual_mods_enabled);
+        this.as_mut().set_mods_loaded(state.loaded);
+        this.as_mut()
+            .set_mods_available(state.loaded && state.target.is_some());
+        this.as_mut()
+            .set_mods_mode(QString::from(match profile.mode {
+                AudioModsMode::None => "none",
+                AudioModsMode::Dt => "dt",
+                AudioModsMode::Ht => "ht",
+            }));
+        this.as_mut()
+            .set_mods_speed_percent(i32::from(profile.speed_percent));
+        this.as_mut().set_mods_adjust_pitch(profile.adjust_pitch);
+        // A failed write stays queued, which the client reports as saving; Retry must stay usable.
+        this.as_mut()
+            .set_mods_saving(state.saving && state.error.is_empty());
+        this.set_mods_message(QString::from(state.error));
+    }
     pub(crate) fn command(&self, command: AppCommand) {
         if let Some(controller) = &self.controller {
             controller.send(command);
         }
     }
+    property_setter!(
+        set_individual_mods_enabled,
+        individual_mods_enabled,
+        individual_mods_enabled_changed,
+        bool
+    );
+    property_setter!(set_mods_loaded, mods_loaded, mods_loaded_changed, bool);
+    property_setter!(
+        set_mods_available,
+        mods_available,
+        mods_available_changed,
+        bool
+    );
+    property_setter!(set_mods_mode, mods_mode, mods_mode_changed, QString);
+    property_setter!(
+        set_mods_speed_percent,
+        mods_speed_percent,
+        mods_speed_percent_changed,
+        i32
+    );
+    property_setter!(
+        set_mods_adjust_pitch,
+        mods_adjust_pitch,
+        mods_adjust_pitch_changed,
+        bool
+    );
+    property_setter!(set_mods_saving, mods_saving, mods_saving_changed, bool);
+    property_setter!(
+        set_mods_message,
+        mods_message,
+        mods_message_changed,
+        QString
+    );
     property_setter!(
         set_discord_rich_presence,
         discord_rich_presence,
@@ -1709,6 +1841,44 @@ impl ffi::SettingsViewModel {
     pub fn retry_audio_settings(self: Pin<&mut Self>) {
         self.command(AppCommand::RetryAudioSettings);
     }
+    pub fn change_individual_mods(self: Pin<&mut Self>, enabled: bool) {
+        self.command(AppCommand::Mods(ModsAction::SetIndividual(enabled)));
+    }
+    /// The editor addresses its edits to the target visible when it opened.
+    pub fn begin_mods_edit(mut self: Pin<&mut Self>) {
+        let target = self.mods_target;
+        self.as_mut().rust_mut().mods_edit = target;
+    }
+    pub fn finish_mods_edit(mut self: Pin<&mut Self>) {
+        if let Some(target) = self.as_mut().rust_mut().mods_edit.take() {
+            self.command(AppCommand::Mods(ModsAction::Finish(target)));
+        }
+    }
+    fn mods_edit_command(&self, edit: ModsEdit) {
+        if let Some(target) = self.mods_edit {
+            self.command(AppCommand::Mods(ModsAction::Edit { target, edit }));
+        }
+    }
+    pub fn cycle_dt_mod(self: Pin<&mut Self>) {
+        self.mods_edit_command(ModsEdit::CycleDt);
+    }
+    pub fn toggle_ht_mod(self: Pin<&mut Self>) {
+        self.mods_edit_command(ModsEdit::ToggleHt);
+    }
+    pub fn set_mod_speed(self: Pin<&mut Self>, percent: i32) {
+        if let Ok(percent) = u16::try_from(percent) {
+            self.mods_edit_command(ModsEdit::SetSpeed(percent));
+        }
+    }
+    pub fn set_mod_adjust_pitch(self: Pin<&mut Self>, adjust: bool) {
+        self.mods_edit_command(ModsEdit::SetAdjustPitch(adjust));
+    }
+    pub fn clear_mods(self: Pin<&mut Self>) {
+        self.mods_edit_command(ModsEdit::Clear);
+    }
+    pub fn retry_mods(self: Pin<&mut Self>) {
+        self.command(AppCommand::Mods(ModsAction::Retry));
+    }
     pub fn select_folder(self: Pin<&mut Self>, id: i32) {
         self.command(AppCommand::SelectFolder((id >= 0).then_some(id)));
     }
@@ -1753,6 +1923,8 @@ pub struct PlayerViewModelRust {
     pub(crate) can_previous: bool,
     pub(crate) playback_position: f64,
     pub(crate) playback_duration: f64,
+    pub(crate) playback_speed_percent: i32,
+    pub(crate) launch_token: u64,
     pub(crate) playback_position_label: QString,
     pub(crate) playback_message: QString,
     pub(crate) selected_cover_id: Option<i32>,
@@ -1782,6 +1954,8 @@ impl Default for PlayerViewModelRust {
             can_previous: false,
             playback_position: 0.0,
             playback_duration: 0.0,
+            playback_speed_percent: 100,
+            launch_token: 0,
             playback_position_label: QString::from("00:00"),
             playback_message: QString::default(),
             selected_cover_id: None,
@@ -1804,6 +1978,13 @@ impl ffi::PlayerViewModel {
         i32
     );
     property_setter!(set_can_play, can_play, can_play_changed, bool);
+    property_setter!(
+        set_playback_speed_percent,
+        playback_speed_percent,
+        playback_speed_percent_changed,
+        i32
+    );
+    property_setter!(set_launch_token, launch_token, launch_token_changed, u64);
     pub(crate) fn project_player(
         mut self: Pin<&mut Self>,
         state: osu_radio_client::view_models::PlayerPresentation,
@@ -1851,14 +2032,13 @@ impl ffi::PlayerViewModel {
             .set_playback_duration(state.duration.map_or(0.0, |d| d.as_secs_f64()));
         self.as_mut()
             .set_playback_position_label(QString::from(format_time(state.position)));
-        let duration = state.duration.or_else(|| {
-            state
-                .selected_track
-                .as_ref()
-                .and_then(|track| track.duration)
-        });
+        self.as_mut()
+            .set_playback_speed_percent(i32::from(state.speed_percent));
+        // Already in the UI timescale, including a selected track that is not sounding.
         self.as_mut().set_selected_duration_label(QString::from(
-            duration.map_or_else(|| "--:--".to_owned(), format_time),
+            state
+                .selected_duration
+                .map_or_else(|| "--:--".to_owned(), format_time),
         ));
         self.set_playback_message(QString::from(state.message));
     }

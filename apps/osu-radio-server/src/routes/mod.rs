@@ -1,3 +1,4 @@
+pub(crate) mod audio_mods;
 pub(crate) mod audio_settings;
 pub(crate) mod beatmap_sets;
 pub(crate) mod folder_selection;
@@ -69,6 +70,14 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/api/playback/commands", post(playback::command))
         .route("/api/beatmap-sets", get(beatmap_sets::list_beatmap_sets))
         .route("/api/user-data", get(user_data::get_user_data))
+        .route(
+            "/api/user-data/audio-mods",
+            get(audio_mods::get).patch(audio_mods::patch),
+        )
+        .route(
+            "/api/audio-sources/{id}/mods",
+            axum::routing::put(audio_mods::put).delete(audio_mods::delete),
+        )
         .route(
             "/api/user-data/audio-settings",
             get(audio_settings::get).patch(audio_settings::patch),
@@ -142,6 +151,8 @@ pub(crate) fn router(state: AppState) -> Router {
         .routes(routes!(media::duration))
         .routes(routes!(media::audio))
         .routes(routes!(user_data::get_user_data))
+        .routes(routes!(audio_mods::get, audio_mods::patch))
+        .routes(routes!(audio_mods::put, audio_mods::delete))
         .routes(routes!(audio_settings::get, audio_settings::patch))
         .routes(routes!(
             audio_settings::put_volume,
@@ -201,6 +212,8 @@ mod tests {
         ("/api/playback/events", &["get"]),
         ("/api/playback/commands", &["post"]),
         ("/api/user-data", &["get"]),
+        ("/api/user-data/audio-mods", &["get", "patch"]),
+        ("/api/audio-sources/{id}/mods", &["put", "delete"]),
         ("/api/user-data/audio-settings", &["get", "patch"]),
         ("/api/user-data/osu-folders", &["get", "post"]),
         ("/api/user-data/osu-folders/{id}", &["patch", "delete"]),

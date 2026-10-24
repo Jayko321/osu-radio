@@ -415,6 +415,7 @@ impl ffi::AppBridge {
             }
             AppUpdate::Queue(state) => self.queue_mut().replace_queue(state),
             AppUpdate::AudioSettings(state) => self.settings_mut().project_audio_settings(state),
+            AppUpdate::AudioMods(state) => self.settings_mut().project_audio_mods(state),
             AppUpdate::SettingsPreferences(state) => self.settings_mut().project_preferences(state),
             AppUpdate::Playlists(state) => self.playlists_mut().project_playlists(&state),
             AppUpdate::PlaylistCover {
@@ -435,8 +436,10 @@ impl ffi::AppBridge {
                 self.as_mut()
                     .player_mut()
                     .set_current_audio_id(state.current_audio_id.unwrap_or(-1));
-                self.player_mut()
+                self.as_mut()
+                    .player_mut()
                     .set_loading_audio_id(state.loading_audio_id.unwrap_or(-1));
+                self.player_mut().set_launch_token(state.playback_token);
             }
             AppUpdate::Connection(status) => self.project_connection(status),
             AppUpdate::LibraryStatus(status) => self.library_mut().project_status(status),
@@ -781,6 +784,7 @@ mod tests {
             selected_track: Some(selected),
             can_play: true,
             position: Duration::ZERO,
+            selected_duration: Some(Duration::from_secs(91)),
             ..Default::default()
         }));
         assert_eq!(bridge.player_ref().selected_audio_id, 42);
@@ -796,6 +800,7 @@ mod tests {
             can_seek: true,
             position: Duration::from_secs(23),
             duration: Some(Duration::from_secs(95)),
+            selected_duration: Some(Duration::from_secs(95)),
             ..Default::default()
         }));
         assert!(bridge.player_ref().selected_is_playing && bridge.player_ref().can_seek);

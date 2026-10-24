@@ -15,12 +15,14 @@ pub(super) fn assignment(
         availability: None,
         waiting_for_check: false,
         volume_percent: None,
+        mods: None,
         current_audio_source_id: Some(id),
         current_playlist_item_id: None,
         track: Some(LibraryTrack {
             audio_source_id: id,
             last_played_at_ms: None,
             volume_percent: None,
+            mods: None,
             title: Some(format!("Track {id}")),
             title_unicode: None,
             artist: Some("Artist".into()),
@@ -65,6 +67,7 @@ pub(super) fn queue_entry(track: LibraryTrack, position: usize) -> crate::models
         availability: crate::models::QueueAvailability::Available,
         last_played_at_ms: track.last_played_at_ms,
         volume_percent: track.volume_percent,
+        mods: track.mods,
     }
 }
 

@@ -215,6 +215,9 @@ impl Session {
     }
 
     fn publish(&mut self, snapshot: &Snapshot, artwork: &mut ArtworkStore) -> WinResult<()> {
+        snapshot
+            .validate_rate()
+            .map_err(|error| windows::core::Error::new(E_INVALIDARG, error.to_string()))?;
         let capabilities = snapshot.capabilities;
         self.controls.SetIsPlayEnabled(capabilities.play)?;
         self.controls.SetIsPauseEnabled(capabilities.pause)?;
@@ -228,6 +231,7 @@ impl Session {
         self.controls.SetIsChannelDownEnabled(false)?;
         self.controls
             .SetPlaybackStatus(playback_status(snapshot.status))?;
+        self.controls.SetPlaybackRate(snapshot.rate)?;
 
         let display_changed = self.last.as_ref().is_none_or(|last| {
             last.launch != snapshot.launch

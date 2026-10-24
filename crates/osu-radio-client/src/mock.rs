@@ -5,8 +5,10 @@
 
 use crate::view_models::TrackSort;
 use serde::Serialize;
+mod mods;
 mod playlists;
 mod queue;
+pub use mods::MockAudioMods;
 pub use playlists::MockPlaylists;
 pub use queue::MockQueue;
 
@@ -24,6 +26,8 @@ pub struct MockTrack {
 pub struct MockState {
     #[serde(skip)]
     pub queue: MockQueue,
+    #[serde(skip)]
+    pub mods: MockAudioMods,
     pub tracks: Vec<MockTrack>,
     pub track_sort: TrackSort,
     pub selected: usize,
@@ -93,6 +97,7 @@ fn folder_rows() -> Vec<MockFolderRow> {
 /// Frontends translate their events to these toolkit-independent actions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    Mods(crate::view_models::ModsAction),
     Queue(crate::view_models::QueueAction),
     QueueChecked {
         id: crate::models::QueueEntryId,
@@ -127,6 +132,7 @@ impl Default for MockState {
     fn default() -> Self {
         let mut state = Self {
             queue: MockQueue::default(),
+            mods: MockAudioMods::default(),
             tracks: [
                 (1, "Karakara", "Kessoku Band", "結束バンド", 265),
                 (2, "Alice", "FELT", "Bundled sample", 238),
@@ -156,6 +162,7 @@ impl Default for MockState {
         };
         state.sort_tracks();
         state.selected = 0;
+        state.sync_mods_selection();
         state
     }
 }
@@ -246,6 +253,17 @@ impl GalleryState {
 }
 
 impl MockState {
+    fn sync_mods_selection(&mut self) {
+        let view = &self.gallery.playlists.view;
+        let id = if view.showing_detail() {
+            view.selected_item().and_then(|item| item.audio_source_id)
+        } else {
+            self.tracks
+                .get(self.selected)
+                .and_then(|track| i32::try_from(track.id).ok())
+        };
+        self.mods.select(id);
+    }
     fn sort_tracks(&mut self) {
         let selected = self.tracks.get(self.selected).map(|track| track.id);
         self.tracks.sort_by_cached_key(|track| {
@@ -272,7 +290,11 @@ impl MockState {
     pub fn apply(&mut self, action: Action) -> bool {
         match action {
             Action::SelectTrack(index) => {
-                index < self.tracks.len() && replace(&mut self.selected, index)
+                if index >= self.tracks.len() || !replace(&mut self.selected, index) {
+                    return false;
+                }
+                self.sync_mods_selection();
+                true
             }
             Action::SetTrackSort(sort) => {
                 if !replace(&mut self.track_sort, sort) {
@@ -284,6 +306,7 @@ impl MockState {
             Action::Search(value) => replace(&mut self.search, value),
             Action::GalleryDisabled(value) => replace(&mut self.gallery.disabled, value),
             _ if self.gallery.disabled => false,
+            Action::Mods(action) => self.mods.apply(action),
             Action::Queue(action) => {
                 self.queue.apply(action, &self.gallery.playlists);
                 true
@@ -300,7 +323,13 @@ impl MockState {
                 self.queue.append_playlist(id, &self.gallery.playlists);
                 true
             }
-            Action::Playlist(action) => self.gallery.playlists.apply(action),
+            Action::Playlist(action) => {
+                let changed = self.gallery.playlists.apply(action);
+                if changed {
+                    self.sync_mods_selection();
+                }
+                changed
+            }
             Action::FolderReset => {
                 self.gallery.folder_rows = folder_rows();
                 self.gallery.folder_message.clear();

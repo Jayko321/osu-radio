@@ -1,3 +1,4 @@
+pub(crate) mod audio_mods;
 pub(crate) mod audio_source;
 pub(crate) mod audio_volume;
 pub(crate) mod beatmap;

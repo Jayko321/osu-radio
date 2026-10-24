@@ -22,7 +22,7 @@ migration for subsequent changes.
 
 | Table | Identity and relationships |
 | --- | --- |
-| `user_data` | Singleton settings anchor, primary key constrained to `1`; individual volume mode and global volume percentage. |
+| `user_data` | Singleton settings anchor, primary key constrained to `1`; independent individual volume/mods modes, global volume percentage and global mods profile. |
 | `osu_installations` | Generated `i32` ID; required settings owner; unique marker path; kind, root/marker paths, label, enabled flag and last-scanned timestamp. |
 | `beatmap_sets` | Generated `i32` ID; required installation; optional online ID and source hash. |
 | `beatmaps` | Generated `i32` ID; required set; difficulty, BPM, native source hash and nullable indexed MD5; optional independent metadata and audio references. Source kind is derived from the installation. |
@@ -31,6 +31,7 @@ migration for subsequent changes.
 | `beatmap_set_tags` | Composite primary key `(beatmap_set_id, tag_id)`; set cascade, restrictive tag reference, index on `tag_id`. |
 | `audio_sources` | Generated `i32` ID; globally unique `(kind, location)`; `local`, `copied`, or `online`. |
 | `audio_volume` | Composite primary key `(audio_kind, source_location)` and absolute integer `volume_percent` in 0–100. No library foreign key. |
+| `audio_mods` | Composite primary key `(audio_kind, source_location)` and checked mode/speed/pitch profile. No library foreign key. |
 | `listening_history` | Composite primary key `(audio_kind, source_location)` using the audio source's existing identity; UTC millisecond timestamp and last acknowledged playback token. No library foreign key. |
 | `playback_queue` | Singleton `id = 1`; nullable current entry ID, `history_len` boundary, playback mode, persisted `waiting_for_check`, nullable launch audio ID/kind/location/generation without foreign keys, BIGINT revision/token and retained last issued entry ID. |
 | `queue_entries` | Positive permanent BIGINT ID; unique dense position, independent audio/playlist source keys, nullable advisory IDs, ordinary/Unicode caption and difficulty snapshots, availability and check generation. No library/playlist foreign keys or deletion cascades. |
@@ -125,6 +126,7 @@ there are no new standalone beatmap or set creation workflows.
 | `tags()` | `all`, `get`, `for_set`; lists use `ORDER BY name ASC` with SQLite `BINARY` / PostgreSQL `C`. |
 | `audio_sources()` | `get`, `find`, `get_or_insert`. |
 | `audio_settings()` | `get`, `update`, `set_volume`; settings and durable per-audio overrides. |
+| `audio_mods()` | `get`, `update(AudioModsPatch)`, `set_profile(id, Option<AudioModsProfile>)`; independent global settings and durable individual profiles. |
 | `queue()` | `get`, `snapshot`, `upcoming`, `playback`, `insert`, `append`, `play_entry`, `move_entry`, `remove_entry`, `clear_upcoming`, `clear`, `pending_checks`, `apply_check`, `command`, `recover`; one persistent server queue. |
 | `playlists()` | `all`, `get`, `create`, `rename`, `delete`, `add_items`, `remove_item`, `play`, `cover`, `set_cover`, `clear_cover`, `append_to_queue`; concrete difficulties with source-stable membership. |
 
@@ -356,6 +358,53 @@ seven-migration upgrade, constraints, read snapshots, rollback, reopen, native
 keys, source removal/return, batching and reset on SQLite/PostgreSQL.
 [Service checks](../../crates/radio-services/src/tests/audio_settings.rs) cover
 shared difficulty/playlist projections, retained overrides and reimport.
+
+## Audio mods
+
+The additive [v15 migration](../../crates/radio-db/src/migrations/m20261020_000015_audio_mods.rs)
+adds global settings to `user_data` and source-keyed `audio_mods`. Ordinary startup
+migrates without resetting existing library, queue, playlists, history or volume.
+Explicit reset includes the new table. Profiles survive library cleanup and
+reimport under the same `(audio_kind, source_location)`; changing either component
+creates a different identity.
+
+[AudioModsProfile](../../crates/radio-db/src/model/audio_mods.rs) contains
+`AudioModsMode::{None, Dt, Ht}`, integer `speed_percent: u16` and `adjust_pitch: bool`.
+None requires 100/false, DT requires 101–200 and HT 50–99; NC is DT with pitch
+enabled. Both repositories and SQL constraints validate complete profiles.
+`AudioModsSettings` contains `individual_mods_enabled` (initially false) and
+`global_profile` (initially None/100/false).
+
+[AudioModsService](../../crates/radio-services/src/audio_mods.rs) merges optional
+`AudioModsPatch` fields `individual_mods_enabled`, `global_mode`,
+`global_speed_percent`, `global_adjust_pitch` under the singleton writer lock.
+Omission preserves stored values, including speed/pitch when changing mode;
+the entire merged profile must be valid before any settings write. No implicit
+mode defaults or NC conversion occur in the service. `set_profile(id, Some(profile))`
+replaces a complete individual profile; `None` deletes it idempotently for an
+existing audio ID. Both operations return typed `AudioModsError` variants
+`InvalidProfile` / `UnknownAudio(id)` and commit only at the outer service boundary.
+Changing application mode retains global and individual profiles and leaves volume
+settings, queue revision and playback token untouched.
+
+`LibraryTrack`, `PlaylistItem`, `QueueSnapshotEntry`, and `PlaybackAssignment`
+(including its nested track) expose nullable `mods: Option<AudioModsProfile>`.
+These are saved individual profiles even when individual mode is disabled;
+missing profiles never inherit global settings. The client will resolve effective
+settings in the subsequent client work. Profiles are loaded in the same read
+transaction as metadata. Full queue entries use saved entry source keys, including
+unavailable entries. Current assignments use `QueueLaunchSource` even after the
+queue entry binds to a different source. Unresolved playlist items have no profile.
+The legacy upcoming-track projection also fills profiles in its read transaction.
+HTTP/client wiring and actual audio processing are separate implementation cards.
+
+[Repository contracts](../../crates/radio-db/src/tests/audio_mods.rs) cover populated
+v14 upgrade, reopen, batched reads on one snapshot, rollback, constraints,
+downgrade/upgrade and reset. [Service contracts](../../crates/radio-services/src/tests/audio_mods.rs)
+cover partial writes, independent modes, shared difficulties/playlists, removal and
+reimport; the [queue source contracts](../../crates/radio-services/src/tests/queue_t04.rs)
+distinguish the old launch profile from the rebound entry profile. These checks
+use disposable databases and do not establish HTTP, DSP or native user acceptance.
 
 ## Listening history
 

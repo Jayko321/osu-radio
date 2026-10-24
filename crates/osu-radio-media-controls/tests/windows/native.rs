@@ -130,6 +130,7 @@ fn initial() -> Snapshot {
 #[test]
 #[ignore = "opt-in Windows desktop probe: owns a real hidden top-level HWND"]
 #[allow(clippy::too_many_lines)] // One native window/session lifecycle, including cleanup assertions.
+#[allow(clippy::float_cmp)] // Read back the exact rate passed to SMTC.
 fn real_hwnd_publish_clear_artwork_and_acknowledged_shutdown() -> TestResult {
     unsafe {
         RoInitialize(RO_INIT_MULTITHREADED)?;
@@ -153,6 +154,7 @@ fn real_hwnd_publish_clear_artwork_and_acknowledged_shutdown() -> TestResult {
         })
         .await?;
         assert!(native.IsEnabled()?);
+        assert_eq!(native.PlaybackRate()?, 1.0);
         assert_eq!(native.PlaybackStatus()?, MediaPlaybackStatus::Playing);
         assert!(native.IsPlayEnabled()?);
         assert!(native.IsPauseEnabled()?);
@@ -161,6 +163,27 @@ fn real_hwnd_publish_clear_artwork_and_acknowledged_shutdown() -> TestResult {
         let updater = native.DisplayUpdater()?;
         assert_eq!(updater.MusicProperties()?.Title()?, "曲 A");
         assert_eq!(updater.MusicProperties()?.Artist()?, "Исполнитель A");
+
+        for (status, native_status) in [
+            (PlaybackStatus::Playing, MediaPlaybackStatus::Playing),
+            (PlaybackStatus::Paused, MediaPlaybackStatus::Paused),
+        ] {
+            for rate in [0.75, 1.2, 1.5] {
+                snapshot.status = status;
+                snapshot.rate = rate;
+                assert!(controls.publish(snapshot.clone()));
+                until(|| {
+                    Ok(native.PlaybackRate()? == rate && native.PlaybackStatus()? == native_status)
+                })
+                .await?;
+                assert_eq!(updater.MusicProperties()?.Title()?, "曲 A");
+            }
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_millis(120), events.recv())
+                .await
+                .is_err()
+        );
 
         let png: &[u8] = include_bytes!("cover.png");
         snapshot.artwork = Some(Artwork {

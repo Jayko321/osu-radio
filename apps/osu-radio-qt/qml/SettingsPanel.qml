@@ -13,11 +13,12 @@ Item {
     readonly property bool foldersMatch: matches(generalSettingsHeader.text, foldersLabel.text)
     readonly property bool individualVolumeMatches: matches(audioSettingsHeader.text, individualVolumeSwitch.text)
     readonly property bool globalVolumeMatches: settingsPane.bridge.settings.individualVolumeEnabled && matches(audioSettingsHeader.text, globalVolumeLabel.settingName)
+    readonly property bool individualModsMatches: matches(audioSettingsHeader.text, individualModsSwitch.text)
     readonly property bool discordMatches: matches("Integrations", "Discord Rich Presence")
     readonly property bool versionMatches: matches(aboutSettingsHeader.text, aboutVersion.settingName)
     readonly property bool licenseMatches: matches(aboutSettingsHeader.text, aboutLicense.settingName)
     readonly property bool projectMatches: matches(aboutSettingsHeader.text, aboutProjectLabel.text)
-    readonly property bool hasMatches: foldersMatch || individualVolumeMatches || globalVolumeMatches || discordMatches || versionMatches || licenseMatches || projectMatches
+    readonly property bool hasMatches: foldersMatch || individualVolumeMatches || globalVolumeMatches || individualModsMatches || discordMatches || versionMatches || licenseMatches || projectMatches
     function matches(section: string, setting: string): bool {
         return query.length === 0 || section.toLowerCase().includes(query) || setting.toLowerCase().includes(query);
     }
@@ -240,7 +241,7 @@ Item {
             }
             Column {
                 objectName: "audioSettingsSection"
-                visible: settingsPane.individualVolumeMatches || settingsPane.globalVolumeMatches
+                visible: settingsPane.individualVolumeMatches || settingsPane.globalVolumeMatches || settingsPane.individualModsMatches
                 width: parent.width
                 spacing: 24
                 Row {
@@ -302,6 +303,37 @@ Item {
                             Accessible.name: "Global volume"
                             onMoved: settingsPane.bridge.settings.setGlobalVolume(Math.round(value))
                         }
+                    }
+                    AppSwitch {
+                        id: individualModsSwitch
+                        objectName: "individualModsSwitch"
+                        visible: settingsPane.individualModsMatches
+                        width: parent.width
+                        height: 44
+                        text: "Individual track mods"
+                        font.family: settingsPane.fontFamily
+                        font.pixelSize: 16
+                        checked: settingsPane.bridge.settings.individualModsEnabled
+                        enabled: settingsPane.bridge.connected && settingsPane.bridge.settings.modsLoaded
+                        onToggled: settingsPane.bridge.settings.setIndividualModsEnabled(checked)
+                    }
+                    Text {
+                        objectName: "modsSettingsMessage"
+                        width: parent.width
+                        text: settingsPane.bridge.settings.modsMessage || (settingsPane.bridge.settings.modsSaving ? "Saving mod settings…" : "")
+                        visible: settingsPane.individualModsMatches && text.length > 0
+                        color: Theme.text
+                        font.family: settingsPane.fontFamily
+                        font.pixelSize: 14
+                        wrapMode: Text.Wrap
+                    }
+                    AppButton {
+                        objectName: "retryMods"
+                        text: "Retry"
+                        font.family: settingsPane.fontFamily
+                        visible: settingsPane.individualModsMatches && settingsPane.bridge.settings.modsMessage.length > 0
+                        enabled: settingsPane.bridge.connected
+                        onClicked: settingsPane.bridge.settings.retryMods()
                     }
                     Text {
                         objectName: "audioSettingsMessage"

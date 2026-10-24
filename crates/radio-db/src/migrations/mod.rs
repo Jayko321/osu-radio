@@ -18,6 +18,8 @@ mod m20261016_000012_queue_entries;
 mod m20261016_000013_queue_waiting;
 mod m20261016_000014_queue_launch_source;
 
+mod m20261020_000015_audio_mods;
+
 pub(crate) struct Migrator;
 
 #[async_trait::async_trait]
@@ -38,6 +40,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261016_000012_queue_entries::Migration),
             Box::new(m20261016_000013_queue_waiting::Migration),
             Box::new(m20261016_000014_queue_launch_source::Migration),
+            Box::new(m20261020_000015_audio_mods::Migration),
         ]
     }
 }
@@ -46,6 +49,7 @@ impl MigratorTrait for Migrator {
 const APPLICATION_TABLES: &[&str] = &[
     "queue_entries",
     "audio_volume",
+    "audio_mods",
     "listening_history",
     "playlist_items",
     "playlists",

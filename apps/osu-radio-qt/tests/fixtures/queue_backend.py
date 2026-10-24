@@ -17,6 +17,11 @@ import urllib.request
 import wave
 
 
+MODS = {"mode": "dt", "speed_percent": 120, "adjust_pitch": True}
+GLOBAL_MODS = {"individual_mods_enabled": True,
+               "global_profile": {"mode": "dt", "speed_percent": 130, "adjust_pitch": False}}
+
+
 def request(base, method, path, body=None):
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(base + path, data=data, method=method,
@@ -115,6 +120,9 @@ def prepare(binary, root):
         request(base, "POST", f'/api/playlists/{other["id"]}/items',
                 {"beatmap_ids": [b["difficulties"][0]["beatmap_id"]]})
         request(base, "PUT", f'/api/audio-sources/{tracks[0]["audio_source_id"]}/volume', {"volume_percent": 29})
+        request(base, "PATCH", "/api/user-data/audio-mods",
+                {"individual_mods_enabled": True, "global_mode": "dt", "global_speed_percent": 130})
+        request(base, "PUT", f'/api/audio-sources/{tracks[0]["audio_source_id"]}/mods', MODS)
         main = request(base, "GET", f'/api/playlists/{main["id"]}')
     # Only the ID allocator is seeded directly, after shutdown. Every entry and
     # transition below is created through HTTP, exercising real BIGINT transport.
@@ -132,6 +140,9 @@ def prepare(binary, root):
         assert queue["current_entry_id"] == current and queue["history_len"] == 1
         assert all(int(e["id"]) > 2**53 for e in queue["entries"])
         assert all(e["last_played_at_ms"] is None for e in queue["entries"])
+        # Only A's audio has its own profile; the rest have none, whatever the global set is.
+        mods = {e["audio_source_id"]: e["mods"] for e in queue["entries"]}
+        assert mods.pop(tracks[0]["audio_source_id"]) == MODS and not any(mods.values())
         assert request(base, "GET", "/api/queue") == queue, "GET must be pure"
     (root / "queue_fixture.json").write_text(json.dumps({"folder": folder, "tracks": tracks,
                                                         "main": main, "other": other, "queue": queue}))
@@ -147,9 +158,11 @@ def verify(binary, root):
         tracks = request(base, "GET", "/api/tracks")
         assert all(t["last_played_at_ms"] is None for t in tracks)
         assert tracks[0]["volume_percent"] == 29
+        assert tracks[0]["mods"] == MODS and all(t["mods"] is None for t in tracks[1:])
+        assert request(base, "GET", "/api/user-data/audio-mods") == GLOBAL_MODS
         assert request(base, "GET", "/api/playback")["mode"] == "stopped"
     assert (root / "source/A.wav").is_file()
-    print("Real queue fixture: persistence, library, playlists, dates and volume passed")
+    print("Real queue fixture: persistence, library, playlists, dates, volume and mods passed")
 
 
 if __name__ == "__main__":

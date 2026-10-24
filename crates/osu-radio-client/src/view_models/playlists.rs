@@ -122,6 +122,7 @@ impl PlaylistItem {
             audio_source_id: self.audio_source_id.unwrap_or(-1),
             last_played_at_ms: self.last_played_at_ms,
             volume_percent: self.volume_percent,
+            mods: self.mods,
             title: self.title.clone(),
             title_unicode: self.title_unicode.clone(),
             artist: self.artist.clone(),

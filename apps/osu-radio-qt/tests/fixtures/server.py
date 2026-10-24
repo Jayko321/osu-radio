@@ -25,11 +25,23 @@ audio_settings = {"individual_volume_enabled": False, "global_volume_percent": 1
 audio_volumes = {}
 volume_loads = 0
 volume_puts = 0
+audio_mods = {"individual_mods_enabled": False,
+              "global_profile": {"mode": "none", "speed_percent": 100, "adjust_pitch": False}}
+track_mods = {}
+mods_loads = 0
+mods_writes = 0
+if case == "mods":
+    # B (42) already has its own DT 1.50x; A (7) and 103 have none.
+    track_mods[42] = {"mode": "dt", "speed_percent": 150, "adjust_pitch": False}
 if case == "volume":
     audio_settings["global_volume_percent"] = 20
 playlists = {}
 playlist_covers = {}
 cover_puts = 0
+
+
+def save_mods():
+    (root / "audio-mods.json").write_text(json.dumps({"settings": audio_mods, "tracks": track_mods}))
 
 def make_png(width, height, color=(80, 100, 120), rgba=False):
     def chunk(kind, data):
@@ -97,7 +109,7 @@ def folder(identifier):
 def library(ids):
     tracks = [{"audio_source_id": i, "title": "Track " + str(i), "title_unicode": None,
              "artist": "Fixture artist", "artist_unicode": None, "cover_beatmap_id": i,
-             "volume_percent": audio_volumes.get(i),
+             "volume_percent": audio_volumes.get(i), "mods": track_mods.get(i),
              "difficulties": [{"beatmap_id": i, "beatmap_set_id": 1, "difficulty_name": "Hard",
                                "set_has_multiple_audio_sources": True}]} for i in ids]
     if case == "sorting":
@@ -122,7 +134,7 @@ def library(ids):
     return tracks
 
 
-queue = ([1] + list(range(101, 117))) if case == "visual-flicker" else [7, 42, 103] if case in ("queue", "volume", "visual-queue") else []
+queue = ([1] + list(range(101, 117))) if case == "visual-flicker" else [7, 42, 103] if case in ("queue", "volume", "mods", "visual-queue") else []
 queue_index = 0
 queue_ids = [str(i + 1) for i in range(len(queue))]
 queue_availability = {}
@@ -378,7 +390,20 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/queue/"):
             self.reply(*queue_operation("PATCH", self.path, body))
             return
-        if self.path == "/api/user-data/audio-settings":
+        if self.path == "/api/user-data/audio-mods":
+            global mods_writes
+            mods_writes += 1
+            if case == "mods" and mods_writes == 1:
+                self.reply(500, {"error": "fixture mods save unavailable"})
+                return
+            if "individual_mods_enabled" in body:
+                audio_mods["individual_mods_enabled"] = body["individual_mods_enabled"]
+            for key, field in (("global_mode", "mode"), ("global_speed_percent", "speed_percent"), ("global_adjust_pitch", "adjust_pitch")):
+                if key in body:
+                    audio_mods["global_profile"][field] = body[key]
+            save_mods()
+            self.reply(200, json.loads(json.dumps(audio_mods)))
+        elif self.path == "/api/user-data/audio-settings":
             audio_settings.update(body)
             (root / "audio-settings.json").write_text(json.dumps(audio_settings))
             self.reply(200, dict(audio_settings))
@@ -408,6 +433,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
         identifier = int(self.path.split("/")[3])
+        if self.path.endswith("/mods"):
+            global mods_writes
+            mods_writes += 1
+            if case == "mods" and mods_writes == 1:
+                self.reply(500, {"error": "fixture mods save unavailable"})
+                return
+            track_mods[identifier] = body
+            save_mods()
+            self.send_response(204)
+            self.end_headers()
+            return
         volume_puts += 1
         if case == "volume" and volume_puts == 1:
             self.reply(500, {"error": "fixture volume save unavailable"})
@@ -430,6 +466,12 @@ class Handler(BaseHTTPRequestHandler):
                 playlists[identifier].pop("cover_revision", None)
             else:
                 playlists.pop(identifier, None)
+            self.send_response(204)
+            self.end_headers()
+            return
+        if self.path.endswith("/mods"):
+            track_mods.pop(int(self.path.split("/")[3]), None)
+            save_mods()
             self.send_response(204)
             self.end_headers()
             return
@@ -474,6 +516,13 @@ class Handler(BaseHTTPRequestHandler):
                 payload = playlists[identifier]
             else:
                 status, payload = 404, {"error": "Playlist missing"}
+        elif self.path == "/api/user-data/audio-mods":
+            global mods_loads
+            mods_loads += 1
+            if case == "mods" and mods_loads == 1:
+                self.reply(500, {"error": "fixture mods load unavailable"})
+                return
+            payload = audio_mods
         elif self.path == "/api/user-data/audio-settings":
             volume_loads += 1
             if case == "volume" and volume_loads == 1:
@@ -490,7 +539,7 @@ class Handler(BaseHTTPRequestHandler):
                 for position, audio in enumerate(queue):
                     track = library([audio])[0] if audio is not None else {"title": "Retained unavailable title", "artist": "Retained artist"}
                     difficulty = track.get("difficulties", [{}])[0]
-                    entries.append({key: track.get(key) for key in ("audio_source_id", "title", "title_unicode", "artist", "artist_unicode", "cover_beatmap_id", "last_played_at_ms", "volume_percent")})
+                    entries.append({key: track.get(key) for key in ("audio_source_id", "title", "title_unicode", "artist", "artist_unicode", "cover_beatmap_id", "last_played_at_ms", "volume_percent", "mods")})
                     entries[-1].update(id=queue_ids[position], position=position, playlist_item_id=88 if audio == 42 else None,
                                        beatmap_id=difficulty.get("beatmap_id"), beatmap_set_id=difficulty.get("beatmap_set_id"),
                                        difficulty_name=difficulty.get("difficulty_name"), availability=queue_availability.get(queue_ids[position], "available"))
@@ -544,7 +593,7 @@ class Handler(BaseHTTPRequestHandler):
                     status, payload = 500, {"message": "visual fixture error: " + "Длинное описание ошибки / 日本語 / " * 6}
                 else:
                     payload = library([] if query == "missing" else [7, 42, 103] + list(range(200, 225)))
-            elif case in ("playback", "folders", "sorting", "volume", "playlist-covers", "playlist-cover-preview", "settings-search") or case.startswith("native"):
+            elif case in ("playback", "folders", "sorting", "volume", "mods", "playlist-covers", "playlist-cover-preview", "settings-search") or case.startswith("native"):
                 payload = library([7, 42, 103])
             elif case == "search":
                 query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
@@ -577,7 +626,7 @@ class Handler(BaseHTTPRequestHandler):
                 with (root / "media-events").open("a") as log:
                     log.write(str(round(time.time() * 1000)) + " duration " + str(identifier) + "\n")
                 time.sleep(1.6 if identifier == 1 else 0.10)
-            payload = {"duration_ms": 261000 if case == "visual-queue" else 125000}
+            payload = {"duration_ms": 261000 if case == "visual-queue" else 240000 if case == "mods" else 125000}
         elif self.path.endswith("/cover") and case == "visual-flicker":
             identifier = int(self.path.split("/")[-2])
             with (root / "media-events").open("a") as log:

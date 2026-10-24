@@ -18,6 +18,10 @@ Basic.ApplicationWindow {
     font.family: Theme.fontFamily
     font.pixelSize: 16
     readonly property var demo: store.state.gallery
+    readonly property var mods: store.state.mods
+    // Another selection or mode is another addressee: end editing like the live player.
+    readonly property string modsAddressee: store.state.selected + ":" + mods.individual
+    onModsAddresseeChanged: demoMods.close()
     property int selectedTab: 0
     readonly property var playlistView: store.state.playlists
     onPlaylistViewChanged: {
@@ -121,6 +125,42 @@ Basic.ApplicationWindow {
                             AppButton { variant: "accent"; text: "Disabled"; enabled: false }
                             IconButton { iconName: "play"; accessibleName: "Playback unavailable"; enabled: false }
                         }
+                    }
+
+                    DemoSection {
+                        Heading { text: "Mods" }
+                        Row {
+                            spacing: 12
+                            AppButton {
+                                id: modsOpener
+                                objectName: "galleryModsButton"
+                                text: "Mods (F1)"
+                                onClicked: demoMods.open()
+                                AudioModsPopup {
+                                    id: demoMods
+                                    objectName: "galleryModsPopup"
+                                    y: parent.height + 8
+                                    mode: root.mods.mode
+                                    speedPercent: root.mods.speed_percent
+                                    adjustPitch: root.mods.adjust_pitch
+                                    available: root.mods.available
+                                    onAboutToShow: store.send("modsBegin")
+                                    onClosed: store.send("modsFinish")
+                                    onDtCycleRequested: store.send("modsCycleDt")
+                                    onHtToggleRequested: store.send("modsToggleHt")
+                                    onSpeedRequested: percent => store.send("modsSpeed", percent)
+                                    onPitchRequested: adjust => store.send("modsPitch", adjust)
+                                    onClearRequested: store.send("modsClear")
+                                }
+                            }
+                            AppSwitch {
+                                objectName: "galleryIndividualMods"
+                                text: "Individual track mods"
+                                checked: root.mods.individual
+                                onToggled: store.send("modsIndividual", checked)
+                            }
+                        }
+                        Caption { text: "Same popup and rules as the player, in memory. D cycles DT / NC and E toggles HT while it is open." }
                     }
 
                     DemoSection {
@@ -375,7 +415,7 @@ Basic.ApplicationWindow {
                         width: parent.width
                         spacing: 20
                         Repeater {
-                            model: ["music", "arrow-left", "settings", "search", "chevron-down", "pencil", "plus", "circle-plus", "layers", "play", "skip-back", "skip-forward", "shuffle", "repeat-2", "volume-2", "rotate-cw", "minus", "square", "copy", "x"]
+                            model: ["music", "arrow-left", "settings", "search", "chevron-down", "pencil", "plus", "circle-plus", "layers", "play", "skip-back", "skip-forward", "shuffle", "repeat-2", "volume-2", "gauge", "rotate-cw", "minus", "square", "copy", "x"]
                             Column {
                                 id: iconSample
                                 required property string modelData

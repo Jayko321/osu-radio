@@ -4,8 +4,9 @@ use crate::runtime::ffi as native;
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::{QString, QVariant};
 use osu_radio_client::mock::{Action, MockState};
-use osu_radio_client::models::{QueueItemRef, QueuePlacement};
+use osu_radio_client::models::{AudioModsMode, QueueItemRef, QueuePlacement};
 use osu_radio_client::view_models::{PlaylistAction, QueueAction};
+use osu_radio_client::{ModsAction, ModsEdit, ModsEditTarget};
 use serde_json::json;
 use std::pin::Pin;
 
@@ -35,6 +36,8 @@ pub mod ffi {
 pub struct MockBridgeRust {
     state_json: QString,
     state: MockState,
+    /// Captured when the demo popup opens, like the live Settings adapter.
+    mods_edit: Option<ModsEditTarget>,
     model: cxx::UniquePtr<crate::qt_view_models::ffi::TrackListModel>,
 }
 
@@ -61,6 +64,7 @@ fn snapshot(state: &MockState) -> QString {
         "filtered_playlists": state.gallery.playlists.view.filtered_playlists(),
         "playlist_cover_present": state.gallery.playlists.view.editor_cover_png.is_some(),
         "track_sort_index": crate::app_bridge::track_sort_index(state.track_sort),
+        "mods": mods_snapshot(state),
     });
     let results = json!(
         state
@@ -88,7 +92,43 @@ impl Default for MockBridgeRust {
             model,
             state_json: snapshot(&state),
             state,
+            mods_edit: None,
         }
+    }
+}
+
+fn mods_snapshot(state: &MockState) -> serde_json::Value {
+    let mods = state.mods.state();
+    json!({
+        "individual": mods.settings.individual_mods_enabled,
+        "available": mods.target.is_some(),
+        "mode": match mods.selected_profile.mode {
+            AudioModsMode::None => "none",
+            AudioModsMode::Dt => "dt",
+            AudioModsMode::Ht => "ht",
+        },
+        "speed_percent": mods.selected_profile.speed_percent,
+        "adjust_pitch": mods.selected_profile.adjust_pitch,
+    })
+}
+
+/// Gallery mods actions mirror the live `SettingsViewModel` invokables; edits need the captured target.
+fn mods_action(action: &str, value: &str, target: Option<ModsEditTarget>) -> Option<Action> {
+    let edit = |edit| {
+        Some(Action::Mods(ModsAction::Edit {
+            target: target?,
+            edit,
+        }))
+    };
+    match action {
+        "modsIndividual" => Some(Action::Mods(ModsAction::SetIndividual(value.parse().ok()?))),
+        "modsFinish" => Some(Action::Mods(ModsAction::Finish(target?))),
+        "modsCycleDt" => edit(ModsEdit::CycleDt),
+        "modsToggleHt" => edit(ModsEdit::ToggleHt),
+        "modsSpeed" => edit(ModsEdit::SetSpeed(value.parse().ok()?)),
+        "modsPitch" => edit(ModsEdit::SetAdjustPitch(value.parse().ok()?)),
+        "modsClear" => edit(ModsEdit::Clear),
+        _ => None,
     }
 }
 
@@ -219,7 +259,21 @@ impl ffi::MockBridge {
         std::ptr::from_ref(&*self.model).cast_mut()
     }
     pub fn dispatch(mut self: Pin<&mut Self>, action: &QString, value: &QString) {
-        let Some(action) = action_from_qml(&String::from(action), String::from(value)) else {
+        let (action, value) = (String::from(action), String::from(value));
+        let action = if action == "modsBegin" {
+            let target = self.state.mods.state().target;
+            self.as_mut().rust_mut().mods_edit = target;
+            return;
+        } else if action.starts_with("mods") {
+            let target = self.mods_edit;
+            if action == "modsFinish" {
+                self.as_mut().rust_mut().mods_edit = None;
+            }
+            mods_action(&action, &value, target)
+        } else {
+            action_from_qml(&action, value)
+        };
+        let Some(action) = action else {
             return;
         };
         if self.as_mut().rust_mut().state.apply(action) {
@@ -253,6 +307,26 @@ mod tests {
         ] {
             assert!(action_from_qml(action, value.to_owned()).is_none());
         }
+    }
+
+    #[test]
+    fn mods_edits_need_the_captured_target_and_reject_stale_ones() {
+        let mut state = MockState::default();
+        let target = state.mods.state().target;
+        assert!(mods_action("modsCycleDt", "", None).is_none());
+        assert!(mods_action("modsSpeed", "fast", target).is_none());
+        assert!(mods_action("missing", "", target).is_none());
+        let Some(action) = mods_action("modsCycleDt", "", target) else {
+            panic!("typed edit");
+        };
+        assert!(state.apply(action));
+        assert_eq!(mods_snapshot(&state)["mode"], "dt");
+        let Some(late) = mods_action("modsClear", "", target) else {
+            panic!("typed edit");
+        };
+        assert!(state.apply(Action::SelectTrack(1)));
+        assert!(!state.apply(late));
+        assert_eq!(mods_snapshot(&state)["mode"], "dt");
     }
 
     #[test]

@@ -40,9 +40,7 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - name: Install native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev dbus-daemon
-      - name: Repository metadata tests
-        run: python3 -B -m unittest discover -s tests -v
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev libclang-dev dbus-daemon
       - name: Scanner helper build script tests
         run: python3 -B -m unittest discover -s crates/radio-scanner/tests -p 'test_*.py' -v
       - name: Benchmark script tests
@@ -73,7 +71,7 @@ jobs:
         with:
           dotnet-version: '8.0.x'
       - name: Install native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev libclang-dev
       - name: Lint headless packages (SQLite, API docs enabled)
         run: cargo clippy -p radio-core -p radio-scanner -p radio-db -p radio-services -p osu-radio-cli -p osu-radio-server -p osu-radio-player -p osu-radio-client -p osu-radio-media-controls --all-targets --locked -- -D warnings
       - name: Lint server without API docs

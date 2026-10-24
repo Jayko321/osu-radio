@@ -310,6 +310,83 @@ fn offline_menus_and_modals_preserve_value_roles_focus_and_dismissal_rules() {
 }
 
 #[test]
+fn offline_mods_popup_renders_state_and_emits_mouse_and_keyboard_intents() {
+    let directory = tempfile::tempdir().expect("isolated mods popup probe");
+    let output = run(
+        &["--component-gallery"],
+        "offscreen",
+        directory.path(),
+        Path::new("/no/server/allowed"),
+        "controls-mods",
+    );
+    assert_probe(&output);
+    assert!(
+        output.contains("Adapter probe passed: controls-mods"),
+        "{output}"
+    );
+    assert!(!directory.path().join("starts").exists());
+    assert!(!directory.path().join("library.sqlite").exists());
+}
+
+#[test]
+fn offline_progress_drag_is_cancelled_when_launch_or_speed_changes() {
+    let directory = tempfile::tempdir().expect("isolated progress probe");
+    let output = run(
+        &["--component-gallery"],
+        "offscreen",
+        directory.path(),
+        Path::new("/no/server/allowed"),
+        "controls-progress",
+    );
+    assert_probe(&output);
+    assert!(!directory.path().join("starts").exists());
+}
+
+#[test]
+fn gallery_mods_popup_uses_the_shared_mock_without_a_server() {
+    let directory = tempfile::tempdir().expect("isolated gallery mods");
+    assert_probe(&run(
+        &["--component-gallery"],
+        "offscreen",
+        directory.path(),
+        Path::new("/no/server/allowed"),
+        "gallery-mods",
+    ));
+    assert!(!directory.path().join("starts").exists());
+    assert!(!directory.path().join("library.sqlite").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn live_mods_controls_use_f1_retry_individual_mode_and_flush_at_close() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("isolated mods fixture");
+    let server = directory.path().join("fixture-server");
+    std::fs::write(&server, include_str!("fixtures/server.py")).expect("write fixture");
+    std::fs::set_permissions(&server, std::fs::Permissions::from_mode(0o700))
+        .expect("executable fixture");
+    assert_probe(&run(&[], "offscreen", directory.path(), &server, "mods"));
+    let saved: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(directory.path().join("audio-mods.json")).expect("saved mods"),
+    )
+    .expect("mods JSON");
+    // The last edit (HT 0.75x for B) was still inside its debounce when the window closed.
+    assert_eq!(
+        saved.pointer("/tracks/42"),
+        Some(&serde_json::json!({"mode": "ht", "speed_percent": 75, "adjust_pitch": false}))
+    );
+    assert_eq!(
+        saved.pointer("/settings"),
+        Some(&serde_json::json!({
+            "individual_mods_enabled": true,
+            "global_profile": {"mode": "none", "speed_percent": 100, "adjust_pitch": false}
+        }))
+    );
+    assert!(saved.pointer("/tracks/7").is_none() && saved.pointer("/tracks/103").is_none());
+    assert_child_reaped(directory.path());
+}
+
+#[test]
 fn offline_window_bar_routes_controls_and_resize_edges_without_a_window_manager() {
     let directory = tempfile::tempdir().expect("isolated window-controls probe");
     let output = run(
@@ -354,7 +431,7 @@ fn every_embedded_image_and_font_decodes_in_the_offline_gallery() {
         "native-assets",
     );
     assert!(
-        output.contains("Embedded asset probe checked 36 resources"),
+        output.contains("Embedded asset probe checked 37 resources"),
         "{output}"
     );
     assert!(

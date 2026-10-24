@@ -13,6 +13,7 @@ pub struct QueueSnapshotEntry {
     pub entry: QueueEntry,
     pub last_played_at_ms: Option<i64>,
     pub volume_percent: Option<u8>,
+    pub mods: Option<crate::AudioModsProfile>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +54,7 @@ pub struct PlaybackAssignment {
     pub availability: Option<QueueAvailability>,
     pub waiting_for_check: bool,
     pub volume_percent: Option<u8>,
+    pub mods: Option<crate::AudioModsProfile>,
     pub current_audio_source_id: Option<i32>,
     pub current_playlist_item_id: Option<i32>,
     pub track: Option<LibraryTrack>,
@@ -299,6 +301,7 @@ impl QueueService<'_> {
             .collect::<Vec<_>>();
         let dates = ListeningHistoryService::for_sources_in(&transaction, &sources).await?;
         let volumes = crate::AudioSettingsService::for_sources_in(&transaction, &sources).await?;
+        let mods = crate::AudioModsService::for_sources_in(&transaction, &sources).await?;
         let entries = state
             .entries
             .into_iter()
@@ -311,6 +314,7 @@ impl QueueService<'_> {
                     entry,
                     last_played_at_ms: key.as_ref().and_then(|key| dates.get(key).copied()),
                     volume_percent: key.as_ref().and_then(|key| volumes.get(key).copied()),
+                    mods: key.as_ref().and_then(|key| mods.get(key).copied()),
                 }
             })
             .collect();
@@ -343,6 +347,7 @@ impl QueueService<'_> {
                 tracks.push(track_for_entry(&transaction, entry, id).await?);
             }
         }
+        crate::AudioModsService::fill_tracks(&transaction, &mut tracks).await?;
         transaction.commit().await?;
         Ok((state, tracks))
     }
@@ -833,12 +838,18 @@ async fn assignment(
                 .await?
                 .get(&key)
                 .copied();
+        track.mods =
+            crate::AudioModsService::for_sources_in(transaction, std::slice::from_ref(source))
+                .await?
+                .get(&key)
+                .copied();
     }
     Ok(PlaybackAssignment {
         current_entry_id: state.current_entry_id,
         availability: entry.map(|e| e.availability),
         waiting_for_check: state.waiting_for_check,
         volume_percent: track.as_ref().and_then(|t| t.volume_percent),
+        mods: track.as_ref().and_then(|t| t.mods),
         current_audio_source_id: current,
         current_playlist_item_id: entry
             .and_then(|e| e.playlist_item_id.or(e.migration_playlist_item_id)),
@@ -948,6 +959,7 @@ async fn track_in(transaction: &Transaction, id: i32) -> Result<LibraryTrack> {
         audio_source_id: id,
         last_played_at_ms: None,
         volume_percent: None,
+        mods: None,
         title: None,
         title_unicode: None,
         artist: None,
@@ -999,6 +1011,7 @@ fn track_from_entry(entry: &QueueEntry, audio_source_id: i32) -> LibraryTrack {
         audio_source_id,
         last_played_at_ms: None,
         volume_percent: None,
+        mods: None,
         title: entry.title.clone(),
         title_unicode: entry.title_unicode.clone(),
         artist: entry.artist.clone(),

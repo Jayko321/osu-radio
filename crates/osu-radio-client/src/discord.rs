@@ -22,6 +22,8 @@ struct Key {
     audio: i32,
     state: PlayerState,
     seek: u64,
+    /// Rate changes republish presence even when nothing else (e.g. paused) does.
+    speed_bits: u32,
     title: String,
     artist: String,
     duration: Option<Duration>,
@@ -48,11 +50,23 @@ impl Presence {
             return None;
         }
         let artist = field(&track.artist, "Unknown artist");
+        // Snapshot times are source coordinates; Discord shows real time, scaled once here.
+        let speed = playback.snapshot.parameters.speed;
+        let speed = if (0.5..=2.0).contains(&speed) {
+            speed
+        } else {
+            1.0
+        };
+        let real_time = |source: Duration| {
+            Duration::try_from_secs_f64(source.as_secs_f64() / f64::from(speed))
+                .unwrap_or(Duration::MAX)
+        };
+        let position = real_time(playback.snapshot.position);
         let paused_label = field(
             &format!(
                 "Paused • {}:{:02} • {artist}",
-                playback.snapshot.position.as_secs() / 60,
-                playback.snapshot.position.as_secs() % 60
+                position.as_secs() / 60,
+                position.as_secs() % 60
             ),
             "Paused",
         );
@@ -62,16 +76,18 @@ impl Presence {
                 audio: track.audio_source_id,
                 state: playback.snapshot.state,
                 seek: playback.seek_serial,
+                speed_bits: speed.to_bits(),
                 title: field(&track.title, "Unknown title"),
                 artist,
                 // Decoder duration is authoritative, not a library estimate.
                 duration: playback
                     .snapshot
                     .duration
-                    .filter(|duration| !duration.is_zero()),
+                    .filter(|duration| !duration.is_zero())
+                    .map(real_time),
             },
             paused_label,
-            position: playback.snapshot.position,
+            position,
             observed: Instant::now(),
         })
     }

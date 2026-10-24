@@ -5,7 +5,7 @@ use crate::controller::{
     view_model_tests,
 };
 use crate::models::{PlaybackMode, QueueEntryId};
-use crate::playback::{Command, Playback, PlayerState, Worker};
+use crate::playback::{Command, Playback, PlaybackParameters, PlayerState, Worker};
 use osu_radio_media_controls::{Backend, LaunchKey, PlaybackStatus, test_backend};
 use std::{
     sync::{Arc, Mutex},
@@ -152,6 +152,7 @@ async fn fake_audio(state: &mut Controller) {
         waiting_for_check: false,
         mode: PlaybackMode::Playing,
         volume: 0.5,
+        parameters: PlaybackParameters::default(),
     });
     worker.send(Command::Loaded {
         generation: worker.generation(),
@@ -852,6 +853,47 @@ async fn system_volume_edits_current_audio_and_uses_existing_save_lane() {
 }
 
 #[tokio::test]
+async fn rate_is_the_sounding_launchs_applied_speed_with_source_coordinates() {
+    let (mut state, _http) = connected().await;
+    let fast = |state: &mut Controller, speed| {
+        state.player.playback.snapshot.parameters = PlaybackParameters {
+            speed,
+            adjust_pitch: false,
+        };
+    };
+    assert!((state.system_media_snapshot().rate - 1.0).abs() < f64::EPSILON);
+    state.player.playback.snapshot.duration = Some(Duration::from_secs(240));
+    // B selected (library row 2) must not change A's published rate or time scale.
+    state.command(AppCommand::SelectTrack(Some(2)));
+    let backend = attach(&mut state);
+    for (speed, status) in [
+        (1.2, PlaybackStatus::Playing),
+        (1.5, PlaybackStatus::Playing),
+        (0.75, PlaybackStatus::Playing),
+        (1.5, PlaybackStatus::Paused),
+    ] {
+        fast(&mut state, speed);
+        state.player.playback.snapshot.state = if status == PlaybackStatus::Paused {
+            PlayerState::Paused
+        } else {
+            PlayerState::Playing
+        };
+        state.publish_system_media();
+        let published = backend.snapshots.borrow().clone();
+        assert!((published.rate - f64::from(speed)).abs() < 1e-6);
+        assert_eq!(published.status, status);
+        // Source coordinates: never divided by the speed.
+        assert_eq!(published.position, Duration::from_secs(9));
+        assert_eq!(published.duration, Some(Duration::from_secs(240)));
+        assert_eq!(published.launch, backend.events.current_launch());
+    }
+    // A worker that is not the confirmed current launch publishes the neutral rate.
+    state.player.playback.playback_token = 4;
+    assert!((state.system_media_snapshot().rate - 1.0).abs() < f64::EPSILON);
+    detach(&mut state, backend).await;
+}
+
+#[tokio::test]
 async fn seek_is_current_launch_bound_and_confirmed_worker_seek_is_published() {
     let (mut state, _http) = connected().await;
     fake_audio(&mut state).await;
@@ -902,6 +944,7 @@ async fn seek_is_current_launch_bound_and_confirmed_worker_seek_is_published() {
             waiting_for_check: false,
             mode: PlaybackMode::Playing,
             volume: 0.5,
+            parameters: PlaybackParameters::default(),
         });
         update_until(&mut state, |p| {
             p.playback_token == token

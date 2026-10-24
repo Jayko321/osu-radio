@@ -31,7 +31,7 @@ pub(crate) struct SettingsPatch {
     #[cfg_attr(feature = "docs", schema(minimum = 0, maximum = 100))]
     global_volume_percent: Option<i32>,
 }
-fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+pub(super) fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
     d: D,
 ) -> Result<Option<T>, D::Error> {
     T::deserialize(d).map(Some)

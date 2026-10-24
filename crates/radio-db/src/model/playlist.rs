@@ -11,6 +11,7 @@ pub struct PlaylistSummary {
 pub struct PlaylistItem {
     pub last_played_at_ms: Option<i64>,
     pub volume_percent: Option<u8>,
+    pub mods: Option<crate::model::AudioModsProfile>,
     pub id: i32,
     pub playlist_id: i32,
     pub source_kind: String,

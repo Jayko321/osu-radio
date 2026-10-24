@@ -61,10 +61,13 @@ fn timeline_units_bounds_missing_duration_and_seek_availability() {
         },
         ..Snapshot::default()
     };
-    assert_eq!(
-        timeline(&snapshot).map(|value| value.Duration),
-        [1_200_000_000, 12_340_000, 0, 1_200_000_000]
-    );
+    for rate in [0.75, 1.2, 1.5] {
+        snapshot.rate = rate;
+        assert_eq!(
+            timeline(&snapshot).map(|value| value.Duration),
+            [1_200_000_000, 12_340_000, 0, 1_200_000_000]
+        );
+    }
     snapshot.position = Duration::from_secs(130);
     assert_eq!(
         timeline(&snapshot).map(|value| value.Duration),
@@ -202,6 +205,17 @@ fn native_close_rejects_retained_callbacks_and_releases_file()
     };
     let (mut controls, mut backend, _receiver) = test_backend(snapshot.clone());
     let mut session = Session::new(hwnd, backend.events.clone())?;
+    let invalid = Snapshot {
+        rate: f64::NAN,
+        ..snapshot.clone()
+    };
+    assert_eq!(
+        session
+            .publish(&invalid, &mut backend.artwork)
+            .err()
+            .map(|error| error.code()),
+        Some(E_INVALIDARG)
+    );
     session.publish(&snapshot, &mut backend.artwork)?;
     let path = backend
         .artwork

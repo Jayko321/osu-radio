@@ -171,12 +171,12 @@ async fn reversible_migrations_preserve_the_library(database: &Database) {
     .await
     .unwrap();
     assert_schema(database, 4).await;
-    for version in 5..=14 {
+    for version in 5..=15 {
         Migrator::up(&database.connection, Some(1)).await.unwrap();
         assert_schema(database, version).await;
         assert_library(database, &installation, set.id, map.id).await;
     }
-    for version in (4..=13).rev() {
+    for version in (4..=14).rev() {
         Migrator::down(&database.connection, Some(1)).await.unwrap();
         assert_schema(database, version).await;
         assert_library(database, &installation, set.id, map.id).await;
@@ -192,7 +192,7 @@ async fn reversible_migrations_preserve_the_library(database: &Database) {
     assert_schema(database, 4).await;
     assert_library(database, &installation, set.id, map.id).await;
     database.migrate().await.unwrap();
-    assert_schema(database, 14).await;
+    assert_schema(database, 15).await;
     assert_library(database, &installation, set.id, map.id).await;
     assert_eq!(
         database.queue().get().await.unwrap(),
@@ -221,6 +221,7 @@ async fn assert_schema(database: &Database, version: usize) {
         ("playlist_items", 6),
         ("listening_history", 7),
         ("audio_volume", 8),
+        ("audio_mods", 15),
         ("queue_entries", 12),
     ] {
         assert_eq!(
@@ -239,6 +240,10 @@ async fn assert_schema(database: &Database, version: usize) {
         ("playback_queue", "launch_check_generation", 14),
         ("user_data", "individual_volume_enabled", 8),
         ("user_data", "global_volume_percent", 8),
+        ("user_data", "individual_mods_enabled", 15),
+        ("user_data", "global_mods_mode", 15),
+        ("user_data", "global_mods_speed_percent", 15),
+        ("user_data", "global_mods_adjust_pitch", 15),
         ("playlists", "custom_cover_png", 9),
         ("playlists", "custom_cover_revision", 9),
         ("playlist_items", "title_unicode", 10),

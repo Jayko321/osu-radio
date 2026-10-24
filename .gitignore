@@ -6,8 +6,6 @@ tools/**/FodyWeavers.xsd
 !/docs/agent/
 !/docs/specs/
 !/docs/specs/*.md
-/docs/impl/*
-!/docs/impl/*.md
 tools/**/bin/
 tools/**/target/
 tools/**/obj/
@@ -20,3 +18,9 @@ osu-radio.db-shm
 
 osu-radio.db-wal
 /tmp/radio-services-map
+
+# makepkg build output
+/packaging/arch/pkg/
+/packaging/arch/src/
+/packaging/arch/*.pkg.tar.*
+/packaging/arch/*.tar.gz

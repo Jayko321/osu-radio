@@ -26,6 +26,7 @@ pub struct SettingsViewModel {
     pub(crate) preferences: SettingsPreferences,
     pub(crate) sort: TrackSort,
     pub(crate) volume: VolumeWork,
+    pub(crate) mods: super::mods::ModsWork,
     pub(crate) selection: SelectionWork,
     pub(crate) folders: Vec<OsuFolder>,
     pub(crate) selected_folder: Option<i32>,
@@ -678,19 +679,29 @@ impl SettingsViewModel {
             Ok(settings) => {
                 self.volume.settings = Some(settings);
                 self.volume.error.clear();
-                if let Some(assignment) = self.volume.deferred_assignment.take() {
-                    work.effect(Effect::Assignment(assignment));
-                }
-                if !self.volume.stream_started {
-                    self.volume.stream_started = true;
-                    work.effect(Effect::StartPlaybackStream);
-                }
+                self.release_playback_gate(work);
             }
             Err(error) => {
                 self.volume.error = format!("Failed to load volume settings: {error}");
             }
         }
         self.emit_volume(input, work);
+    }
+    /// The single admission gate: volume and mods must both be loaded before any launch starts.
+    pub(crate) const fn playback_ready(&self) -> bool {
+        self.volume.settings.is_some() && self.mods.loaded
+    }
+    pub(crate) fn release_playback_gate(&mut self, work: &mut Workflow<'_>) {
+        if !self.playback_ready() {
+            return;
+        }
+        if let Some(assignment) = self.volume.deferred_assignment.take() {
+            work.effect(Effect::Assignment(assignment));
+        }
+        if !self.volume.stream_started {
+            self.volume.stream_started = true;
+            work.effect(Effect::StartPlaybackStream);
+        }
     }
     pub(crate) fn emit_volume(&self, input: &SettingsInput<'_>, work: &mut Workflow<'_>) {
         let id = Self::selected_volume_id(input);

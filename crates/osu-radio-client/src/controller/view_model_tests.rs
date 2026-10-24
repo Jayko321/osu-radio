@@ -1,6 +1,9 @@
 use super::tests::{controller, queue_row, track};
 use super::*;
-use crate::models::{PlaybackAssignment, PlaybackCommand, PlaybackMode, Playlist, PlaylistItem};
+use crate::models::{
+    AudioModsProfile, PlaybackAssignment, PlaybackCommand, PlaybackMode, Playlist, PlaylistItem,
+};
+use crate::playback::PlaybackParameters;
 use crate::view_models::player;
 
 #[test]
@@ -178,6 +181,7 @@ async fn audio_download_guards_preserve_current_work_and_seek_reaches_the_worker
         playback_token: 5,
         mode: PlaybackMode::Playing,
         volume: 0.4,
+        parameters: PlaybackParameters::default(),
     });
     assert_eq!(
         message(&mut feedback).await,
@@ -216,6 +220,7 @@ async fn audio_download_guards_preserve_current_work_and_seek_reaches_the_worker
         playback_token: 6,
         mode: PlaybackMode::Playing,
         volume: 0.4,
+        parameters: PlaybackParameters::default(),
     });
     assert_eq!(
         message(&mut feedback).await,
@@ -330,6 +335,7 @@ pub(super) fn playlist() -> Playlist {
             cover_beatmap_id: None,
             last_played_at_ms: None,
             volume_percent: None,
+            mods: None,
         })
         .collect(),
     }
@@ -349,6 +355,7 @@ pub(super) fn assignment(mode: PlaybackMode) -> PlaybackAssignment {
         can_next: true,
         can_previous: false,
         volume_percent: None,
+        mods: None,
     }
 }
 
@@ -509,7 +516,10 @@ fn position_ticks_only_update_player_and_duplicate_audio_does_not_enable_seek() 
     state.player.assignment = Some(assignment(PlaybackMode::Playing));
     playback.playback_token = 5;
     state.worker_update(playback);
-    let presentation = state.player.presentation(Some(32), true, true, true);
+    let presentation =
+        state
+            .player
+            .presentation(Some(32), true, true, true, AudioModsProfile::default());
     assert!(!presentation.can_seek);
     assert!(!presentation.selected_is_playing);
     assert_eq!(presentation.position, Duration::ZERO);
@@ -638,7 +648,13 @@ fn player_presentation_gates_play_and_seek_without_borrowing_another_items_posit
     for connected in [false, true] {
         for loaded in [false, true] {
             for available in [false, true] {
-                let view = player.presentation(Some(31), available, connected, loaded);
+                let view = player.presentation(
+                    Some(31),
+                    available,
+                    connected,
+                    loaded,
+                    AudioModsProfile::default(),
+                );
                 assert_eq!(view.selected_track, Some(selected.clone()));
                 assert_eq!(view.can_play, connected && loaded && available);
                 assert_eq!(
@@ -659,7 +675,7 @@ fn player_presentation_gates_play_and_seek_without_borrowing_another_items_posit
             }
         }
     }
-    let other_item = player.presentation(Some(32), true, true, true);
+    let other_item = player.presentation(Some(32), true, true, true, AudioModsProfile::default());
     assert!(!other_item.can_seek && !other_item.selected_is_playing);
     assert_eq!(
         (other_item.position, other_item.duration),
@@ -667,28 +683,50 @@ fn player_presentation_gates_play_and_seek_without_borrowing_another_items_posit
     );
     player.playback.snapshot.duration = None;
     assert_eq!(
-        player.presentation(None, true, true, true).duration,
+        player
+            .presentation(None, true, true, true, AudioModsProfile::default())
+            .duration,
         Some(Duration::from_secs(42))
     );
     player.playback.snapshot.duration = Some(Duration::ZERO);
-    assert!(!player.presentation(None, true, true, true).can_seek);
+    assert!(
+        !player
+            .presentation(None, true, true, true, AudioModsProfile::default())
+            .can_seek
+    );
     player.playback.snapshot.duration = Some(Duration::from_secs(60));
     player.playback.has_source = false;
-    assert!(!player.presentation(None, true, true, true).can_seek);
+    assert!(
+        !player
+            .presentation(None, true, true, true, AudioModsProfile::default())
+            .can_seek
+    );
     player.playback.loading_audio_id = Some(1);
     assert_eq!(
-        player.presentation(None, true, true, true).message,
+        player
+            .presentation(None, true, true, true, AudioModsProfile::default())
+            .message,
         "Loading audio…"
     );
     player.playback.error = Some("decoder failed".into());
     assert_eq!(
-        player.presentation(None, true, true, true).message,
+        player
+            .presentation(None, true, true, true, AudioModsProfile::default())
+            .message,
         "decoder failed"
     );
     player.select_track(Some(track(-1)));
-    assert!(!player.presentation(None, true, true, true).can_play);
+    assert!(
+        !player
+            .presentation(None, true, true, true, AudioModsProfile::default())
+            .can_play
+    );
     player.select_track(None);
-    assert!(!player.presentation(None, true, true, true).can_play);
+    assert!(
+        !player
+            .presentation(None, true, true, true, AudioModsProfile::default())
+            .can_play
+    );
     assert!(player.selected_track().is_none());
 }
 
@@ -796,4 +834,242 @@ fn offline_transport_commands_report_errors_without_queuing_or_opening_a_worker(
             if view.message == "Connect to the server to queue a playlist."))
         );
     }
+}
+
+#[test]
+fn one_gate_holds_the_last_assignment_until_volume_and_mods_are_loaded() {
+    for mods_first in [false, true] {
+        let (mut state, _) = controller();
+        state.settings.volume.settings = None;
+        state.settings.mods.loaded = false;
+        state.settings.mods.loading = true;
+        state.settings.mods.load_request = 1;
+        let mut last = assignment(PlaybackMode::Paused);
+        last.revision = 2;
+        state.apply_assignment(assignment(PlaybackMode::Paused));
+        state.apply_assignment(last);
+        let load_volume = |state: &mut Controller| {
+            state.audio_settings_loaded(Ok(crate::models::AudioSettings::default()));
+        };
+        let load_mods = |state: &mut Controller| {
+            state.mods_loaded_result(1, 0, Ok(crate::models::AudioModsSettings::default()));
+        };
+        assert!(state.player.assignment.is_none());
+        if mods_first {
+            load_mods(&mut state);
+        } else {
+            load_volume(&mut state);
+        }
+        assert!(
+            state.player.assignment.is_none(),
+            "one load is not admission"
+        );
+        if mods_first {
+            load_volume(&mut state);
+        } else {
+            load_mods(&mut state);
+        }
+        assert_eq!(
+            state.player.assignment.as_ref().map(|a| a.revision),
+            Some(2)
+        );
+    }
+    // A mods load error keeps the gate shut; the later successful Retry result opens it.
+    let (mut state, _) = controller();
+    state.settings.mods.loaded = false;
+    state.settings.mods.loading = true;
+    state.settings.mods.load_request = 1;
+    state.apply_assignment(assignment(PlaybackMode::Paused));
+    assert!(state.player.assignment.is_none());
+    state.mods_loaded_result(1, 0, Err("offline".into()));
+    assert!(state.player.assignment.is_none() && !state.settings.mods_loaded());
+    state.settings.mods.loading = true;
+    state.settings.mods.load_request = 2;
+    state.mods_loaded_result(2, 0, Ok(crate::models::AudioModsSettings::default()));
+    assert!(state.player.assignment.is_some());
+}
+
+fn mods(
+    mode: crate::models::AudioModsMode,
+    speed_percent: u16,
+    adjust_pitch: bool,
+) -> crate::models::AudioModsProfile {
+    crate::models::AudioModsProfile {
+        mode,
+        speed_percent,
+        adjust_pitch,
+    }
+}
+
+#[tokio::test]
+async fn mode_switch_resends_the_current_launchs_own_profile_without_restarting_it() {
+    use crate::models::AudioModsMode::{Dt, Ht};
+    let (mut state, _) = controller();
+    state.replace_tracks(vec![track(1), track(2)], true);
+    let mut sounding = assignment(PlaybackMode::Playing);
+    sounding.mods = Some(mods(Dt, 120, true));
+    state.player.assignment = Some(sounding);
+    // B's stored profile differs, but it is the selection and not the sounding launch.
+    state
+        .library
+        .tracks
+        .iter_mut()
+        .find(|t| t.audio_source_id == 2)
+        .unwrap()
+        .mods = Some(mods(Ht, 75, false));
+    state.command(AppCommand::SelectTrack(Some(2)));
+    let (sender, mut snapshots) = mpsc::unbounded_channel();
+    let (worker, _downloads) = crate::playback::Worker::spawn_fake(Arc::new(move |state| {
+        let _ = sender.send(state);
+    }))
+    .unwrap();
+    state.playback = Some(worker);
+    let pair = |speed, adjust_pitch| PlaybackParameters {
+        speed,
+        adjust_pitch,
+    };
+    // Global mode (default none) -> individual: A takes its own stored profile; back again.
+    for (individual, expected) in [(true, pair(1.2, true)), (false, pair(1.0, false))] {
+        state.mods_action(crate::view_models::ModsAction::SetIndividual(individual));
+        assert_eq!(state.assignment_parameters(), expected);
+        let seen = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let playback: crate::playback::Playback = snapshots.recv().await.unwrap();
+                if playback.snapshot.parameters == expected {
+                    return playback;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(seen.playback_token, 5, "same launch, no restart");
+    }
+}
+
+#[test]
+fn presentation_time_follows_actual_speed_and_the_selected_tracks_own_profile() {
+    let mut player = PlayerViewModel::default();
+    let mut selected = track(1);
+    selected.duration = Some(Duration::from_secs(240));
+    player.select_track(Some(selected.clone()));
+    player.playback.current_audio_id = Some(1);
+    player.playback.has_source = true;
+    player.playback.snapshot.state = crate::playback::PlayerState::Playing;
+    player.playback.snapshot.position = Duration::from_secs(90);
+    player.playback.snapshot.duration = Some(Duration::from_secs(240));
+    player.playback.snapshot.parameters.speed = 1.5;
+    let view = player.presentation(None, true, true, true, AudioModsProfile::default());
+    assert_eq!(
+        (
+            view.position,
+            view.duration,
+            view.selected_duration,
+            view.speed_percent
+        ),
+        (
+            Duration::from_secs(60),
+            Some(Duration::from_secs(160)),
+            Some(Duration::from_secs(160)),
+            150
+        )
+    );
+    // The source place is kept across a speed change; only its presentation moves.
+    for (speed, position, duration) in [(1.0, 90, 240), (1.2, 75, 200), (0.75, 120, 320)] {
+        player.playback.snapshot.parameters.speed = speed;
+        let view = player.presentation(None, true, true, true, AudioModsProfile::default());
+        assert_eq!(
+            (view.position, view.duration),
+            (
+                Duration::from_secs(position),
+                Some(Duration::from_secs(duration))
+            )
+        );
+    }
+    // Selected B with another speed: its own profile scales its duration; unknown stays unknown.
+    player.playback.current_audio_id = Some(9);
+    let view = player.presentation(
+        None,
+        true,
+        true,
+        true,
+        mods(crate::models::AudioModsMode::Dt, 150, false),
+    );
+    assert_eq!(
+        (
+            view.position,
+            view.duration,
+            view.selected_duration,
+            view.speed_percent
+        ),
+        (Duration::ZERO, None, Some(Duration::from_secs(160)), 150)
+    );
+    selected.duration = None;
+    player.select_track(Some(selected));
+    let view = player.presentation(
+        None,
+        true,
+        true,
+        true,
+        mods(crate::models::AudioModsMode::Dt, 150, false),
+    );
+    assert_eq!(view.selected_duration, None);
+}
+
+#[test]
+fn ui_seek_converts_once_while_system_seek_stays_in_source_time() {
+    // UI 1:00 at 1.5x is source 1:30, converted exactly once.
+    let (mut state, _) = controller();
+    state.replace_tracks(vec![track(1)], true);
+    let mut assigned = assignment(PlaybackMode::Playing);
+    assigned.current_entry_id = crate::models::QueueEntryId::new(1).ok();
+    state.player.assignment = Some(assigned);
+    state.player.playback.snapshot.parameters.speed = 1.5;
+    let input = player::PlayerInput {
+        library: &state.library,
+        playlists: &state.playlists,
+        settings: &state.settings,
+        media: &state.media,
+        assignment_sender: &state.assignment_sender,
+    };
+    let mut work = workflow::Workflow {
+        api: None,
+        tasks: &mut state.tasks,
+        cancel: &state.cancel,
+        effects: Vec::new(),
+    };
+    state
+        .player
+        .seek_selected(Duration::from_secs(60), &input, &mut work);
+    assert!(matches!(
+        work.effects.as_slice(),
+        [workflow::Effect::PlayerCommand(crate::playback::Command::Seek { position, .. })]
+            if *position == Duration::from_secs(90)
+    ));
+    // An external seek already carries source time and bypasses the UI conversion.
+    work.effects.clear();
+    let launch = state.player.system_launch().unwrap();
+    let snapshot = osu_radio_media_controls::Snapshot {
+        launch: Some(launch),
+        duration: Some(Duration::from_secs(240)),
+        rate: 1.5,
+        capabilities: osu_radio_media_controls::Capabilities {
+            seek: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    state.player.system_event(
+        osu_radio_media_controls::Event::SeekAbsolute {
+            launch,
+            position: Duration::from_secs(60),
+        },
+        &snapshot,
+        &input,
+        &mut work,
+    );
+    assert!(matches!(
+        work.effects.as_slice(),
+        [workflow::Effect::PlayerCommand(crate::playback::Command::Seek { position, .. })]
+            if *position == Duration::from_secs(60)
+    ));
 }

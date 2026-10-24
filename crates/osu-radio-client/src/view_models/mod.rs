@@ -1,6 +1,7 @@
 //! Toolkit-free presentation state and domain workflows.
 pub(crate) mod folders;
 pub(crate) mod library;
+pub(crate) mod mods;
 pub(crate) mod player;
 pub(crate) mod playlists;
 #[cfg(test)]
@@ -22,3 +23,5 @@ pub use settings::{SettingsGroup, SettingsPreferences, SettingsViewModel};
 pub use sorting::TrackSort;
 pub use track::{Track, TrackNamePreferences, library_tracks, selection_after_refresh};
 pub use volume::AudioSettingsState;
+
+pub use mods::{AudioModsState, ModsAction, ModsEdit, ModsEditTarget};

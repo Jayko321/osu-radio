@@ -50,6 +50,12 @@ Basic.ApplicationWindow {
         scheduleVisibleMedia();
     }
     readonly property alias appBridge: bridge
+    // F1 only opens the menu; D and E belong to the open popup.
+    Shortcut {
+        sequence: "F1"
+        enabled: !folderDialog.visible && !playlistsDialog.visible
+        onActivated: player.openMods()
+    }
     AppBridge {
         id: bridge
         objectName: "appBridge"

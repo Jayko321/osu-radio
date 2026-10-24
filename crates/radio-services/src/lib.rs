@@ -8,6 +8,11 @@
     )
 )]
 
+mod audio_mods;
+pub use audio_mods::{
+    AudioModsError, AudioModsMode, AudioModsPatch, AudioModsProfile, AudioModsService,
+    AudioModsSettings,
+};
 mod audio_settings;
 mod audio_source;
 pub use audio_settings::{AudioSettings, AudioSettingsError, AudioSettingsService};
@@ -58,6 +63,12 @@ pub struct Services {
 }
 
 impl Services {
+    #[must_use]
+    pub const fn audio_mods(&self) -> AudioModsService<'_> {
+        AudioModsService {
+            database: &self.database,
+        }
+    }
     #[must_use]
     pub const fn audio_settings(&self) -> AudioSettingsService<'_> {
         AudioSettingsService {

@@ -62,18 +62,51 @@ pub struct Artwork {
 }
 
 /// Latest observed state, with no GUI placeholders or resources.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot {
     pub launch: Option<LaunchKey>,
     pub metadata: Option<Metadata>,
     pub duration: Option<Duration>,
     pub status: PlaybackStatus,
     pub position: Duration,
+    /// Actual playback speed, finite and within 0.5..=2.0. Times stay in source coordinates.
+    /// An invalid rate fails the native adapter through `Status::Failed`.
+    pub rate: f64,
     pub seek_serial: u64,
     /// Effective internal player volume, normalized to 0..=1.
     pub volume: f64,
     pub capabilities: Capabilities,
     pub artwork: Option<Artwork>,
+}
+
+impl Default for Snapshot {
+    fn default() -> Self {
+        Self {
+            launch: None,
+            metadata: None,
+            duration: None,
+            status: PlaybackStatus::default(),
+            position: Duration::ZERO,
+            rate: 1.0,
+            seek_serial: 0,
+            volume: 0.0,
+            capabilities: Capabilities::default(),
+            artwork: None,
+        }
+    }
+}
+
+impl Snapshot {
+    pub(crate) fn validate_rate(&self) -> Result<(), Error> {
+        if (0.5..=2.0).contains(&self.rate) {
+            Ok(())
+        } else {
+            Err(Error::new(format!(
+                "media playback rate must be finite and within 0.5..=2.0: {}",
+                self.rate
+            )))
+        }
+    }
 }
 
 /// Commands retain arrival order independently of coalesced snapshots.

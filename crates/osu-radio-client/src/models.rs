@@ -2,6 +2,50 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AudioModsMode {
+    #[default]
+    None,
+    Dt,
+    Ht,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub struct AudioModsProfile {
+    pub mode: AudioModsMode,
+    pub speed_percent: u16,
+    pub adjust_pitch: bool,
+}
+impl Default for AudioModsProfile {
+    fn default() -> Self {
+        Self {
+            mode: AudioModsMode::None,
+            speed_percent: 100,
+            adjust_pitch: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct AudioModsSettings {
+    pub individual_mods_enabled: bool,
+    pub global_profile: AudioModsProfile,
+}
+
+/// Only present fields are sent. The server validates the complete merged profile.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct AudioModsPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub individual_mods_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global_mode: Option<AudioModsMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global_speed_percent: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub global_adjust_pitch: Option<bool>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub struct AudioSettings {
     pub individual_volume_enabled: bool,
@@ -182,6 +226,58 @@ impl RegisteredFolder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mods_wire_types_preserve_profiles_and_patch_omissions() {
+        use serde_json::json;
+        assert_eq!(
+            serde_json::to_value(AudioModsSettings::default()).unwrap(),
+            json!({
+                "individual_mods_enabled":false,
+                "global_profile":{"mode":"none","speed_percent":100,"adjust_pitch":false}
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(AudioModsPatch::default()).unwrap(),
+            json!({})
+        );
+        let patch = AudioModsPatch {
+            individual_mods_enabled: Some(false),
+            global_mode: Some(AudioModsMode::Dt),
+            global_speed_percent: Some(120),
+            global_adjust_pitch: Some(true),
+        };
+        assert_eq!(
+            serde_json::to_value(patch).unwrap(),
+            json!({
+                "individual_mods_enabled":false,"global_mode":"dt",
+                "global_speed_percent":120,"global_adjust_pitch":true
+            })
+        );
+        let expected = AudioModsProfile {
+            mode: AudioModsMode::Dt,
+            speed_percent: 120,
+            adjust_pitch: true,
+        };
+        for mods in [None, Some(expected)] {
+            let row: LibraryTrack = serde_json::from_value(json!({
+                "audio_source_id":7,"mods":mods,"difficulties":[]
+            }))
+            .unwrap();
+            assert_eq!(row.mods, mods);
+            let track = crate::Track::from(row);
+            assert_eq!(track.mods, mods);
+            assert_eq!(track.duration, None);
+        }
+        for profile in [
+            json!({"mode":"nc","speed_percent":120,"adjust_pitch":true}),
+            json!({"mode":"dt","speed_percent":120.5,"adjust_pitch":true}),
+            json!({"mode":"dt","speed_percent":120,"adjust_pitch":null}),
+            json!({"mode":"dt","speed_percent":120}),
+        ] {
+            assert!(serde_json::from_value::<AudioModsProfile>(profile).is_err());
+        }
+    }
 
     #[test]
     fn an_absent_label_and_a_cleared_label_serialize_differently() {
@@ -447,6 +543,7 @@ pub struct LibraryTrack {
     pub last_played_at_ms: Option<i64>,
     #[serde(default, deserialize_with = "optional_volume_percent")]
     pub volume_percent: Option<u8>,
+    pub mods: Option<AudioModsProfile>,
     pub title: Option<String>,
     pub title_unicode: Option<String>,
     pub artist: Option<String>,
@@ -538,6 +635,7 @@ pub struct QueueEntry {
     pub last_played_at_ms: Option<i64>,
     #[serde(deserialize_with = "optional_volume_percent")]
     pub volume_percent: Option<u8>,
+    pub mods: Option<AudioModsProfile>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -571,6 +669,7 @@ pub struct PlaybackAssignment {
     pub waiting_for_check: bool,
     #[serde(default, deserialize_with = "optional_volume_percent")]
     pub volume_percent: Option<u8>,
+    pub mods: Option<AudioModsProfile>,
     pub current_audio_source_id: Option<i32>,
     #[serde(default)]
     pub current_playlist_item_id: Option<i32>,
@@ -628,6 +727,7 @@ pub struct PlaylistItem {
     pub last_played_at_ms: Option<i64>,
     #[serde(default, deserialize_with = "optional_volume_percent")]
     pub volume_percent: Option<u8>,
+    pub mods: Option<AudioModsProfile>,
     pub playlist_id: i32,
     pub source_kind: String,
     pub beatmap_hash: String,

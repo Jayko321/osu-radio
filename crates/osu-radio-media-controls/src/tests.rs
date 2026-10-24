@@ -30,6 +30,40 @@ fn snapshot(launch: LaunchKey) -> Snapshot {
     }
 }
 
+#[test]
+#[allow(clippy::float_cmp)] // The neutral default and protocol bounds must be exact.
+fn playback_rate_defaults_to_one_and_rejects_invalid_values() {
+    assert_eq!(Snapshot::default().rate, 1.0);
+    for rate in [0.5, 0.75, 1.0, 1.2, 1.5, 2.0] {
+        assert!(
+            Snapshot {
+                rate,
+                ..Snapshot::default()
+            }
+            .validate_rate()
+            .is_ok()
+        );
+    }
+    for rate in [
+        f64::NAN,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        -1.0,
+        0.0,
+        0.49,
+        2.01,
+    ] {
+        assert!(
+            Snapshot {
+                rate,
+                ..Snapshot::default()
+            }
+            .validate_rate()
+            .is_err()
+        );
+    }
+}
+
 #[tokio::test]
 async fn slow_snapshots_coalesce_but_commands_keep_order_and_callback_identity() -> TestResult {
     let (mut controls, mut backend, mut events) = test_backend(snapshot(FIRST));

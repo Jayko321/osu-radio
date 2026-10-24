@@ -485,6 +485,17 @@ async fn worker_and_reimport_stream_preserve_the_assigned_source_and_late_callba
         .set_volume(audio, Some(29))
         .await
         .unwrap();
+    let original_mods = radio_services::AudioModsProfile {
+        mode: radio_services::AudioModsMode::Dt,
+        speed_percent: 120,
+        adjust_pitch: true,
+    };
+    state
+        .services()
+        .audio_mods()
+        .set_profile(audio, Some(original_mods))
+        .await
+        .unwrap();
     state.services().queue().append(vec![audio]).await.unwrap();
     let id = state.services().queue().get().await.unwrap().entries[0]
         .id
@@ -553,6 +564,20 @@ async fn worker_and_reimport_stream_preserve_the_assigned_source_and_late_callba
         .replace_snapshot(installation, &[beatmap_set(1, "/rebound-source.mp3")])
         .await
         .unwrap();
+    let rebound_audio = audio_ids(&state).await[0];
+    state
+        .services()
+        .audio_mods()
+        .set_profile(
+            rebound_audio,
+            Some(radio_services::AudioModsProfile {
+                mode: radio_services::AudioModsMode::Ht,
+                speed_percent: 75,
+                adjust_pitch: false,
+            }),
+        )
+        .await
+        .unwrap();
     let assignment = state.services().queue().playback().await.unwrap();
     // Same post-commit transport boundary used by library workflows, without a real Realm reader.
     let Json(response) = committed_response(&state, assignment).await.unwrap();
@@ -563,11 +588,18 @@ async fn worker_and_reimport_stream_preserve_the_assigned_source_and_late_callba
     assert_eq!(rebound["playback_token"], selected["playback_token"]);
     assert_eq!(rebound["track"]["last_played_at_ms"], date);
     assert_eq!(rebound["volume_percent"], 29);
+    let original_mods = json!({"mode":"dt","speed_percent":120,"adjust_pitch":true});
+    assert_eq!(rebound["mods"], original_mods);
+    assert_eq!(rebound["track"]["mods"], original_mods);
     assert_eq!(rebound["availability"], "checking");
     assert_eq!(rebound["waiting_for_check"], false);
     assert_eq!(rebound["duration_ms"], Value::Null);
     let queue = queue_json(&state).await;
     assert_ne!(queue["entries"][1]["audio_source_id"], audio);
+    assert_eq!(
+        queue["entries"][1]["mods"],
+        json!({"mode":"ht","speed_percent":75,"adjust_pitch":false})
+    );
     assert_eq!(queue["entries"][1]["last_played_at_ms"], Value::Null);
     let late_started = command_request(
         &state,

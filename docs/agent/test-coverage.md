@@ -16,6 +16,32 @@ T06 (2026-10-16): queue REST/NDJSON DTOs, API wrappers and temporary VM projecti
 changed; previous line-count metrics below were not remeasured for those files.
 Executed transport/client checks and limits are in [T06](../impl/queue-rework/T06.md#отчёт-о-выполнении).
 
+## Adjustable speed and pitch T11 (2026-10-24)
+
+Per-file line metrics below were not refreshed. New behavior evidence by layer, with
+commands and results in the [T11 report](../impl/adjustable-pitch-speed/T11.md#отчёт-о-выполнении):
+
+- Storage/service: [repository](../../crates/radio-db/src/tests/audio_mods.rs) and
+  [service](../../crates/radio-services/src/tests/audio_mods.rs) contracts (populated
+  migration, reopen, reset, shared identity, reimport, no partial writes).
+- HTTP/DTO: [route tests](../../apps/osu-radio-server/src/routes/audio_mods/tests.rs)
+  and client [contract tests](../../crates/osu-radio-client/src/api/contract_tests.rs).
+- Engine: [player tests](../../crates/osu-radio-player/src/tests.rs) (frequency,
+  duration, fractional frames, live edits, tail/EOF, codecs).
+- Client: [mods tests](../../crates/osu-radio-client/src/view_models/mods/tests.rs),
+  [controller test](../../crates/osu-radio-client/src/controller/mods_tests.rs),
+  [mock test](../../crates/osu-radio-client/src/mock/mods.rs) and worker tests in
+  `playback.rs`.
+- Qt: popup, progress, gallery and live probes in
+  [AdapterProbe.qml](../../apps/osu-radio-qt/tests/AdapterProbe.qml) and
+  [launch_smoke.rs](../../apps/osu-radio-qt/tests/launch_smoke.rs).
+- Interaction: the opt-in
+  [real-server probe](../../crates/osu-radio-client/src/playback/tests/real_backend.rs)
+  (fake engine; no real DSP, controller presentation or Qt).
+
+Not covered by automation: audible quality, native F1/D/E, live drag, Windows and
+real MPRIS/SMTC/Discord.
+
 ## Arch Linux startup T01 (2026-10-17)
 
 [T01 report](../impl/arch-linux-release/T01.md#отчёт-о-выполнении) records the
@@ -1267,7 +1293,6 @@ application database or real game installation is a test fixture.
 | [tools/osu-lazer-realm-parser/README.md](../../tools/osu-lazer-realm-parser/README.md) | Focused | — | Local source/test links checked; documented real-helper CLI, schema, import and fixture claims have matching executed assertions. External/platform setup remains separate. |
 
 | [crates/radio-scanner/tests/test_build_helper.py](../../crates/radio-scanner/tests/test_build_helper.py) | Focused | — | Five subprocess contracts execute the real std-only build script against private fake dotnet; POSIX only. |
-| [tests/test_repository.py](../../tests/test_repository.py) | Focused | — | Sixteen stdlib checks passed: Markdown fences/links/attribution/fixtures, manifest/lock/entry points, full inventory, Git ignore/docs policy/empty legacy state, toolchain, CR/Serena field guards and the scoped CI command matrix/Bash syntax. |
 
 | [crates/radio-db/src/tests/model_projections.rs](../../crates/radio-db/src/tests/model_projections.rs) | Focused | — | Shared explicit-value field assertions for persisted/library/search/playlist projections and rollback; passed inside SQLite and fresh disposable PostgreSQL repository suites. |
 

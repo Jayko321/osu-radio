@@ -21,8 +21,8 @@ pub mod repositories;
 
 use anyhow::Result;
 use repositories::{
-    AudioSourceRepository, AudioVolumeRepository, BeatmapMetadataRepository, BeatmapRepository,
-    BeatmapSetRepository, ListeningHistoryRepository, OsuInstallationRepository,
+    AudioModsRepository, AudioSourceRepository, AudioVolumeRepository, BeatmapMetadataRepository,
+    BeatmapRepository, BeatmapSetRepository, ListeningHistoryRepository, OsuInstallationRepository,
     PlaylistRepository, QueueRepository, TagRepository, UserDataRepository,
 };
 pub use repositories::{RegisteredInstallation, metadata_hash};
@@ -35,6 +35,12 @@ pub struct Database {
 }
 
 impl Database {
+    #[must_use]
+    pub const fn audio_mods(&self) -> AudioModsRepository<'_> {
+        AudioModsRepository {
+            connection: sea_orm::DatabaseExecutor::Connection(&self.connection),
+        }
+    }
     #[must_use]
     pub const fn audio_volume(&self) -> AudioVolumeRepository<'_> {
         AudioVolumeRepository {
@@ -154,6 +160,12 @@ pub struct Transaction {
 }
 
 impl Transaction {
+    #[must_use]
+    pub const fn audio_mods(&self) -> AudioModsRepository<'_> {
+        AudioModsRepository {
+            connection: sea_orm::DatabaseExecutor::Transaction(&self.connection),
+        }
+    }
     #[must_use]
     pub const fn audio_volume(&self) -> AudioVolumeRepository<'_> {
         AudioVolumeRepository {

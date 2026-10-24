@@ -16,3 +16,61 @@ Read and follow these repository-local procedures for matching tasks; their bodi
 These files live under `.agents/skills/`; this repository does not provide Claude slash-command wrappers for them. Follow the linked files directly when a matching procedure is requested or needed. Do not duplicate them under `.claude/` just to maintain a second copy.
 
 Serena has project configuration in `.serena/project.yml`. If its symbol tools are available, use them for definitions and callers; targeted `rg` and source reads also work. Do not assume a configured Context7 subagent exists: use the shared [Context7 procedure](docs/agent/development.md#context7-and-source-evidence). Match commands to the actual host shell rather than assuming Windows or PowerShell.
+
+<!-- imported-from: codex:project:instructions -->
+# osu! radio: shared agent guidance
+
+Build a desktop music player for local osu! installations, with hosted sources intended later. Linux and Windows are current targets; macOS is unverified, Android and iOS are future goals. Hosting and provider choices remain open.
+
+`radio-services` is the shared persisted-model entry point for server and CLI.
+`radio-db` uses SeaORM 2 repositories and a fresh versioned schema. Read the
+[database guide](docs/agent/database.md) for ownership, immutable metadata identity,
+snapshot replacement, and explicit reset behavior. Legacy databases require a
+new database or an explicitly requested reset; ordinary startup never resets.
+
+## Ownership and constraints
+
+| Component | Owns |
+| --- | --- |
+| `crates/radio-core` | Source-neutral domain/import types; no I/O or persistence. |
+| `crates/radio-scanner` | Discovery and source readers; returns data, preserves read-only access to osu! sources. |
+| `tools/osu-lazer-realm-parser` | Realm extraction; stdout is NDJSON, diagnostics go to stderr. |
+| `apps/osu-radio-cli` | Thin development harness; reusable behavior belongs in crates. |
+| `apps/osu-radio-server` | Backend startup, HTTP transport and services; backend owns source-file access and streams audio by ID. |
+| `crates/radio-services` | Shared model services and transaction orchestration for server and CLI. |
+| `crates/radio-db` | Persistence boundary; concrete repositories own SQL and constraints; opaque transactions bind repositories. |
+| `crates/osu-radio-client` | Toolkit-free frontend access, session/supervision, temporary audio downloads and playback worker. |
+| `crates/osu-radio-player` | Synchronous local-file MP3, Ogg/Vorbis and WAV playback, seek and volume; no HTTP, database or GUI. |
+| `apps/osu-radio-qt` | Qt VM adapters, track models, QML panels and standalone gallery; artwork cache, window interactions and assets. |
+
+Qt (`apps/osu-radio-qt`) is the desktop GUI. Vizia has been removed.
+
+Preserve domain/backend/client/GUI boundaries. The GUI toolkit and child-process server are implementation details, not permanent requirements for future platforms. Track selection changes presentation independently of playback; explicit Play starts the selected track through the client-owned audio worker. Keep UI-only assets and classes out of client view models. The toolkit-free `AppController` coordinates five state-owning VMs through one event loop. The standalone Qt gallery stays offline and uses the opt-in client `mock` module. Frontends never access persistence directly.
+
+Architectural decisions belong to the user. Changes to crate boundaries, state ownership, dependencies, coordination, protocols, lifecycle or storage require the user's decision. Follow the approved decisions in [architecture](docs/agent/architecture.md); raise unexpected architectural questions before changing those decisions. QSettings is temporary storage, not the chosen future persistence contract.
+
+Preserve unrelated working-tree changes. Use explicit roots in discovery tests and manual checks; unscoped discovery can walk every mounted root. Scanner import reads source data and returns it; it must not copy audio or decide persistence. Do not use Cargo `--all-features`: the workspace contains incompatible database backend features. Use the scoped [verification matrix](docs/agent/development.md#verification-matrix).
+
+## Read for the task
+
+Start with [the guide index](docs/agent/index.md) for reading order, architecture, capability status and deferred decisions.
+
+| Task | Guide and procedure |
+| --- | --- |
+| Domain types, discovery, import mapping, Realm helper | [Scanner guide](docs/agent/scanner.md), [osu-radio-scanner skill](.agents/skills/osu-radio-scanner/SKILL.md) |
+| GUI layout, interactions, styles, assets | [Frontend guide](docs/agent/frontend.md), [osu-radio-gui skill](.agents/skills/osu-radio-gui/SKILL.md) |
+| Reusable client state or server supervision | [Frontend guide](docs/agent/frontend.md), [backend guide](docs/agent/backend.md) |
+| Database repositories, persistence, server/client API contracts | [Database guide](docs/agent/database.md), [backend guide](docs/agent/backend.md), [API skill](.agents/skills/osu-radio-api/SKILL.md) |
+| Backend startup, service boundaries, errors, optional API docs | [Backend guide](docs/agent/backend.md) |
+| Setup, environment, commands, testing, troubleshooting | [Development guide](docs/agent/development.md) |
+| Findings-only pre-commit review | [cr skill](.agents/skills/cr/SKILL.md) and its linked checklist |
+
+For library/framework/SDK/API/CLI/cloud-service guidance, fetch current documentation with Context7, including familiar technologies. Resolve with `npx ctx7@latest library <name> "<specific question>"` before `docs`, unless a library ID was supplied. Follow the [Context7 procedure](docs/agent/development.md#context7-and-source-evidence), including running requests outside the default sandbox. Repository source establishes current behavior; upstream documentation establishes API advice. Source-only review, business-logic debugging and refactoring do not require an upstream lookup by themselves.
+
+## Maintain the guidance
+
+- Update the affected guide with behavior changes, linking current source/tests and stating verification limits. Update routing here only when ownership, constraints or reading paths change; ordinary edits do not require rewriting all guides.
+- Keep technical facts in `docs/agent/`, task procedures in `.agents/skills/`, and Claude-only notes in `CLAUDE.md`. Link shared procedures instead of duplicating them.
+- Label implementation, placeholders, confirmed direction and deferred decisions separately. Do not turn an implementation detail or a proposed improvement into a product requirement.
+- Check changed links, paths, symbols, flags and examples. Record executed checks separately from suggested commands. `docs/agent/`, `docs/specs/*.md` and `docs/impl/` (implementation plans and task cards) are versioned; other files under `docs/` stay local and ignored.
+- Keep database contracts in the database guide and API procedures in the shared API skill.

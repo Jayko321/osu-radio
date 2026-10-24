@@ -153,11 +153,11 @@ impl PlayerInterface for Player {
         Err(unsupported().into())
     }
     async fn rate(&self) -> fdo::Result<PlaybackRate> {
-        Ok(1.0)
+        Ok(self.published.borrow().snapshot.rate)
     }
-    #[allow(clippy::float_cmp)] // Exactly 1.0 is the sole supported protocol rate.
+    #[allow(clippy::float_cmp)] // Only an unchanged rate is a no-op; mods remain client-owned.
     async fn set_rate(&self, value: PlaybackRate) -> zbus::Result<()> {
-        if value == 1.0 {
+        if value == self.published.borrow().snapshot.rate {
             Ok(())
         } else {
             Err(unsupported().into())
@@ -194,10 +194,10 @@ impl PlayerInterface for Player {
         )))
     }
     async fn minimum_rate(&self) -> fdo::Result<PlaybackRate> {
-        Ok(1.0)
+        Ok(0.5)
     }
     async fn maximum_rate(&self) -> fdo::Result<PlaybackRate> {
-        Ok(1.0)
+        Ok(2.0)
     }
     async fn can_go_next(&self) -> fdo::Result<bool> {
         Ok(self.published.borrow().snapshot.capabilities.next)

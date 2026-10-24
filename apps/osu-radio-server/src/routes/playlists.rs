@@ -35,6 +35,8 @@ impl From<PlaylistSummary> for PlaylistSummaryResponse {
 pub(crate) struct PlaylistItemResponse {
     last_played_at_ms: Option<i64>,
     volume_percent: Option<u8>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    mods: Option<super::audio_mods::AudioModsProfile>,
     id: i32,
     playlist_id: i32,
     source_kind: String,
@@ -55,6 +57,7 @@ impl From<PlaylistItem> for PlaylistItemResponse {
             id: item.id,
             last_played_at_ms: item.last_played_at_ms,
             volume_percent: item.volume_percent,
+            mods: item.mods.map(Into::into),
             playlist_id: item.playlist_id,
             source_kind: item.source_kind,
             beatmap_hash: item.beatmap_hash,

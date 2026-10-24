@@ -85,3 +85,33 @@ fn notification_diff_excludes_position_and_includes_changed_properties() -> Resu
     }
     Ok(())
 }
+
+#[test]
+fn rate_changes_preserve_source_coordinates_and_metadata() -> Result<(), Error> {
+    let mut previous = Published::new(snapshot(), None, "instance1_0")?;
+    for status in [PlaybackStatus::Playing, PlaybackStatus::Paused] {
+        for rate in [0.75, 1.2, 1.5] {
+            let mut next = previous.snapshot.clone();
+            next.status = status;
+            next.rate = rate;
+            let current = Published::new(next, None, "instance1_0")?;
+            assert!(changes(&previous, &current).contains(&Property::Rate(rate)));
+            assert_eq!(current.metadata, previous.metadata);
+            assert_eq!(current.snapshot.position, previous.snapshot.position);
+            assert_eq!(current.snapshot.duration, previous.snapshot.duration);
+            assert_eq!(current.snapshot.launch, previous.snapshot.launch);
+            assert_eq!(
+                conversion::confirmed_seek(&previous.snapshot, &current.snapshot),
+                None
+            );
+            assert!(changes(&current, &current).is_empty());
+            previous = current;
+        }
+    }
+    let invalid = Snapshot {
+        rate: f64::NAN,
+        ..snapshot()
+    };
+    assert!(Published::new(invalid, None, "instance1_0").is_err());
+    Ok(())
+}

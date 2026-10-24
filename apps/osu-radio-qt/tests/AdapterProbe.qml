@@ -170,13 +170,55 @@ QtObject {
             }
         }
     }
+    readonly property Component modsFixture: Component {
+        Item {
+            id: fixture
+            width: probe.window.width; height: probe.window.height
+            property var actions: []
+            property alias opener: opener
+            property alias popup: popup
+            Radio.AppButton {
+                id: opener
+                x: parent.width - width - 20; y: parent.height - height - 20
+                text: "Mods"
+                onClicked: popup.open()
+                Radio.AudioModsPopup {
+                    id: popup
+                    x: opener.width - width; y: -height - 8
+                    onDtCycleRequested: fixture.actions.push("dt")
+                    onHtToggleRequested: fixture.actions.push("ht")
+                    onSpeedRequested: percent => fixture.actions.push("speed:" + percent)
+                    onPitchRequested: adjust => fixture.actions.push("pitch:" + adjust)
+                    onClearRequested: fixture.actions.push("clear")
+                    onRetryRequested: fixture.actions.push("retry")
+                }
+            }
+        }
+    }
+    readonly property Component progressFixture: Component {
+        Item {
+            id: fixture
+            width: probe.window.width; height: probe.window.height
+            property var seeks: []
+            property alias progress: progress
+            Radio.PlaybackProgress {
+                id: progress
+                x: 100; y: 100; width: 400; height: 16
+                playbackPosition: 40
+                playbackDuration: 160
+                scaleKey: "42:-1:1:150"
+                onSeekRequested: seconds => fixture.seeks.push(seconds)
+            }
+        }
+    }
     property var sortMedia: ({})
     property int settingsScenario: 0
     readonly property var settingsQueries: [
         { query: " GeNeRaL ", general: true, audio: false, individual: false },
         { query: " FoLdErS ", general: true, audio: false, individual: false },
-        { query: "TrAcK", general: false, audio: true, individual: true },
-        { query: "volume", general: false, audio: true, individual: true },
+        { query: "TrAcK", general: false, audio: true, individual: true, mods: true },
+        { query: "volume", general: false, audio: true, individual: true, mods: false },
+        { query: " MoDs ", general: false, audio: true, individual: false, mods: true },
         { query: "Global volume", general: false, audio: false, individual: false },
         { query: "[missing]", general: false, audio: false, individual: false },
         { query: " AbOuT ", general: false, audio: false, individual: false, about: true, version: true, license: true, project: true },
@@ -185,8 +227,8 @@ QtObject {
         { query: "pRoJeCt", general: false, audio: false, individual: false, about: true, project: true },
         { query: "MIT", general: false, audio: false, individual: false },
         { query: "github.com", general: false, audio: false, individual: false },
-        { query: "", general: true, audio: true, individual: true, about: true, version: true, license: true, project: true },
-        { query: "   ", general: true, audio: true, individual: true, about: true, version: true, license: true, project: true }
+        { query: "", general: true, audio: true, individual: true, mods: true, about: true, version: true, license: true, project: true },
+        { query: "   ", general: true, audio: true, individual: true, mods: true, about: true, version: true, license: true, project: true }
     ]
     readonly property TestCase input: TestCase { parent: probe.window ? probe.window.contentItem : null; when: false }
     readonly property var mock: gallery && window ? window.galleryStore.bridge : null
@@ -495,6 +537,181 @@ QtObject {
         case 9:
             if (c.modal.visible) return;
             check(c.button.activeFocus, "closing the modal restores the recorded opener");
+            finish(); break;
+        }
+    }
+    function modsProbe(): void {
+        if (stage === 0) {
+            window.width = 1024; window.height = 640;
+            controls = modsFixture.createObject(window.contentItem);
+            check(controls !== null, "create offline mods fixture");
+            stage = 1; return;
+        }
+        const c = controls;
+        const popup = c.popup;
+        const dt = findChild(popup.contentItem, "modsDtButton");
+        const ht = findChild(popup.contentItem, "modsHtButton");
+        const speed = findChild(popup.contentItem, "modsSpeedSlider");
+        const pitch = findChild(popup.contentItem, "modsPitchSwitch");
+        const clear = findChild(popup.contentItem, "modsClearButton");
+        const retry = findChild(popup.contentItem, "modsRetryButton");
+        const status = findChild(popup.contentItem, "modsSaveStatus");
+        switch (stage) {
+        case 1:
+            c.opener.forceActiveFocus();
+            input.mouseClick(c.opener);
+            stage = 2; break;
+        case 2:
+            if (!popup.opened) return;
+            check(dt.activeFocus && popup.mode === "none" && speed.value === 100
+                && !speed.enabled && !pitch.enabled && !clear.enabled, "none state and initial focus");
+            check(findChild(popup.contentItem, "modsSpeedLabel").text === "Speed: 1.00×"
+                && !status.visible && !retry.visible, "none presentation");
+            input.mouseClick(pitch); input.mouseClick(clear); input.mouseClick(speed);
+            check(c.actions.length === 0, "inactive mod controls suppress mouse actions");
+            dt.forceActiveFocus();
+            input.keyClick(Qt.Key_D, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_E, Qt.NoModifier, 0);
+            input.mouseClick(dt); input.mouseClick(ht);
+            check(c.actions.join(",") === "dt,ht,dt,ht", "D/E and mouse emit one identical intent each");
+            input.keyClick(Qt.Key_D, Qt.ControlModifier, 0);
+            input.keyClick(Qt.Key_E, Qt.AltModifier, 0);
+            check(c.actions.join(",") === "dt,ht,dt,ht", "modified letter shortcuts do not dispatch mods");
+            check(popup.mode === "none" && popup.speedPercent === 100 && !popup.adjustPitch,
+                "intents do not compute defaults or cycle state in QML");
+            c.actions = [];
+            popup.mode = "dt"; popup.speedPercent = 150;
+            stage = 3; break;
+        case 3:
+            check(dt.variant === "accent" && dt.text === "DT (D)" && ht.variant === "alternate"
+                && speed.from === 101 && speed.to === 200 && speed.stepSize === 1
+                && speed.value === 150 && speed.enabled && pitch.enabled && !pitch.checked,
+                "DT state and slider range");
+            speed.forceActiveFocus(); input.keyClick(Qt.Key_Left, Qt.NoModifier, 0);
+            check(c.actions.join(",") === "speed:149" && popup.speedPercent === 150, "one percent keyboard speed intent");
+            c.actions = []; popup.speedPercent = 101;
+            input.keyClick(Qt.Key_Left, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_Right, Qt.NoModifier, 0);
+            check(c.actions.join(",") === "speed:102", "DT lower bound");
+            c.actions = []; popup.speedPercent = 200;
+            input.keyClick(Qt.Key_Right, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_Left, Qt.NoModifier, 0);
+            check(c.actions.join(",") === "speed:199", "DT upper bound");
+            c.actions = []; popup.speedPercent = 120; popup.adjustPitch = true;
+            stage = 4; break;
+        case 4:
+            check(dt.text === "NC (D)" && dt.variant === "accent" && pitch.checked
+                && speed.value === 120 && findChild(popup.contentItem, "modsSpeedLabel").text === "Speed: 1.20×",
+                "NC uses supplied DT speed and pitch");
+            input.mouseClick(pitch);
+            check(c.actions.join(",") === "pitch:false" && popup.adjustPitch, "mouse pitch intent keeps input state");
+            popup.adjustPitch = false;
+            pitch.forceActiveFocus(); input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
+            check(c.actions.join(",") === "pitch:false,pitch:true", "keyboard pitch intent");
+            input.keyClick(Qt.Key_D, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_E, Qt.NoModifier, 0);
+            check(c.actions.join(",") === "pitch:false,pitch:true,dt,ht", "D/E bubble from focused switch once");
+            c.actions = []; popup.mode = "ht"; popup.speedPercent = 75;
+            stage = 5; break;
+        case 5:
+            check(ht.variant === "accent" && dt.variant === "alternate" && speed.from === 50
+                && speed.to === 99 && speed.value === 75, "HT state and slider range");
+            speed.forceActiveFocus(); popup.speedPercent = 50;
+            input.keyClick(Qt.Key_Left, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_Right, Qt.NoModifier, 0);
+            check(c.actions.join(",") === "speed:51", "HT lower bound");
+            c.actions = []; popup.speedPercent = 99;
+            input.keyClick(Qt.Key_Right, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_Left, Qt.NoModifier, 0);
+            check(c.actions.join(",") === "speed:98", "HT upper bound");
+            c.actions = [];
+            input.mouseClick(speed, speed.width / 2, speed.height / 2, Qt.LeftButton, Qt.NoModifier, 0);
+            check(c.actions.length > 0 && c.actions.every(action => /^speed:\d+$/.test(action)
+                && Number(action.slice(6)) >= 50 && Number(action.slice(6)) <= 99), "mouse speed intents use integer percent in range");
+            c.actions = [];
+            input.mouseClick(clear);
+            clear.forceActiveFocus(); input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
+            check(c.actions.join(",") === "clear,clear" && popup.mode === "ht", "mouse and keyboard clear intents");
+            c.actions = []; popup.saving = true;
+            stage = 6; break;
+        case 6:
+            check(status.visible && status.text === "Saving…" && !retry.visible && dt.enabled,
+                "saving presentation allows further edits");
+            popup.saving = false; popup.errorMessage = "Could not save mods. Check the connection and retry.";
+            popup.canRetry = true;
+            stage = 7; break;
+        case 7: {
+            check(status.visible && status.text === popup.errorMessage && retry.visible && retry.enabled, "save error and retry");
+            const origin = popup.contentItem.mapToItem(window.contentItem, 0, 0);
+            check(origin.x >= 0 && origin.y >= 0 && origin.x + popup.contentItem.width <= window.width
+                && origin.y + popup.contentItem.height <= window.height, "mods popup fits 1024x640");
+            for (const control of [dt, ht, speed, pitch, clear, retry]) {
+                const point = control.mapToItem(popup.contentItem, 0, 0);
+                check(control.Accessible.name.length > 0 && point.x >= 0 && point.y >= 0
+                    && point.x + control.width <= popup.contentItem.width
+                    && point.y + control.height <= popup.contentItem.height, "named mod control fits popup");
+            }
+            input.mouseClick(retry);
+            retry.forceActiveFocus(); input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
+            check(c.actions.join(",") === "retry,retry", "mouse and keyboard Retry intents");
+            c.actions = []; popup.canRetry = false;
+            input.mouseClick(retry);
+            check(c.actions.length === 0, "retry availability is supplied by caller");
+            popup.canRetry = true; popup.saving = true;
+            input.mouseClick(retry);
+            check(!retry.enabled && c.actions.length === 0, "pending save suppresses Retry");
+            popup.saving = false;
+            dt.forceActiveFocus();
+            const reached = [];
+            for (let i = 0; i < 10; ++i) {
+                input.keyClick(Qt.Key_Tab, Qt.NoModifier, 0);
+                check(contained(popup.contentItem, window.activeFocusItem), "mods Tab stays in popup");
+                reached.push(window.activeFocusItem.objectName);
+            }
+            for (const control of [dt, ht, speed, pitch, clear, retry])
+                check(reached.indexOf(control.objectName) >= 0, "mod control reachable by Tab: " + control.objectName);
+            for (let i = 0; i < 10; ++i) {
+                input.keyClick(Qt.Key_Backtab, Qt.ShiftModifier, 0);
+                check(contained(popup.contentItem, window.activeFocusItem), "mods Shift+Tab stays in popup");
+            }
+            popup.available = false;
+            stage = 8; break;
+        }
+        case 8:
+            check(!dt.enabled && !ht.enabled && !speed.enabled && !pitch.enabled && !clear.enabled,
+                "unavailable state disables edits");
+            findChild(popup.contentItem, "modsCloseButton").forceActiveFocus();
+            input.keyClick(Qt.Key_D, Qt.NoModifier, 0); input.keyClick(Qt.Key_E, Qt.NoModifier, 0);
+            input.mouseClick(dt); input.mouseClick(ht); input.mouseClick(pitch); input.mouseClick(clear);
+            check(c.actions.length === 0, "disabled edits suppress keyboard and mouse intents");
+            input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0);
+            stage = 9; break;
+        case 9:
+            if (popup.visible) return;
+            check(c.opener.activeFocus, "mods Escape restores opener focus");
+            input.keyClick(Qt.Key_D, Qt.NoModifier, 0); input.keyClick(Qt.Key_E, Qt.NoModifier, 0);
+            check(c.actions.length === 0, "closed popup ignores D/E");
+            popup.open();
+            stage = 10; break;
+        case 10:
+            if (!popup.opened) return;
+            check(findChild(popup.contentItem, "modsCloseButton").activeFocus, "unavailable popup focuses reachable close button");
+            popup.available = true;
+            input.mouseClick(window.contentItem, 4, 120, Qt.LeftButton, Qt.NoModifier, 0);
+            stage = 11; break;
+        case 11:
+            if (popup.visible) return;
+            check(c.opener.activeFocus && !contained(popup.contentItem, window.activeFocusItem), "outside dismiss restores focus");
+            popup.open(); stage = 12; break;
+        case 12:
+            if (!popup.opened) return;
+            input.mouseClick(findChild(popup.contentItem, "modsCloseButton"));
+            stage = 13; break;
+        case 13:
+            if (popup.visible) return;
+            check(c.opener.activeFocus, "close button restores focus");
+            input.keyClick(Qt.Key_D, Qt.NoModifier, 0); input.keyClick(Qt.Key_E, Qt.NoModifier, 0);
+            check(c.actions.length === 0, "hidden mod controls retain no keyboard focus");
             finish(); break;
         }
     }
@@ -1052,6 +1269,7 @@ QtObject {
         const project = findChild(pane, "aboutProjectSetting");
         const link = findChild(pane, "aboutProjectLink");
         const individual = findChild(pane, "individualVolumeSwitch");
+        const modsSwitch = findChild(pane, "individualModsSwitch");
         const global = findChild(pane, "globalVolumeSetting");
         const empty = findChild(pane, "settingsSearchEmpty");
         const content = findChild(pane, "settingsContent");
@@ -1089,6 +1307,7 @@ QtObject {
             check(general.visible === expected.general && audio.visible === expected.audio
                 && individual.visible === expected.individual && !global.visible,
                 "section/setting substring filter: " + expected.query);
+            check(expected.mods === undefined || modsSwitch.visible === expected.mods, "individual mods switch filter: " + expected.query);
             check(about.visible === !!expected.about && version.visible === !!expected.version
                 && license.visible === !!expected.license && project.visible === !!expected.project,
                 "About section/field substring filter: " + expected.query);
@@ -1138,7 +1357,7 @@ QtObject {
             stage = 7;
             break;
         case 7:
-            check(!general.visible && audio.visible && !individual.visible && global.visible && !empty.visible,
+            check(!general.visible && audio.visible && !individual.visible && global.visible && !modsSwitch.visible && !empty.visible,
                 "matching a setting hides other settings inside the same section");
             check(global.y === 0, "hidden individual-volume row leaves no layout gap");
             check(bridge.player.selectedAudioId === 42 && findChild(window.contentItem, "playerPane").visible,
@@ -1160,7 +1379,7 @@ QtObject {
             stage = 10;
             break;
         case 10:
-            check(audio.visible && individual.visible && global.visible,
+            check(audio.visible && individual.visible && global.visible && modsSwitch.visible,
                 "matching a section shows all currently available settings");
             bridge.settings.setIndividualVolumeEnabled(false);
             stage = 11;
@@ -1387,6 +1606,195 @@ QtObject {
             finish(); break;
         }
     }
+    function progressProbe(): void {
+        if (stage === 0) {
+            window.width = 1024; window.height = 640;
+            controls = progressFixture.createObject(window.contentItem);
+            check(controls !== null, "create offline progress fixture");
+            stage = 1; return;
+        }
+        const c = controls;
+        const p = c.progress;
+        const drag = to => {
+            input.mousePress(p, p.width / 2, p.height / 2, Qt.LeftButton, Qt.NoModifier, 0);
+            input.mouseMove(p, p.width * to, p.height / 2, 0);
+        };
+        switch (stage) {
+        case 1:
+            check(p.enabled && p.value === 40 && p.from === 0 && p.to === 160, "presentation seconds bind unchanged");
+            drag(0.75);
+            check(p.pressed, "press starts a drag");
+            p.playbackPosition = 100;
+            check(p.value !== 100, "position ticks do not move a dragged handle");
+            input.mouseRelease(p, p.width * 0.75, p.height / 2, Qt.LeftButton, Qt.NoModifier, 0);
+            check(c.seeks.length === 1 && Math.abs(c.seeks[0] - 120) < 6, "released drag seeks once in presentation seconds: " + c.seeks);
+            check(p.value === 100, "released slider follows the reported position again");
+            c.seeks = []; p.playbackPosition = 40;
+            stage = 2; break;
+        case 2:
+            drag(0.75);
+            p.scaleKey = "42:-1:1:120";
+            check(p.stale && p.value === 40, "speed change cancels the drag and restores the position");
+            input.mouseRelease(p, p.width * 0.75, p.height / 2, Qt.LeftButton, Qt.NoModifier, 0);
+            check(c.seeks.length === 0 && !p.stale, "stale speed drag sends no seek");
+            drag(0.75);
+            p.scaleKey = "42:-1:2:120";
+            input.mouseRelease(p, p.width * 0.75, p.height / 2, Qt.LeftButton, Qt.NoModifier, 0);
+            check(c.seeks.length === 0, "new launch token of the same audio sends no seek");
+            drag(0.75);
+            p.scaleKey = "7:-1:2:120";
+            p.scaleKey = "42:-1:2:120";
+            input.mouseRelease(p, p.width * 0.75, p.height / 2, Qt.LeftButton, Qt.NoModifier, 0);
+            check(c.seeks.length === 0, "a scale that changed and returned is still another scale");
+            stage = 3; break;
+        case 3:
+            drag(0.25);
+            input.mouseRelease(p, p.width * 0.25, p.height / 2, Qt.LeftButton, Qt.NoModifier, 0);
+            check(c.seeks.length === 1 && Math.abs(c.seeks[0] - 40) < 6, "the next drag is not poisoned by a cancelled one: " + c.seeks);
+            c.seeks = [];
+            p.enabled = false;
+            drag(0.75);
+            input.mouseRelease(p, p.width * 0.75, p.height / 2, Qt.LeftButton, Qt.NoModifier, 0);
+            check(c.seeks.length === 0, "unavailable seeking sends nothing");
+            p.enabled = true; p.forceActiveFocus();
+            input.keyClick(Qt.Key_Right, Qt.NoModifier, 0);
+            check(c.seeks.length === 1 && c.seeks[0] > 40, "keyboard seek reports one presentation-second value: " + c.seeks);
+            finish(); break;
+        }
+    }
+    function galleryModsProbe(): void {
+        const store = window.galleryStore;
+        const button = findChild(window.contentItem, "galleryModsButton");
+        const popup = findChild(window.contentItem, "galleryModsPopup");
+        const mods = () => store.state.mods.mode + ":" + store.state.mods.speed_percent + ":" + store.state.mods.adjust_pitch;
+        const control = name => findChild(popup.contentItem, name);
+        switch (stage) {
+        case 0:
+            check(mods() === "none:100:false" && store.state.mods.available && !store.state.mods.individual, "gallery starts without mods");
+            button.forceActiveFocus(); button.clicked(); stage = 1; break;
+        case 1:
+            if (!popup.opened) return;
+            check(control("modsDtButton").activeFocus && popup.available, "gallery popup opens on the shared state");
+            input.keyClick(Qt.Key_D, Qt.NoModifier, 0);
+            check(mods() === "dt:150:false" && popup.mode === "dt" && popup.speedPercent === 150, "D selects DT through the shared mock rules");
+            input.keyClick(Qt.Key_D, Qt.NoModifier, 0);
+            check(mods() === "dt:150:true" && control("modsDtButton").text === "NC (D)", "second D is NC at the same speed");
+            const speed = control("modsSpeedSlider");
+            speed.value = 120; speed.moved();
+            check(mods() === "dt:120:true", "NC keeps its own speed");
+            input.keyClick(Qt.Key_D, Qt.NoModifier, 0);
+            check(mods() === "none:100:false", "third D clears mods");
+            input.keyClick(Qt.Key_E, Qt.NoModifier, 0);
+            check(mods() === "ht:75:false", "E selects HT");
+            input.mouseClick(control("modsPitchSwitch"));
+            check(mods() === "ht:75:true", "mouse pitch uses the same command");
+            input.mouseClick(control("modsClearButton"));
+            check(mods() === "none:100:false", "mouse Clear uses the same command");
+            input.keyClick(Qt.Key_E, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0);
+            stage = 2; break;
+        case 2:
+            if (popup.visible) return;
+            check(mods() === "ht:75:false", "closing keeps the edit");
+            input.keyClick(Qt.Key_D, Qt.NoModifier, 0);
+            check(mods() === "ht:75:false", "a closed popup ignores D");
+            button.clicked();
+            stage = 3; break;
+        case 3: {
+            if (!popup.opened) return;
+            store.send("modsIndividual", true);
+            check(store.state.mods.individual && mods() === "none:100:false", "individual mode does not inherit the shared profile");
+            stage = 4; break;
+        }
+        case 4: {
+            if (popup.visible) return;
+            const before = mods();
+            store.send("modsCycleDt");
+            check(mods() === before, "an edit after the popup ended is rejected");
+            finish(); break;
+        }
+        }
+    }
+    function modsLiveProbe(): void {
+        if (!bridge.connected || bridge.library.libraryLoading) return;
+        const settings = bridge.settings;
+        const play = findChild(window.contentItem, "playPauseButton");
+        const popup = findChild(window.contentItem, "modsPopup");
+        const part = name => findChild(popup.contentItem, name);
+        const mods = () => settings.modsMode + ":" + settings.modsSpeedPercent + ":" + settings.modsAdjustPitch;
+        const ready = () => settings.modsLoaded && settings.modsMessage === "" && !settings.modsSaving;
+        const durationLabel = () => bridge.player.selectedDurationLabel;
+        // Each step acts once, then waits for the asynchronous client state it expects.
+        const steps = [
+            { act: () => {}, until: () => settings.modsMessage.includes("Failed to load mods") && !settings.modsLoaded,
+              check: () => !play.enabled && !settings.modsAvailable && !findChild(window.contentItem, "individualModsSwitch").enabled,
+              message: "a mods load failure blocks playback and editing" },
+            { act: () => input.keyClick(Qt.Key_F1, Qt.NoModifier, 0), until: () => popup.opened,
+              check: () => !popup.available && popup.errorMessage.includes("Failed to load mods") && part("modsRetryButton").visible && !part("modsDtButton").enabled,
+              message: "F1 opens a disabled popup with the load error" },
+            { act: () => { input.keyClick(Qt.Key_D, Qt.NoModifier, 0); input.mouseClick(part("modsRetryButton")); },
+              until: () => ready() && popup.available,
+              check: () => mods() === "none:100:false", message: "Retry loads mods and enables the open popup without a reopen" },
+            { act: () => input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0), until: () => !popup.visible },
+            { act: () => bridge.library.selectTrack(42), until: () => bridge.player.selectedAudioId === 42 && durationLabel() !== "--:--",
+              check: () => durationLabel() === "04:00" && bridge.player.currentAudioId === 7 && play.enabled,
+              message: "A is current, B selected; global mode has no mods, so B stays 4:00" },
+            { act: () => input.keyClick(Qt.Key_F1, Qt.NoModifier, 0), until: () => popup.opened && popup.available && part("modsDtButton").activeFocus },
+            { act: () => input.keyClick(Qt.Key_D, Qt.NoModifier, 0), until: () => mods() === "dt:150:false" && settings.modsMessage.includes("Failed to save mods"),
+              check: () => popup.mode === "dt" && popup.errorMessage.includes("Failed to save mods") && part("modsRetryButton").enabled,
+              message: "F1, D selects DT 1.50x and the failed first save is visible in the menu" },
+            { act: () => input.mouseClick(part("modsRetryButton")), until: () => ready() && mods() === "dt:150:false",
+              check: () => !part("modsRetryButton").visible, message: "Retry saves the edit and the open editor stays addressable" },
+            { act: () => input.keyClick(Qt.Key_D, Qt.NoModifier, 0), until: () => mods() === "dt:150:true", check: () => part("modsDtButton").text === "NC (D)", message: "second D is NC at 1.50x" },
+            { act: () => input.keyClick(Qt.Key_D, Qt.NoModifier, 0), until: () => mods() === "none:100:false", message: "third D clears" },
+            { act: () => input.keyClick(Qt.Key_E, Qt.NoModifier, 0), until: () => mods() === "ht:75:false", message: "E selects HT 0.75x" },
+            { act: () => input.keyClick(Qt.Key_E, Qt.NoModifier, 0), until: () => mods() === "none:100:false", message: "second E clears HT" },
+            { act: () => input.keyClick(Qt.Key_D, Qt.NoModifier, 0), until: () => mods() === "dt:150:false" },
+            { act: () => { const speed = part("modsSpeedSlider"); speed.value = 120; speed.moved(); }, until: () => mods() === "dt:120:false",
+              check: () => part("modsSpeedLabel").text === "Speed: 1.20×", message: "slider changes the speed" },
+            { act: () => input.mouseClick(part("modsPitchSwitch")), until: () => mods() === "dt:120:true", check: () => part("modsDtButton").text === "NC (D)", message: "Adjust pitch makes NC" },
+            { act: () => input.mouseClick(part("modsClearButton")), until: () => mods() === "none:100:false", message: "Clear removes mods" },
+            { act: () => input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0), until: () => !popup.visible },
+            // Individual mode: B has its own DT 1.50x, shown on the 4:00 timescale as 2:40.
+            { act: () => input.mouseClick(findChild(window.contentItem, "settingsButton")), until: () => window.selectedTab === 2 },
+            { act: () => input.mouseClick(findChild(window.contentItem, "individualModsSwitch")), until: () => settings.individualModsEnabled && ready() && durationLabel() === "02:40",
+              check: () => mods() === "dt:150:false" && !settings.individualVolumeEnabled && bridge.player.playbackSpeedPercent === 150,
+              message: "individual switch shows B's own profile (4:00 becomes 2:40) and leaves volume mode alone" },
+            { act: () => { findChild(window.contentItem, "settingsSearch").text = "mods"; }, until: () => !findChild(window.contentItem, "generalSettingsSection").visible,
+              check: () => findChild(window.contentItem, "individualModsSwitch").visible && !findChild(window.contentItem, "individualVolumeSwitch").visible, message: "search finds the switch" },
+            { act: () => { findChild(window.contentItem, "settingsSearch").text = ""; input.mouseClick(findChild(window.contentItem, "songsTabButton")); }, until: () => window.selectedTab === 0 },
+            { act: () => bridge.library.selectTrack(103), until: () => bridge.player.selectedAudioId === 103 && durationLabel() !== "--:--" && mods() === "none:100:false",
+              check: () => durationLabel() === "04:00", message: "a track without a profile is 1x in individual mode" },
+            { act: () => bridge.library.selectTrack(42), until: () => bridge.player.selectedAudioId === 42 && mods() === "dt:150:false" },
+            { act: () => input.keyClick(Qt.Key_F1, Qt.NoModifier, 0), until: () => popup.opened && popup.available && part("modsDtButton").activeFocus },
+            { act: () => input.keyClick(Qt.Key_D, Qt.NoModifier, 0), until: () => mods() === "dt:150:true",
+              check: () => bridge.player.currentAudioId === 7 && bridge.player.loadingAudioId === -1, message: "editing B leaves current A alone" },
+            // A late edit addressed to B must not reach the track selected next.
+            { act: () => { bridge.library.selectTrack(103); settings.cycleDtMod(); }, until: () => bridge.player.selectedAudioId === 103 && !popup.visible,
+              check: () => mods() === "none:100:false", message: "selection change closes the popup; the late edit does not land on 103" },
+            { act: () => bridge.library.selectTrack(42), until: () => bridge.player.selectedAudioId === 42 && mods() === "dt:150:true" },
+            { act: () => input.keyClick(Qt.Key_F1, Qt.NoModifier, 0), until: () => popup.opened && popup.available },
+            { act: () => settings.setIndividualModsEnabled(false), until: () => !settings.individualModsEnabled && !popup.visible,
+              check: () => mods() === "none:100:false", message: "a mode change closes the popup and applies the global profile" },
+            { act: () => settings.setIndividualModsEnabled(true), until: () => settings.individualModsEnabled && mods() === "dt:150:true", message: "re-enabling restores B's profile" },
+            { act: () => bridge.library.selectTrack(-1), until: () => !bridge.player.hasSelection && !settings.modsAvailable,
+              check: () => !popup.visible, message: "no selection leaves no individual addressee" },
+            { act: () => input.keyClick(Qt.Key_F1, Qt.NoModifier, 0), until: () => popup.opened,
+              check: () => !popup.available && !part("modsDtButton").enabled, message: "F1 with no selection opens a disabled popup" },
+            { act: () => input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0), until: () => !popup.visible },
+            { act: () => bridge.library.selectTrack(42), until: () => bridge.player.selectedAudioId === 42 && settings.modsAvailable },
+            { act: () => input.keyClick(Qt.Key_F1, Qt.NoModifier, 0), until: () => popup.opened && popup.available && part("modsDtButton").activeFocus },
+            { act: () => input.keyClick(Qt.Key_E, Qt.NoModifier, 0), until: () => mods() === "ht:75:false", message: "last edit stays pending for the close flush" },
+        ];
+        if (stage >= steps.length) { finish(); return; }
+        const step = steps[stage];
+        if (!modsStepActed) { step.act(); modsStepActed = true; }
+        if (step.until && !step.until()) return;
+        if (step.check) check(step.check(), step.message || "mods step " + stage);
+        modsStepActed = false;
+        stage++;
+    }
+    property bool modsStepActed: false
     function queueCards(panel: var): var {
         return panel.mediaDelegates.filter(row => row.inViewport);
     }
@@ -2435,6 +2843,10 @@ QtObject {
         if (passed) return;
         if (testCase === "controls") { controlsProbe(); return; }
         if (testCase === "controls-popups") { menuModalProbe(); return; }
+        if (testCase === "controls-mods") { modsProbe(); return; }
+        if (testCase === "controls-progress") { progressProbe(); return; }
+        if (testCase === "gallery-mods") { galleryModsProbe(); return; }
+        if (testCase === "mods") { modsLiveProbe(); return; }
         if (testCase === "controls-window") { windowProbe(); return; }
         if (testCase === "controls-panels") { panelProbe(); return; }
         if (testCase === "gallery-insert") { galleryInsertionProbe(); return; }
@@ -2595,6 +3007,6 @@ QtObject {
         onTriggered: { probe.step(); if (!probe.passed) restart(); }
     }
     Component.onCompleted: {
-        if (gallery && !testCase.startsWith("controls") && testCase !== "gallery-queue" && testCase !== "gallery-insert") galleryProbe();
+        if (gallery && !testCase.startsWith("controls") && testCase !== "gallery-queue" && testCase !== "gallery-insert" && testCase !== "gallery-mods") galleryProbe();
     }
 }

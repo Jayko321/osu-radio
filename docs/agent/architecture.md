@@ -22,7 +22,7 @@ creates a future product requirement.
 | --- | --- | --- |
 | `LibraryViewModel` | Songs, search, sorting, loading and selected library track | Library results and selection survive playlist navigation independently. Selection alone never starts audio. |
 | `PlaylistsViewModel` | Playlist list/detail, query, selected item, editor and item operations | A concrete playlist item has its own identity even when several difficulties share audio. Rows carry item ID and track together. |
-| `SettingsViewModel` | Preferences, audio volume, registered folders and staged add/refresh/remove workflow | State/rules are reusable and work before a server connects; storage and native pickers are separate adapters. |
+| `SettingsViewModel` | Preferences, audio volume, audio mods (separate save lane), registered folders and staged add/refresh/remove workflow | State/rules are reusable and work before a server connects; storage and native pickers are separate adapters. |
 | `PlayerViewModel` | Selected-track presentation, playback state, control availability and Play/Pause/Resume rules | Selected, current and loading tracks remain distinguishable. Entry IDs/tokens identify launches; waiting gates local audio and recovered pause preserves independent selection. |
 | `QueueViewModel` | Full queue rows, history/current boundary, loading/operation errors and open-panel refresh | The client projects the queue; the server owns persisted queue order and assignments. |
 
@@ -67,7 +67,7 @@ probes from native platform and physical-audio acceptance.
 The server owns persistence, source-file access, original audio serving and the
 permanent queue. The client owns temporary audio downloads and the local playback
 worker. `osu-radio-player` accepts local files and owns synchronous decoding,
-seek, output and volume; it has no HTTP, database or GUI dependency. No server
+seek, output, volume and tempo/pitch processing; it has no HTTP, database or GUI dependency. No server
 HTTP contract or schema change is part of this refactor.
 
 The client session either owns a local child server (the default) or connects to an
@@ -111,6 +111,24 @@ on Close, event-loop exit and failed launch. The gallery never attaches. A fatal
 native error disables only this integration until restart, without retry; artwork
 failure is nonfatal. See [source contracts](frontend.md#system-media-controls) and
 [verification limits](development.md#system-media-controls-verification).
+
+## Approved audio mods boundary
+
+Plan decisions from the [adjustable speed and pitch plan](../impl/adjustable-pitch-speed.md),
+recorded as implemented in [frontend](frontend.md#adjustable-speed-and-pitch):
+
+- A separate `AudioModsService`/HTTP surface stores the mode switch, global profile
+  and source-keyed individual profiles; volume contracts are unchanged. Individual
+  absence is 1× and never inherits the global set. NC is DT with `adjust_pitch`,
+  with no stored NC state.
+- `SettingsViewModel` owns mods state and its save lane; there is no sixth owner,
+  second event loop or new worker thread. One playback gate covers volume and mods.
+- The player owns processing (Rodio speed for pitch-following, Signalsmith Stretch
+  for preserved pitch) and reports **source** coordinates; DT/HT/NC names stay out
+  of the engine. The client alone converts to UI time and back and sends the
+  launch's own parameters with every assignment.
+- Individual profiles travel in the DTOs, so Play needs no extra profile request.
+  MPRIS/SMTC and Discord receive the applied speed; OS-side mod control is out of scope.
 
 ## Approved Qt presentation
 
@@ -156,7 +174,7 @@ a temporary toolkit store as the long-term settings architecture.
 | VM request execution and ordered coordinator results | [workflow.rs](../../crates/osu-radio-client/src/controller/workflow.rs) |
 | Library owner | [library.rs](../../crates/osu-radio-client/src/view_models/library.rs) |
 | Playlist owner and atomic item/track rows | [playlists.rs](../../crates/osu-radio-client/src/view_models/playlists.rs) |
-| Settings owner; audio/folder workflow data | [settings.rs](../../crates/osu-radio-client/src/view_models/settings.rs), [volume.rs](../../crates/osu-radio-client/src/view_models/volume.rs), [folders.rs](../../crates/osu-radio-client/src/view_models/folders.rs) |
+| Settings owner; audio/mods/folder workflow data | [settings.rs](../../crates/osu-radio-client/src/view_models/settings.rs), [volume.rs](../../crates/osu-radio-client/src/view_models/volume.rs), [mods.rs](../../crates/osu-radio-client/src/view_models/mods.rs), [folders.rs](../../crates/osu-radio-client/src/view_models/folders.rs) |
 | Player owner and primary command rules | [player.rs](../../crates/osu-radio-client/src/view_models/player.rs) |
 | Full queue projection and operation owner | [queue.rs](../../crates/osu-radio-client/src/view_models/queue.rs) |
 | Common media scheduler | [media.rs](../../crates/osu-radio-client/src/controller/media.rs) |

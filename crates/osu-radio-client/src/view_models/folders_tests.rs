@@ -1,5 +1,6 @@
 #![allow(clippy::indexing_slicing)]
 use super::*;
+use crate::controller::Completed;
 use std::sync::Arc;
 
 fn controller() -> Controller {

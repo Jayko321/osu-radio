@@ -88,6 +88,7 @@ pub enum AppCommand {
         volume_percent: Option<u8>,
     },
     RetryAudioSettings,
+    Mods(crate::view_models::ModsAction),
     SelectFolder(Option<i32>),
     BeginFolderPick,
     CompleteFolderPick(Option<PathBuf>),
@@ -119,6 +120,7 @@ pub enum AppCommand {
 pub enum AppUpdate {
     Queue(QueueView),
     AudioSettings(AudioSettingsState),
+    AudioMods(crate::view_models::AudioModsState),
     Playlists(PlaylistsState),
     PlaylistCover {
         id: i32,
@@ -232,6 +234,11 @@ pub(crate) enum Completed {
         result: Result<crate::models::QueueState, String>,
     },
     AudioSettings(Result<crate::models::AudioSettings, String>),
+    AudioMods {
+        request: u64,
+        revision: u64,
+        result: Result<crate::models::AudioModsSettings, String>,
+    },
     Playlist(playlists::PlaylistEvent),
     PlaybackRetry(queue::PendingPlayback),
     PlaybackCommand {
@@ -331,7 +338,20 @@ impl Controller {
     async fn run(mut self, mut commands: mpsc::UnboundedReceiver<AppCommand>) {
         loop {
             let volume_deadline = self.volume_deadline();
+            let mods_deadline = self.settings.mods_deadline();
             tokio::select! {
+                () = async {
+                    match mods_deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending().await,
+                    }
+                } => self.start_mods_save(),
+                result = async {
+                    match &mut self.settings.mods.save_task {
+                        Some(task) => task.await.unwrap_or_else(|error| Err(error.to_string())),
+                        None => std::future::pending().await,
+                    }
+                } => self.mods_saved(result),
                 () = async {
                     match volume_deadline {
                         Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -387,6 +407,7 @@ impl Controller {
         self.discord.begin_shutdown();
         self.cancel_audio();
         self.flush_volume_saves().await;
+        self.flush_mods_saves().await;
         self.cancel_selection();
         let _ = self.cancel.send(true);
         if let Some(mut playback) = self.playback.take() {
@@ -471,6 +492,7 @@ impl Controller {
                 volume_percent,
             } => self.set_track_volume(audio_id, volume_percent),
             AppCommand::RetryAudioSettings => self.retry_audio_settings(),
+            AppCommand::Mods(action) => self.mods_action(action),
             AppCommand::Connect => self.connect(),
             AppCommand::RefreshLibrary => self.refresh_library(),
             AppCommand::SetTrackSort(sort) => self.set_track_sort(sort),
@@ -524,6 +546,11 @@ impl Controller {
         match result {
             Completed::Queue { request, result } => self.queue_loaded(request, result),
             Completed::AudioSettings(result) => self.audio_settings_loaded(result),
+            Completed::AudioMods {
+                request,
+                revision,
+                result,
+            } => self.mods_loaded_result(request, revision, result),
             Completed::Playlist(event) => self.playlist_event(event),
             Completed::PlaybackRetry(pending) => self.player.commands.push_front(pending),
             Completed::PlaybackCommand { pending, result } => {
@@ -561,6 +588,7 @@ impl Controller {
                         self.refresh_folders();
                         self.refresh_playlists();
                         self.load_audio_settings();
+                        self.load_mods();
                         self.refresh_queue();
                     }
                     Err(error) => {
@@ -612,6 +640,7 @@ pub(crate) mod tests {
                     Arc::new(move |update| sink.lock().unwrap().push(update)),
                 );
                 controller.settings.volume.settings = Some(crate::models::AudioSettings::default());
+                controller.settings.mods.loaded = true;
                 controller
             },
             updates,
@@ -632,6 +661,7 @@ pub(crate) mod tests {
             audio_source_id: id,
             last_played_at_ms: None,
             volume_percent: None,
+            mods: None,
             cover_beatmap_id: Some(id.saturating_add(100)),
             title_original: Some(id.to_string()),
             title_unicode: None,
@@ -1645,3 +1675,6 @@ mod media_tests {
 
 #[cfg(test)]
 mod view_model_tests;
+
+#[cfg(test)]
+mod mods_tests;

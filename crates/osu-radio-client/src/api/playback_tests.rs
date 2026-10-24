@@ -1,7 +1,7 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-const ASSIGNMENT: &str = r#"{"current_audio_source_id":7,"track":{"audio_source_id":7,"title":"曲","title_unicode":null,"artist":null,"artist_unicode":null,"cover_beatmap_id":77,"difficulties":[]},"duration_ms":1234,"waiting_for_check":false,"mode":"playing","revision":2,"playback_token":5,"can_next":true,"can_previous":true}"#;
+const ASSIGNMENT: &str = r#"{"current_audio_source_id":7,"mods":{"mode":"dt","speed_percent":120,"adjust_pitch":true},"track":{"audio_source_id":7,"mods":{"mode":"dt","speed_percent":120,"adjust_pitch":true},"title":"曲","title_unicode":null,"artist":null,"artist_unicode":null,"cover_beatmap_id":77,"difficulties":[]},"duration_ms":1234,"waiting_for_check":false,"mode":"playing","revision":2,"playback_token":5,"can_next":true,"can_previous":true}"#;
 
 async fn request(stream: &mut tokio::net::TcpStream) {
     let mut request = Vec::new();
@@ -48,7 +48,11 @@ async fn playback_stream_splits_utf8_skips_heartbeats_and_cancellation_closes_it
         .unwrap()
         .unwrap();
     assert_eq!(assignment.playback_token, 5);
-    assert_eq!(assignment.track.unwrap().title.as_deref(), Some("曲"));
+    let track = assignment.track.unwrap();
+    assert_eq!(track.title.as_deref(), Some("曲"));
+    assert_eq!(track.mods, assignment.mods);
+    assert_eq!(assignment.mods.unwrap().speed_percent, 120);
+    assert!(assignment.mods.unwrap().adjust_pitch);
     assert!(updates.try_recv().is_err());
     stream.abort();
     assert!(stream.await.unwrap_err().is_cancelled());

@@ -1,3 +1,5 @@
+mod audio_mods;
+pub use audio_mods::{AudioModsMode, AudioModsProfile, AudioModsSettings};
 mod audio_source;
 mod beatmap;
 mod beatmap_metadata;

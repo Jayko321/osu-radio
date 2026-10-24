@@ -1,3 +1,5 @@
+pub mod audio_mods;
+pub use audio_mods::AudioModsRepository;
 pub mod audio_source;
 pub mod audio_volume;
 pub use audio_volume::AudioVolumeRepository;

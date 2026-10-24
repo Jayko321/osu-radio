@@ -107,6 +107,8 @@ files. Loading prepares a paused source and preserves the previous source on
 open/decode failure. Stop resets position; Play after EOF restarts; seek clamps to
 known duration and preserves Playing/Paused, restoring EOF in pause. Volume is a
 finite linear coefficient in `0..=1`, initially 1, retained for the session.
+Tempo and pitch come from one `PlaybackParameters` pair; see
+[Adjustable speed and pitch](#adjustable-speed-and-pitch).
 
 Supported audio is MP3, Ogg/Vorbis and PCM WAV, matching the `.mp3`, `.ogg` and
 `.wav` audio extensions in [osu! source](https://github.com/ppy/osu/blob/master/osu.Game/Utils/SupportedExtensions.cs)
@@ -279,7 +281,9 @@ track. Real decoder duration and successful local seek serials anchor timestamps
 A coalesced watch snapshot deduplicates token/source/state/seek/display metadata/
 duration changes; ordinary 100 ms position ticks never send IPC updates.
 Those ticks refresh the local watch value without notifying the worker, so a
-later enable/reconnect starts from the newest measured position.
+later enable/reconnect starts from the newest measured position. Position and
+duration are converted to real time by the applied speed; a speed change alone
+republishes, including while paused.
 Playing uses Listening (2), title/details and artist/state. Unicode preferences
 apply to current-track metadata. Text uses existing fallbacks and truncates safely
 to 128 UTF-8 bytes. Paused retains title plus a static `Paused • mm:ss • artist`
@@ -394,6 +398,88 @@ Qt is the desktop GUI; the removed Vizia frontend has no compatibility path.
 selection/current independence, reset, mode retention, 0/100 bounds, loading/save
 errors, debounce, stale responses, first-play volume and shutdown flush. Manual
 slider interaction and physical output on Linux/Windows remain separate checks.
+
+## Adjustable speed and pitch
+
+Implementation of DT/HT/NC from the [specification](../specs/adjustable-pitch-speed.md)
+(R1–R8) and [plan](../impl/adjustable-pitch-speed.md). Automated evidence is listed
+at the end; listening, native input and Windows acceptance are not claimed here.
+
+**Profile and storage.** A profile is `mode: none|dt|ht`, integer `speed_percent`
+and `adjust_pitch` (none = 100/false, DT 101–200, HT 50–99). NC is DT with
+`adjust_pitch`; no separate NC profile exists. The server stores the global set and
+mode switch in `user_data` and individual profiles by audio source identity in
+`audio_mods`; see [database](database.md#audio-mods) and the
+[HTTP contract](backend.md#audio-mods-http-contract). Library, playlist, queue and
+assignment DTOs carry nullable `mods` — the stored individual profile, never the
+global set. Absence means 1× in individual mode; the global set is not inherited.
+
+**Client state.** The [mods module](../../crates/osu-radio-client/src/view_models/mods.rs)
+extends `SettingsViewModel` (no sixth owner). `Editor` holds the D/E rules (D: DT →
+NC → none, new DT 150% without pitch; E: HT 75% toggle; DT ↔ NC keeps speed),
+bounds, local overrides and an `epoch`/`ModsEditTarget` that rejects late edits for
+a previous target. `ModsWork` is a save lane separate from volume: 200 ms
+coalescing per target, Retry, acknowledgements that never overwrite a newer local
+value and a bounded flush on shutdown. Commands are `AppCommand::Mods(ModsAction)`,
+state arrives as `AppUpdate::AudioMods(AudioModsState)`. The offline
+[mock](../../crates/osu-radio-client/src/mock/mods.rs) reuses `Editor`.
+
+**Playback gate and assignment.** One gate, `SettingsViewModel::playback_ready()`,
+requires both volume and mods loads; a failed mods load keeps it closed until Retry.
+The last assignment is held and released from either load response. `Assign`
+carries `PlaybackParameters` computed from the saved launch source's profile
+(`assignment_mods`), applied before the first `play`; the worker validates the
+finite 0.5–2.0 pair before changing anything. An edit of the sounding launch
+re-sends the same entry/token, updating the engine in place without reload,
+position, pause or token change. Editing selected B while A sounds changes only
+B's stored profile, projection and displayed duration; it neither starts B nor
+touches the queue revision/token.
+
+**Engine.** [Player](../../crates/osu-radio-player/src/lib.rs) takes
+`PlaybackParameters { speed, adjust_pitch }` (`set_parameters`, `Snapshot.parameters`).
+[stream.rs](../../crates/osu-radio-player/src/stream.rs) leaves 1× untouched, uses
+Rodio's speed change when pitch follows speed and Signalsmith Stretch
+(`signalsmith-stretch =0.1.3`, MIT) when pitch is preserved, in 512-frame blocks with
+a bounded lookahead, no new thread and a single end-of-stream after the tail.
+Snapshot position/duration are **source** coordinates; parameter changes apply at
+the next block boundary. See the [native build notes](development.md#signalsmith-native-build).
+
+**Time scale.** `PlayerPresentation` divides source position/duration by the actual
+speed (4:00 at 1.5× shows 2:40); `selected_duration` uses the selected track's own
+profile and metadata is untouched. `AppCommand::Seek` takes UI time and
+`seek_selected` multiplies by the actual speed once; system media seek stays in
+source time. Qt's [`PlaybackProgress`](../../apps/osu-radio-qt/qml/components/PlaybackProgress.qml)
+cancels a drag that survives a launch, token, speed or selection change.
+
+**Qt.** The popup ([AudioModsPopup](../../apps/osu-radio-qt/qml/components/AudioModsPopup.qml))
+sits beside the volume button in [PlayerPanel](../../apps/osu-radio-qt/qml/PlayerPanel.qml);
+F1 is a `Shortcut` in [Main.qml](../../apps/osu-radio-qt/qml/Main.qml), D/E work only
+inside the open popup, mouse and keys emit the same intents. `beginModsEdit` captures
+the target in Rust and selection/mode changes close the popup. Settings has an
+independent **Individual track mods** switch (searchable) with status and Retry.
+The gallery uses the shared mock and stays offline.
+
+**Integrations.** MPRIS/SMTC receive source coordinates plus the worker's applied
+speed as `rate` (MPRIS `Rate`, 0.5–2); only a confirmed matching worker reports a
+non-1.0 rate. Discord converts position/duration once in `Presence::from_playback`
+and republishes on a speed change, including while paused. OS-side mod control
+is not provided.
+
+**Automated evidence** (Linux only; see the
+[T11 report](../impl/adjustable-pitch-speed/T11.md#отчёт-о-выполнении) for commands
+and results): player signal/frequency/duration, EOF and live-edit tests;
+[client mods tests](../../crates/osu-radio-client/src/view_models/mods/tests.rs),
+[controller HTTP test](../../crates/osu-radio-client/src/controller/mods_tests.rs),
+worker gate/parameter tests in `playback.rs`; Qt popup, progress, gallery and live
+probes in [AdapterProbe.qml](../../apps/osu-radio-qt/tests/AdapterProbe.qml). The
+opt-in [real-backend probe](../../crates/osu-radio-client/src/playback/tests/real_backend.rs)
+`real_server_mods_follow_each_launch_across_restart_reimport_and_live_edits` drives a
+real server and SQLite with the worker core and a **fake engine**: mode toggle,
+A/B edits, restart, remove/reimport, explicit Play and automatic next, asserting the
+pair seen at each first `play`. It does not exercise the real DSP, the controller's
+presentation/system snapshot or Qt; those are covered separately with fakes. Physical
+sound, audible artifacts, native F1/D/E, live drag, MPRIS/SMTC panels, real Discord
+and Windows remain manual (T12).
 
 ## User playlists
 
@@ -831,6 +917,8 @@ using original optional title/artist fields with current Unicode preferences.
 Loading/error/waiting does not borrow the previous worker's Playing state or
 position. Selected B never changes the published A or redirects system commands.
 Play uses the queue (`audio_source_id: None`); unavailable actions are ignored.
+Position/duration stay in source time; `rate` is the sounding launch's applied speed
+(see [Adjustable speed and pitch](#adjustable-speed-and-pitch)).
 
 Seek events retain `LaunchKey { entry_id, playback_token }` from callback receipt.
 Client and worker check the current launch; relative seek beyond the known end

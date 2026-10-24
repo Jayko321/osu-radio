@@ -9,9 +9,12 @@ Item {
     required property var shell
     id: player
     readonly property alias queue: queuePanel
+    function openMods(): void {
+        if (!modsPopup.opened) modsPopup.open();
+    }
     Connections {
         target: player.bridge.player
-        function onSelectedPlaylistItemIdChanged() { volumePopup.close(); if (!progress.pressed) progress.value = player.bridge.player.playbackPosition; }
+        function onSelectedPlaylistItemIdChanged() { volumePopup.close(); }
     }
     objectName: "playerPane"
     readonly property real geometryScale: Math.max(width / 960, 1)
@@ -79,48 +82,18 @@ Item {
             font.weight: Font.DemiBold
             elide: Text.ElideRight
         }
-        Basic.Slider {
+        PlaybackProgress {
             id: progress
             objectName: "playbackProgress"
             y: 85
             width: parent.width
             height: 16
-            from: 0
-            to: Math.max(player.bridge.player.playbackDuration, 1)
             enabled: player.bridge.player.canSeek
-            padding: 0
-            property int dragAudioId: -1
-            property int dragItemId: -1
-            Accessible.name: "Playback position"
-            Component.onCompleted: value = player.bridge.player.playbackPosition
-            onPressedChanged: {
-                if (pressed) { dragAudioId = player.bridge.player.selectedAudioId; dragItemId = player.bridge.player.selectedPlaylistItemId; }
-                else {
-                    if (enabled && dragAudioId === player.bridge.player.selectedAudioId && dragItemId === player.bridge.player.selectedPlaylistItemId) player.bridge.player.seekPlayback(value);
-                    value = player.bridge.player.playbackPosition;
-                }
-            }
-            onMoved: if (!pressed) player.bridge.player.seekPlayback(value)
-            Connections {
-                target: player.bridge.player
-                function onPlaybackPositionChanged() { if (!progress.pressed) progress.value = player.bridge.player.playbackPosition; }
-                function onPlaybackDurationChanged() { if (!progress.pressed) progress.value = player.bridge.player.playbackPosition; }
-                function onSelectedAudioIdChanged() { if (!progress.pressed) progress.value = player.bridge.player.playbackPosition; }
-                }
-            background: Rectangle {
-                y: 6
-                width: progress.width
-                height: 4
-                radius: 2
-                color: Theme.muted
-                scale: progress.mirrored ? -1 : 1
-                Rectangle {
-                    width: progress.position * parent.width
-                                    radius: parent.radius
-                    color: Theme.accent
-                }
-            }
-            handle: Rectangle { x: progress.visualPosition * (progress.width - width); width: 16; height: 16; radius: 8; color: Theme.accent }
+            playbackPosition: player.bridge.player.playbackPosition
+            playbackDuration: player.bridge.player.playbackDuration
+            scaleKey: [player.bridge.player.selectedAudioId, player.bridge.player.selectedPlaylistItemId,
+                player.bridge.player.launchToken, player.bridge.player.playbackSpeedPercent].join(":")
+            onSeekRequested: seconds => player.bridge.player.seekPlayback(seconds)
         }
         Text {
             y: 101
@@ -225,9 +198,50 @@ Item {
                     }
                 }
             }
+            IconButton {
+                id: modsButton
+                objectName: "modsButton"
+                anchors.left: volumeButton.right
+                anchors.verticalCenter: parent.verticalCenter
+                iconName: "gauge"
+                accessibleName: "Mods (F1)"
+                onClicked: player.openMods()
+                AudioModsPopup {
+                    id: modsPopup
+                    objectName: "modsPopup"
+                    y: -height - 8
+                    mode: player.bridge.settings.modsMode
+                    speedPercent: player.bridge.settings.modsSpeedPercent
+                    adjustPitch: player.bridge.settings.modsAdjustPitch
+                    available: player.bridge.connected && player.bridge.settings.modsAvailable
+                    saving: player.bridge.settings.modsSaving
+                    errorMessage: player.bridge.settings.modsMessage
+                    canRetry: player.bridge.connected
+                    onAboutToShow: player.bridge.settings.beginModsEdit()
+                    // Mods that finish loading under an open popup have no addressee captured yet.
+                    onAvailableChanged: if (opened && available) player.bridge.settings.beginModsEdit()
+                    onClosed: player.bridge.settings.finishModsEdit()
+                    onDtCycleRequested: player.bridge.settings.cycleDtMod()
+                    onHtToggleRequested: player.bridge.settings.toggleHtMod()
+                    onSpeedRequested: percent => player.bridge.settings.setModSpeed(percent)
+                    onPitchRequested: adjust => player.bridge.settings.setModAdjustPitch(adjust)
+                    onClearRequested: player.bridge.settings.clearMods()
+                    onRetryRequested: player.bridge.settings.retryMods()
+                    Connections {
+                        target: player.bridge.player
+                        function onSelectedAudioIdChanged() { modsPopup.close(); }
+                        function onSelectedPlaylistItemIdChanged() { modsPopup.close(); }
+                    }
+                    Connections {
+                        target: player.bridge.settings
+                        function onIndividualModsEnabledChanged() { modsPopup.close(); }
+                    }
+                }
+            }
             Row {
                 anchors.centerIn: parent
-                spacing: 28
+                // Leaves room for the volume and mods buttons at the minimum window width.
+                spacing: Math.max(8, Math.min(28, (player.contentWidth - 390) / 4))
                 IconButton { objectName: "shuffleButton"; anchors.verticalCenter: parent.verticalCenter; iconName: "shuffle"; accessibleName: "Shuffle (unavailable)"; enabled: false }
                 IconButton { objectName: "previousTrackButton"; anchors.verticalCenter: parent.verticalCenter; iconName: "skip-back"; accessibleName: "Previous track"; enabled: player.bridge.connected && player.bridge.player.canPrevious; onClicked: player.bridge.player.previousTrack() }
                 IconButton {

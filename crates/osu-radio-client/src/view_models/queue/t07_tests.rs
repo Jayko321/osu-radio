@@ -6,7 +6,7 @@ use crate::controller::{
     AppCommand,
     tests::{controller, track},
 };
-use crate::models::{QueueAvailability, QueueEntryId, QueueState};
+use crate::models::{AudioModsProfile, QueueAvailability, QueueEntryId, QueueState};
 #[cfg(unix)]
 use crate::models::{QueueItemRef, QueuePlacement};
 use std::sync::Arc;
@@ -538,6 +538,7 @@ async fn first_paused_playlist_assignment_keeps_the_selected_item() {
                 cover_beatmap_id: None,
                 last_played_at_ms: None,
                 volume_percent: None,
+                mods: None,
             })
             .collect(),
     });
@@ -586,7 +587,10 @@ fn waiting_toggle_uses_server_intention_before_worker_has_a_local_source() {
             }
         ))
     ));
-    let presentation = state.player.presentation(None, true, true, true);
+    let presentation =
+        state
+            .player
+            .presentation(None, true, true, true, AudioModsProfile::default());
     assert!(
         presentation.waiting_for_check
             && !presentation.can_seek

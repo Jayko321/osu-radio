@@ -27,6 +27,7 @@ async fn respond(bytes: Vec<u8>) -> (ApiClient, tokio::task::JoinHandle<(String,
     (api, server)
 }
 
+#[allow(clippy::too_many_lines)] // Dispatch the shared request/error matrix without splitting its operations.
 async fn call(api: &ApiClient, operation: &str) -> Result<(), ApiError> {
     match operation {
         "sets" => api.beatmap_sets().await.map(drop),
@@ -52,6 +53,19 @@ async fn call(api: &ApiClient, operation: &str) -> Result<(), ApiError> {
             })
             .await
         }
+        "mods" => api.audio_mods().await.map(drop),
+        "save_mods" => api
+            .update_audio_mods(&crate::models::AudioModsPatch {
+                global_speed_percent: Some(120),
+                ..Default::default()
+            })
+            .await
+            .map(drop),
+        "track_mods" => {
+            api.set_audio_mods(7, Some(crate::models::AudioModsProfile::default()))
+                .await
+        }
+        "reset_mods" => api.set_audio_mods(7, None).await,
         "settings" => api.audio_settings().await.map(drop),
         "save_settings" => api
             .update_audio_settings(&AudioSettings::default())
@@ -133,6 +147,10 @@ async fn every_http_wrapper_retains_method_path_status_and_server_error() {
         ("import", "POST", "/api/user-data/osu-folders/import"),
         ("reimport", "POST", "/api/user-data/osu-folders/7/import"),
         ("discover", "POST", "/api/user-data/osu-folders/discover"),
+        ("mods", "GET", "/api/user-data/audio-mods"),
+        ("save_mods", "PATCH", "/api/user-data/audio-mods"),
+        ("track_mods", "PUT", "/api/audio-sources/7/mods"),
+        ("reset_mods", "DELETE", "/api/audio-sources/7/mods"),
         ("settings", "GET", "/api/user-data/audio-settings"),
         ("save_settings", "PATCH", "/api/user-data/audio-settings"),
         ("volume", "PUT", "/api/audio-sources/7/volume"),
@@ -209,6 +227,10 @@ async fn every_http_wrapper_retains_method_path_status_and_server_error() {
             "save_settings" => Some(
                 serde_json::json!({"individual_volume_enabled": false, "global_volume_percent": 100}),
             ),
+            "save_mods" => Some(serde_json::json!({"global_speed_percent":120})),
+            "track_mods" => {
+                Some(serde_json::json!({"mode":"none","speed_percent":100,"adjust_pitch":false}))
+            }
             "volume" => Some(serde_json::json!({"volume_percent": 0})),
             "append" => Some(
                 serde_json::json!({"items": [{"type":"audio","audio_source_id":7}, {"type":"audio","audio_source_id":7}], "placement":"end"}),

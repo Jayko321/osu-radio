@@ -193,6 +193,10 @@ continues to use its own [API DTOs](../../crates/osu-radio-client/src/api.rs).
 | --- | --- |
 | `GET /api/beatmap-sets` | Optional `q` searches the library; existing contract retained. Array of `{id, online_id, hash, has_multiple_audio_sources, audio_sources, beatmaps}`. Each audio source has `{id, kind, location}`; distinct sources per set, empty arrays allowed. |
 | `GET /api/tracks` | Optional `q`; one record per global audio ID with nullable representative metadata, cover ID, `last_played_at_ms` and all difficulties. Used by Songs. |
+| `GET /api/user-data/audio-mods` | `{individual_mods_enabled, global_profile: {mode, speed_percent, adjust_pitch}}`; default false + none/100/false. |
+| `PATCH /api/user-data/audio-mods` | Optional flat fields `individual_mods_enabled`, `global_mode`, `global_speed_percent`, `global_adjust_pitch`; omitted fields retained, invalid merged profile/null/type/unknown field → 400 without writing. |
+| `PUT /api/audio-sources/{id}/mods` | Complete `{mode, speed_percent, adjust_pitch}` profile; 204, invalid profile/body → 400, unknown audio ID → 404. |
+| `DELETE /api/audio-sources/{id}/mods` | 204 removes a profile, repeat for known ID is harmless; unknown ID → 404. |
 | `GET /api/user-data/audio-settings` | `{individual_volume_enabled, global_volume_percent}`; default false/100. |
 | `PATCH /api/user-data/audio-settings` | Optional fields update atomically; percentages are integers 0–100. Omitted fields are retained; null/wrong types fail validation. |
 | `PUT /api/audio-sources/{id}/volume` | `{volume_percent}` stores an absolute 0–100 integer by durable audio identity; 204, 400 for range, 404 for unknown ID. |
@@ -251,12 +255,57 @@ client playback until retry succeeds. Unexpected errors use the existing safe
 error response. [Route checks](../../apps/osu-radio-server/src/routes/audio_settings.rs)
 exercise public URLs, field validation, projections and idempotent removal.
 
+### Audio mods HTTP contract
+
+[Mods routes](../../apps/osu-radio-server/src/routes/audio_mods.rs) use
+`Services::audio_mods()` in both router variants. `mode` is `none|dt|ht`,
+`speed_percent` is an integer, and `adjust_pitch` is boolean. None requires
+100/false; DT permits 101–200, HT permits 50–99. NC is DT with pitch enabled,
+not a separate wire mode. PATCH has flat optional fields, while GET/PATCH return
+the complete settings with a nested `global_profile`. Changing only the mode
+does not infer speed/pitch defaults: callers must send enough fields for a valid
+merged profile. JSON null and unknown fields are rejected. Body deserialization
+errors use the same 400 JSON error envelope as semantic validation; unexpected
+service errors retain the safe 500 response.
+
+`/api/tracks`, playlist items, full queue entries and playback assignments
+(including their nested `track`) always contain `mods`, either null or the
+saved individual profile. They never substitute the global effective profile.
+OpenAPI marks this field required and nullable. An absent override is distinct
+from an explicitly saved none/100/false profile. Assignment mods use the retained
+launch source after rebinding, while the queue row may have another profile.
+Writes preserve queue revision/token, volume settings and original duration.
+The server continues serving the original audio; applying mods is client work.
+
+Client [wire types](../../crates/osu-radio-client/src/models.rs) are
+`AudioModsMode`, `AudioModsProfile`, `AudioModsSettings` and `AudioModsPatch`.
+The [ApiClient](../../crates/osu-radio-client/src/api.rs) exposes async methods:
+`audio_mods() -> Result<AudioModsSettings, ApiError>`,
+`update_audio_mods(&AudioModsPatch) -> Result<AudioModsSettings, ApiError>` and
+`set_audio_mods(id: i32, profile: Option<AudioModsProfile>) -> Result<(), ApiError>`.
+PATCH omits `None` fields; `set_audio_mods(id, None)` sends DELETE, while
+`Some(profile)` sends PUT. `Track.mods` and library/playlist/queue/assignment
+mappings retain the saved profile without changing source duration or requiring
+a separate profile fetch before Play. Settings loading, local persistence queues
+and playback application belong to the later client integration cards.
+
+[Route tests](../../apps/osu-radio-server/src/routes/audio_mods/tests.rs) cover
+validation/atomic rejection, defaults, projections, original duration, unchanged
+queue identity, real ApiClient roundtrips and served OpenAPI. The existing
+[rebinding stream test](../../apps/osu-radio-server/src/routes/queue_transport_tests.rs)
+checks differing launch/row profiles. Client
+[contract tests](../../crates/osu-radio-client/src/api/contract_tests.rs),
+[NDJSON tests](../../crates/osu-radio-client/src/api/playback_tests.rs) and model
+tests cover request shapes, errors, decoding and retained Track fields.
+These fixtures use temporary databases/sources; DSP, UI and native-platform
+acceptance are separate.
+
 ### Shared playback queue
 
 The [playback routes](../../apps/osu-radio-server/src/routes/playback.rs) use
 `Services::queue()` exclusively. Each assignment contains
 `{current_entry_id, availability, waiting_for_check, current_audio_source_id,
-current_playlist_item_id, track, volume_percent, duration_ms, mode, revision,
+current_playlist_item_id, track, volume_percent, mods, duration_ms, mode, revision,
 playback_token, can_next, can_previous}` in REST and NDJSON. `current_entry_id` is
 a nullable decimal string; availability is null or `checking|available|unavailable`.
 `waiting_for_check` is persisted intent, not inferred from availability: an assigned
@@ -268,13 +317,13 @@ Existing route fixtures complete checks explicitly unless a test starts a worker
 Each queue entry exposes `id`, `position`, saved `title`, `title_unicode`, `artist`,
 `artist_unicode`, `difficulty_name`, nullable `audio_source_id`, `playlist_item_id`,
 `beatmap_id`, `beatmap_set_id`, `cover_beatmap_id`, `availability`, nullable
-`last_played_at_ms` and `volume_percent`. Paths, source keys, check generations,
+`last_played_at_ms`, `volume_percent` and `mods`. Paths, source keys, check generations,
 launch sources and migration evidence stay internal. Nullable response properties
 are always present and documented as required/nullable.
 
 T04 reconciles queue links in the library transaction after cleanup, before commit.
 Assigned playback retains its original audio ID/source/generation and token while the
-full queue entries can point to a new checking source. Assignment dates and volume use
+full queue entries can point to a new checking source. Assignment dates, volume and mods use
 the retained source even after library cleanup. A late Failed changes entry availability
 only when its binding and generation still match, then follows the existing transition.
 A waiting Play whose source disappears advances with playing/paused intent; source
@@ -513,7 +562,7 @@ cover service-backed responses with isolated memory SQLite. Shared workflow and
 folder-validation tests live in `radio-services`, as described in [database](database.md).
 
 The [router contracts](../../apps/osu-radio-server/src/routes/mod.rs) now verify
-all 25 API paths and 35 method/path pairs with `docs` enabled/disabled, reject
+all API paths and method/path pairs with `docs` enabled/disabled, reject
 unsupported verbs and resolve every served OpenAPI schema reference. Projection
 checks compare complete track/set DTO JSON; rejected settings patches retain old
 values. [AppState tests](../../apps/osu-radio-server/src/state.rs) reopen a private

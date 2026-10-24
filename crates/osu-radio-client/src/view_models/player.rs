@@ -8,11 +8,11 @@ use crate::controller::{AppUpdate, Completed};
 use crate::describe;
 use crate::{
     models::{PlaybackAssignment, PlaybackCommand, PlaybackMode},
-    playback::{Playback, PlayerState},
+    playback::{Playback, PlaybackParameters, PlayerState},
 };
 use std::{collections::VecDeque, time::Duration};
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)] // Independent presentation and transport availability flags.
 pub struct PlayerPresentation {
     pub current_entry_id: Option<crate::models::QueueEntryId>,
@@ -24,9 +24,53 @@ pub struct PlayerPresentation {
     pub can_seek: bool,
     pub can_next: bool,
     pub can_previous: bool,
+    /// Presentation time: source position/duration divided by `speed_percent`.
+    /// `AppCommand::Seek` takes this same coordinate and converts back exactly once.
     pub position: Duration,
     pub duration: Option<Duration>,
+    /// Speed of the sounding launch when the selection is current, else of the selected track's own profile.
+    /// A change invalidates an in-progress drag together with the launch.
+    pub speed_percent: u16,
+    /// Presentation duration of the selection even when it is not the current launch.
+    pub selected_duration: Option<Duration>,
     pub message: String,
+}
+impl Default for PlayerPresentation {
+    fn default() -> Self {
+        Self {
+            current_entry_id: None,
+            waiting_for_check: false,
+            selected_track: None,
+            selected_playlist_item_id: None,
+            selected_is_playing: false,
+            can_play: false,
+            can_seek: false,
+            can_next: false,
+            can_previous: false,
+            position: Duration::ZERO,
+            duration: None,
+            speed_percent: 100,
+            selected_duration: None,
+            message: String::new(),
+        }
+    }
+}
+/// `duration * numerator / denominator` in integer nanoseconds, so 4:00 at 150% is exactly 2:40.
+fn scaled(duration: Duration, numerator: u16, denominator: u16) -> Duration {
+    let nanos = duration
+        .as_nanos()
+        .saturating_mul(u128::from(numerator))
+        .checked_div(u128::from(denominator))
+        .unwrap_or(0);
+    Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
+}
+#[allow(
+    clippy::as_conversions,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)] // Clamped to 50..=200.
+fn speed_percent(parameters: PlaybackParameters) -> u16 {
+    (parameters.speed * 100.0).round().clamp(50.0, 200.0) as u16
 }
 #[derive(Default)]
 pub struct PlayerViewModel {
@@ -102,6 +146,12 @@ impl PlayerViewModel {
             metadata: track.map(|track| track.system_metadata(preferences)),
             duration,
             status,
+            // Source coordinates plus the sounding launch's applied speed; never the selected profile.
+            rate: if observed {
+                f64::from(self.playback.snapshot.parameters.speed)
+            } else {
+                1.0
+            },
             position: if observed {
                 self.playback.snapshot.position
             } else {
@@ -308,6 +358,7 @@ impl PlayerViewModel {
         selection_available: bool,
         connected: bool,
         audio_settings_loaded: bool,
+        selected_mods: crate::models::AudioModsProfile,
     ) -> PlayerPresentation {
         let selected = self.selected_track.as_ref();
         let selected_current = selection_available
@@ -321,6 +372,12 @@ impl PlayerViewModel {
                     && selected_item_id
                         .is_none_or(|item| self.playback.current_playlist_item_id == Some(item))
             });
+        let percent = if selected_current {
+            speed_percent(self.playback.snapshot.parameters)
+        } else {
+            selected_mods.speed_percent
+        };
+        let to_ui = |source: Duration| scaled(source, 100, percent);
         let duration = selected_current
             .then(|| {
                 self.playback
@@ -328,7 +385,8 @@ impl PlayerViewModel {
                     .duration
                     .or_else(|| selected.and_then(|track| track.duration))
             })
-            .flatten();
+            .flatten()
+            .map(to_ui);
         PlayerPresentation {
             current_entry_id: self
                 .assignment
@@ -352,11 +410,17 @@ impl PlayerViewModel {
             can_next: self.playback.can_next,
             can_previous: self.playback.can_previous,
             position: if selected_current {
-                self.playback.snapshot.position
+                to_ui(self.playback.snapshot.position)
             } else {
                 Duration::ZERO
             },
             duration,
+            speed_percent: percent,
+            selected_duration: if selected_current {
+                duration
+            } else {
+                selected.and_then(|track| track.duration).map(to_ui)
+            },
             message: self.playback.error.clone().unwrap_or_else(|| {
                 if self
                     .assignment
@@ -441,7 +505,7 @@ impl PlayerViewModel {
         input: &PlayerInput<'_>,
         work: &mut Workflow<'_>,
     ) {
-        if self.command_busy || input.settings.volume.settings.is_none() {
+        if self.command_busy || !input.settings.playback_ready() {
             return;
         }
         let Some(api) = work.api.clone() else {
@@ -579,7 +643,7 @@ impl PlayerViewModel {
         input: &PlayerInput<'_>,
         work: &mut Workflow<'_>,
     ) {
-        if input.settings.volume.settings.is_none() {
+        if !input.settings.playback_ready() {
             work.effect(Effect::DeferAssignment(assignment));
             return;
         }
@@ -794,7 +858,12 @@ impl PlayerViewModel {
                 .assignment
                 .as_ref()
                 .map_or(0, |state| state.playback_token),
-            position,
+            // UI time -> source time, the only conversion of this coordinate.
+            position: scaled(
+                position,
+                speed_percent(self.playback.snapshot.parameters),
+                100,
+            ),
         }));
     }
 }
@@ -816,7 +885,8 @@ impl PlayerViewModel {
                 .flatten(),
             !detail || input.playlists.view.selected_item().is_some(),
             work.api.is_some(),
-            input.settings.volume.settings.is_some(),
+            input.settings.playback_ready(),
+            input.settings.selected_mods(self.selected_track.as_ref()),
         );
         if let Some(error) = &self.transport_error {
             presentation.message.clone_from(error);
@@ -852,7 +922,7 @@ impl PlayerViewModel {
 
 impl PlayerViewModel {
     pub(crate) fn toggle_playback(&mut self, input: &PlayerInput<'_>, work: &mut Workflow<'_>) {
-        if work.api.is_none() || input.settings.volume.settings.is_none() {
+        if work.api.is_none() || !input.settings.playback_ready() {
             return;
         }
         let detail = input.playlists.view.showing_detail();

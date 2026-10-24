@@ -451,6 +451,133 @@ async fn protocol_exchange() -> Result {
 }
 
 #[tokio::test]
+#[ignore = "requires Linux and a private dbus-daemon; never uses the desktop bus"]
+async fn rate_changes_keep_source_time_and_launch_bound_commands() -> Result {
+    if !child("rate_changes_keep_source_time_and_launch_bound_commands")? {
+        return Ok(());
+    }
+    let connection = observer().await?;
+    let mut snapshot = initial();
+    let launch = snapshot.launch.ok_or("fixture launch")?;
+    let (mut controls, mut events) =
+        MediaControls::connect(NativeContext::Linux, snapshot.clone())?;
+    connected(&controls).await?;
+    let services = names(&connection).await?;
+    let name = services.first().ok_or("MPRIS name")?;
+    let player = proxy(&connection, name, PLAYER).await?;
+    assert_eq!(player.get_property::<f64>("Rate").await?, 1.0);
+    assert_eq!(player.get_property::<f64>("MinimumRate").await?, 0.5);
+    assert_eq!(player.get_property::<f64>("MaximumRate").await?, 2.0);
+    let original_metadata = metadata(&player).await?;
+    let id = original_metadata.trackid().ok_or("track id")?;
+    let properties = proxy(&connection, name, "org.freedesktop.DBus.Properties").await?;
+    let mut changed = properties.receive_signal("PropertiesChanged").await?;
+    let mut seeked = player.receive_signal("Seeked").await?;
+    for status in [PlaybackStatus::Playing, PlaybackStatus::Paused] {
+        for rate in [0.75, 1.2, 1.5] {
+            snapshot.status = status;
+            snapshot.rate = rate;
+            assert!(controls.publish(snapshot.clone()));
+            let signal = next_signal(&mut changed).await?;
+            let (interface, values, invalidated): (
+                String,
+                std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+                Vec<String>,
+            ) = signal.body().deserialize()?;
+            assert_eq!(interface, PLAYER);
+            assert!(invalidated.is_empty());
+            assert_eq!(
+                f64::try_from(values.get("Rate").ok_or("missing Rate change")?)?,
+                rate
+            );
+            assert!(!values.contains_key("Metadata"));
+            assert!(!values.contains_key("Position"));
+            assert_eq!(player.get_property::<f64>("Rate").await?, rate);
+            assert_eq!(metadata(&player).await?, original_metadata);
+            assert_eq!(player.get_property::<i64>("Position").await?, 3_000_000);
+            assert_eq!(
+                player.get_property::<String>("PlaybackStatus").await?,
+                if status == PlaybackStatus::Playing {
+                    "Playing"
+                } else {
+                    "Paused"
+                }
+            );
+            player
+                .call::<_, _, ()>("SetPosition", &(id.clone(), 2_000_000_i64))
+                .await?;
+            event(
+                &mut events,
+                Event::SeekAbsolute {
+                    launch,
+                    position: Duration::from_secs(2),
+                },
+            )
+            .await?;
+            player.call::<_, _, ()>("Seek", &(-1_500_000_i64,)).await?;
+            event(
+                &mut events,
+                Event::SeekRelative {
+                    launch,
+                    offset_micros: -1_500_000,
+                },
+            )
+            .await?;
+            assert!(player.set_property("Rate", 1.0_f64).await.is_err());
+            // A sentinel proves that OS rate writes added no command before it.
+            player.call::<_, _, ()>("Play", &()).await?;
+            event(&mut events, Event::Play).await?;
+            assert_eq!(player.get_property::<f64>("Rate").await?, rate);
+        }
+    }
+    for rate in [0.0, 0.49, 2.01, f64::NAN, f64::INFINITY] {
+        assert!(player.set_property("Rate", rate).await.is_err());
+    }
+    let rate = snapshot.rate;
+    assert!(controls.publish(snapshot));
+    silent(&mut changed).await;
+    silent(&mut seeked).await;
+    // zbus emits a property notification after a successful no-op setter too.
+    player.set_property("Rate", rate).await?;
+    player.call::<_, _, ()>("Play", &()).await?;
+    event(&mut events, Event::Play).await?;
+    bounded(controls.shutdown()).await?;
+    assert!(names(&connection).await?.is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires Linux and a private dbus-daemon; never uses the desktop bus"]
+async fn invalid_rate_fails_publication_and_acknowledges_cleanup() -> Result {
+    if !child("invalid_rate_fails_publication_and_acknowledges_cleanup")? {
+        return Ok(());
+    }
+    let connection = observer().await?;
+    for initial_invalid in [true, false] {
+        let mut snapshot = initial();
+        if initial_invalid {
+            snapshot.rate = 0.0;
+        }
+        let (mut controls, mut events) =
+            MediaControls::connect(NativeContext::Linux, snapshot.clone())?;
+        if !initial_invalid {
+            connected(&controls).await?;
+            snapshot.rate = f64::NAN;
+            assert!(controls.publish(snapshot));
+        }
+        failed(&controls).await?;
+        assert!(
+            matches!(&*controls.status().borrow(), Status::Failed(error) if error.to_string().contains("rate"))
+        );
+        assert!(!controls.publish(initial()));
+        assert_eq!(bounded(events.recv()).await?, None);
+        bounded(controls.shutdown()).await?;
+        assert!(names(&connection).await?.is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test]
 #[ignore = "requires Linux and a private dbus-daemon; kills only its own daemon"]
 async fn fatal_disconnect() -> Result {
     if !child("fatal_disconnect")? {

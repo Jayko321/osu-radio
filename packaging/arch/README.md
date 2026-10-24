@@ -17,12 +17,38 @@
 Cargo crates и NuGet packages загружаются автоматически. Предусмотрите место
 для SDK, кэшей и release-сборки; личные кэши и готовые бинарники не нужны.
 
-Зависимости сборки: `rustup`, `dotnet-sdk-8.0`, `lld`, `pkgconf`.
+Зависимости сборки: `rustup`, `dotnet-sdk-8.0`, `lld`, `pkgconf`, `clang`.
 Arch `rustup` конфликтует с пакетом `rust` и предоставляет Cargo/Rust proxies.
 Если установлен `rust`, перед сборкой выберите переход на `rustup` через pacman;
 не используйте принудительное игнорирование конфликтов. Версию Rust рецепт
 берёт из `rust-toolchain.toml`, а SDK выбирает из установленных .NET 8 SDK.
 Системный `HOME` рецепт не меняет.
+
+## Подготовка текущего checkout к следующей публикации
+
+Source pin выше остаётся прежним: опубликованный архив `v0.1.0-alpha`
+не содержит новых регулируемых скорости/pitch. Обновлённые prerequisites
+и `licenses/` относятся к текущему checkout; они не изменяют содержимое
+старого архива и установленных пакетов. Перед следующим релизом нужно
+повторно сверить notices с окончательным lockfile и helper publish.
+
+`signalsmith-stretch = 0.1.3` компилирует встроенные Signalsmith Stretch
+и Linear через C++14, а bindgen загружает libclang при сборке. C++ compiler
+даёт `base-devel`; Arch `clang` предоставляет libclang и resource headers.
+Отдельные runtime-зависимости на clang или Signalsmith не нужны:
+DSP статически встроен, C++ runtime уже объявлен в `depends`.
+В обычной системной установке `LIBCLANG_PATH` не требуется; для нестандартного
+LLVM см. [требования и диагностику](../../docs/agent/development.md#signalsmith-native-build).
+
+Для проверки нового кода подготовьте отдельную копию checkout без `.git`,
+`target`, `packaging/arch/src`, `packaging/arch/pkg` и старых пакетов/архивов.
+В отдельной временной копии рецепта замените только source archive на архив
+этой копии с верхним каталогом `osu-radio-0.1.0-alpha` и вычислите его SHA-256.
+Выполните `makepkg` без `-i`. Это local-source проверка build/package функций,
+а не проверка опубликованного архива; не переносите временные source/checksum
+в release recipe. Установка и публикация относятся к отдельной приёмке.
+
+## Runtime и запуск
 
 Runtime-зависимости объявлены в PKGBUILD: glibc/GCC runtime, ALSA, Qt 6.8+
 (base, declarative, SVG, Wayland), .NET 8 runtime и desktop portal с реализацией.

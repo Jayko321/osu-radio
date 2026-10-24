@@ -7,6 +7,7 @@ fn track(id: i32, ordinary: &str, unicode: &str) -> Track {
         audio_source_id: id,
         last_played_at_ms: None,
         volume_percent: None,
+        mods: None,
         title: Some(ordinary.into()),
         title_unicode: Some(unicode.into()),
         artist: Some("Artist".into()),

@@ -9,6 +9,7 @@ pkgbase = osu-radio
 	makedepends = dotnet-sdk-8.0
 	makedepends = lld
 	makedepends = pkgconf
+	makedepends = clang
 	depends = glibc
 	depends = libgcc
 	depends = libstdc++

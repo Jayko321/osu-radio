@@ -61,6 +61,7 @@ impl BeatmapSetService<'_> {
         let mut tracks = tracks::from_sets(Self::search_in(&transaction, query).await?);
         crate::ListeningHistoryService::fill_tracks(&transaction, &mut tracks).await?;
         crate::AudioSettingsService::fill_tracks(&transaction, &mut tracks).await?;
+        crate::AudioModsService::fill_tracks(&transaction, &mut tracks).await?;
         transaction.commit().await?;
         Ok(tracks)
     }

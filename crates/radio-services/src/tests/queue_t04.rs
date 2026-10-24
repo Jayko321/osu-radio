@@ -123,7 +123,17 @@ async fn rebinding_and_callbacks(db: &TestDatabase, other: &TestDatabase) {
         .set_volume(audio, Some(23))
         .await
         .unwrap();
+    let original_mods = crate::AudioModsProfile {
+        mode: crate::AudioModsMode::Dt,
+        speed_percent: 120,
+        adjust_pitch: true,
+    };
+    db.audio_mods()
+        .set_profile(audio, Some(original_mods))
+        .await
+        .unwrap();
     let launch = play(db).await;
+    assert_eq!(launch.mods, Some(original_mods));
     let before = db.queue().get().await.unwrap();
     db.playlists().delete(playlist.id).await.unwrap();
     // Even when beatmap and cover IDs change, the checked source stays checked.
@@ -154,6 +164,18 @@ async fn rebinding_and_callbacks(db: &TestDatabase, other: &TestDatabase) {
     assert!(!rebound.waiting_for_check);
     let new_audio = rebound.entries[0].audio_source_id.unwrap();
     assert_ne!(new_audio, audio);
+    let rebound_mods = crate::AudioModsProfile {
+        mode: crate::AudioModsMode::Ht,
+        speed_percent: 75,
+        adjust_pitch: false,
+    };
+    db.audio_mods()
+        .set_profile(new_audio, Some(rebound_mods))
+        .await
+        .unwrap();
+    let snapshot = db.queue().snapshot().await.unwrap();
+    assert_eq!(snapshot.entries[0].mods, Some(rebound_mods));
+    assert_eq!(snapshot.entries[3].mods, Some(original_mods));
     for (index, (old, new)) in before.entries.iter().zip(&rebound.entries).enumerate() {
         assert_eq!(new.id, old.id);
         assert_eq!(new.position, old.position);
@@ -186,6 +208,8 @@ async fn rebinding_and_callbacks(db: &TestDatabase, other: &TestDatabase) {
         .unwrap();
     assert_eq!(started.current_audio_source_id, Some(audio));
     assert_eq!(started.volume_percent, Some(23));
+    assert_eq!(started.mods, Some(original_mods));
+    assert_eq!(started.track.as_ref().unwrap().mods, Some(original_mods));
     assert!(started.track.unwrap().last_played_at_ms.is_some());
     let dates = db
         .database

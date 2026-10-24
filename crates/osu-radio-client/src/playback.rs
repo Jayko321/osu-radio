@@ -1,6 +1,6 @@
 //! Toolkit-free playback state shared by frontend adapters.
 use osu_radio_player::Player;
-pub use osu_radio_player::{PlayerState, Snapshot};
+pub use osu_radio_player::{PlaybackParameters, PlayerState, Snapshot};
 use std::{
     collections::VecDeque,
     path::Path,
@@ -37,6 +37,8 @@ pub(crate) enum Command {
         playback_token: u64,
         mode: crate::models::PlaybackMode,
         volume: f32,
+        /// The launch's own profile; never inherited from the previous assignment.
+        parameters: PlaybackParameters,
     },
     Loaded {
         generation: u64,
@@ -184,6 +186,7 @@ trait Engine: Sized {
     fn pause(&mut self) -> Result<(), String>;
     fn seek(&mut self, position: Duration) -> Result<(), String>;
     fn volume(&mut self, volume: f32) -> Result<(), String>;
+    fn parameters(&mut self, parameters: PlaybackParameters) -> Result<(), String>;
     fn snapshot(&self) -> Snapshot;
     fn output_error(&self) -> Option<String> {
         None
@@ -208,11 +211,24 @@ impl Engine for Player {
     fn volume(&mut self, volume: f32) -> Result<(), String> {
         self.set_volume(volume).map_err(|e| crate::describe(&e))
     }
+    fn parameters(&mut self, parameters: PlaybackParameters) -> Result<(), String> {
+        self.set_parameters(parameters)
+            .map_err(|e| crate::describe(&e))
+    }
     fn snapshot(&self) -> Snapshot {
         self.snapshot()
     }
     fn output_error(&self) -> Option<String> {
         self.output_error()
+    }
+}
+
+impl From<crate::models::AudioModsProfile> for PlaybackParameters {
+    fn from(profile: crate::models::AudioModsProfile) -> Self {
+        Self {
+            speed: f32::from(profile.speed_percent) / 100.0,
+            adjust_pitch: profile.adjust_pitch,
+        }
     }
 }
 
@@ -223,6 +239,7 @@ struct Core<E> {
     file_id: Option<i32>,
     state: Playback,
     mode: crate::models::PlaybackMode,
+    parameters: PlaybackParameters,
     feedback: VecDeque<Message>,
     reported: bool,
     started: bool,
@@ -235,6 +252,7 @@ impl<E> Default for Core<E> {
             file_id: None,
             state: Playback::default(),
             mode: crate::models::PlaybackMode::Stopped,
+            parameters: PlaybackParameters::default(),
             feedback: VecDeque::new(),
             reported: false,
             started: false,
@@ -254,6 +272,7 @@ impl<E: Engine> Core<E> {
                 playback_token,
                 mode,
                 volume,
+                parameters,
             } => {
                 if candidate != generation {
                     return None;
@@ -262,18 +281,32 @@ impl<E: Engine> Core<E> {
                     self.state.error = Some("volume must be a finite value between 0 and 1".into());
                     return None;
                 }
+                if !parameters.speed.is_finite() || !(0.5..=2.0).contains(&parameters.speed) {
+                    self.state.error =
+                        Some("speed must be a finite value between 0.5 and 2".into());
+                    return None;
+                }
                 let restart = playback_token != self.state.playback_token
                     || entry_id != self.state.current_entry_id;
                 let was_waiting = self.state.waiting_for_check;
                 self.state.waiting_for_check = waiting_for_check;
                 self.state.snapshot.volume = volume;
-                if !restart
-                    && let Some(player) = &mut self.player
-                    && let Err(error) = player.volume(volume)
-                {
-                    self.state.error = Some(error);
-                    return None;
+                self.state.snapshot.parameters = parameters;
+                if !restart && let Some(player) = &mut self.player {
+                    // Same entry/token: update in place; position and pause are preserved.
+                    let applied = player.volume(volume).and_then(|()| {
+                        if parameters == self.parameters {
+                            Ok(())
+                        } else {
+                            player.parameters(parameters)
+                        }
+                    });
+                    if let Err(error) = applied {
+                        self.state.error = Some(error);
+                        return None;
+                    }
                 }
+                self.parameters = parameters;
                 if !restart && self.mode == mode && !was_waiting && !waiting_for_check {
                     self.refresh();
                     return None;
@@ -436,6 +469,7 @@ impl<E: Engine> Core<E> {
                 }
             };
             player.volume(self.state.snapshot.volume)?;
+            player.parameters(self.parameters)?;
             self.player = Some(player);
         }
         let result = match (&mut self.player, &self.file) {
@@ -503,6 +537,7 @@ mod tests {
         play_error: bool,
         seek_error: bool,
         play_volumes: Vec<f32>,
+        play_parameters: Vec<PlaybackParameters>,
     }
     impl Engine for FakeEngine {
         fn new() -> Result<Self, String> {
@@ -522,6 +557,7 @@ mod tests {
         }
         fn play(&mut self) -> Result<(), String> {
             self.play_volumes.push(self.snapshot.volume);
+            self.play_parameters.push(self.snapshot.parameters);
             if self.play_error {
                 return Err("play failed".into());
             }
@@ -548,6 +584,10 @@ mod tests {
         }
         fn volume(&mut self, volume: f32) -> Result<(), String> {
             self.snapshot.volume = volume;
+            Ok(())
+        }
+        fn parameters(&mut self, parameters: PlaybackParameters) -> Result<(), String> {
+            self.snapshot.parameters = parameters;
             Ok(())
         }
         fn snapshot(&self) -> Snapshot {
@@ -578,6 +618,7 @@ mod tests {
                 playback_token: token,
                 mode,
                 volume: core.state.snapshot.volume,
+                parameters: PlaybackParameters::default(),
             },
             generation,
         )
@@ -607,6 +648,7 @@ mod tests {
                     playback_token: token,
                     mode: PlaybackMode::Playing,
                     volume: f32::from(percent) / 100.0,
+                    parameters: PlaybackParameters::default(),
                 },
                 token,
             );
@@ -634,6 +676,7 @@ mod tests {
                 playback_token: 4,
                 mode: PlaybackMode::Paused,
                 volume: 0.2,
+                parameters: PlaybackParameters::default(),
             },
             4,
         );
@@ -646,6 +689,7 @@ mod tests {
                 playback_token: 4,
                 mode: PlaybackMode::Playing,
                 volume: 0.1,
+                parameters: PlaybackParameters::default(),
             },
             4,
         );
@@ -668,6 +712,7 @@ mod tests {
                 playback_token: 3,
                 mode: PlaybackMode::Playing,
                 volume: 1.0,
+                parameters: PlaybackParameters::default(),
             },
             4,
         );
@@ -896,6 +941,9 @@ mod tests {
         fn volume(&mut self, volume: f32) -> Result<(), String> {
             self.0.volume(volume)
         }
+        fn parameters(&mut self, parameters: PlaybackParameters) -> Result<(), String> {
+            self.0.parameters(parameters)
+        }
         fn snapshot(&self) -> Snapshot {
             self.0.snapshot()
         }
@@ -913,6 +961,7 @@ mod tests {
                 playback_token: 4,
                 mode: PlaybackMode::Playing,
                 volume: core.state.snapshot.volume,
+                parameters: PlaybackParameters::default(),
             },
             1,
         );
@@ -934,6 +983,7 @@ mod tests {
                 playback_token: 4,
                 mode: PlaybackMode::Paused,
                 volume: core.state.snapshot.volume,
+                parameters: PlaybackParameters::default(),
             },
             1,
         );
@@ -946,6 +996,7 @@ mod tests {
                 playback_token: 4,
                 mode: PlaybackMode::Playing,
                 volume: core.state.snapshot.volume,
+                parameters: PlaybackParameters::default(),
             },
             1,
         );
@@ -959,6 +1010,7 @@ mod tests {
                 playback_token: 4,
                 mode: PlaybackMode::Playing,
                 volume: core.state.snapshot.volume,
+                parameters: PlaybackParameters::default(),
             },
             1,
         );
@@ -972,6 +1024,7 @@ mod tests {
                 playback_token: 4,
                 mode: PlaybackMode::Paused,
                 volume: core.state.snapshot.volume,
+                parameters: PlaybackParameters::default(),
             },
             1,
         );
@@ -984,6 +1037,7 @@ mod tests {
                 playback_token: 4,
                 mode: PlaybackMode::Playing,
                 volume: core.state.snapshot.volume,
+                parameters: PlaybackParameters::default(),
             },
             1,
         );
@@ -1029,6 +1083,7 @@ mod tests {
                         playback_token: 2,
                         mode: PlaybackMode::Stopped,
                         volume,
+                        parameters: PlaybackParameters::default(),
                     },
                     2
                 )
@@ -1088,6 +1143,7 @@ mod tests {
             playback_token: 100,
             mode: PlaybackMode::Playing,
             volume: 0.4,
+            parameters: PlaybackParameters::default(),
         });
         assert_eq!(
             message(&mut feedback).await,
@@ -1119,6 +1175,7 @@ mod tests {
             playback_token: 200,
             mode: PlaybackMode::Playing,
             volume: 0.2,
+            parameters: PlaybackParameters::default(),
         });
         assert_eq!(
             message(&mut feedback).await,
@@ -1156,6 +1213,7 @@ mod tests {
             playback_token: 300,
             mode: PlaybackMode::Playing,
             volume: 0.5,
+            parameters: PlaybackParameters::default(),
         });
         assert_eq!(
             message(&mut feedback).await,
@@ -1208,6 +1266,7 @@ mod tests {
                     playback_token: 1,
                     mode: PlaybackMode::Playing,
                     volume: 0.4,
+                    parameters: PlaybackParameters::default(),
                 },
                 generation,
             )
@@ -1292,6 +1351,7 @@ mod tests {
                         playback_token: 1,
                         mode,
                         volume: 1.0,
+                        parameters: PlaybackParameters::default(),
                     },
                     1,
                 );
@@ -1313,7 +1373,8 @@ mod tests {
                             id: current,
                             playback_token: 1,
                             mode,
-                            volume: core.state.snapshot.volume
+                            volume: core.state.snapshot.volume,
+                            parameters: PlaybackParameters::default(),
                         },
                         1
                     )
@@ -1348,6 +1409,7 @@ mod tests {
                         playback_token: 10,
                         mode,
                         volume: 0.2,
+                        parameters: PlaybackParameters::default(),
                     },
                     1,
                 )
@@ -1385,6 +1447,7 @@ mod tests {
                     playback_token: 10,
                     mode: release_mode,
                     volume: 0.2,
+                    parameters: PlaybackParameters::default(),
                 },
                 1,
             );
@@ -1401,6 +1464,7 @@ mod tests {
                             playback_token: 10,
                             mode: PlaybackMode::Playing,
                             volume: 0.2,
+                            parameters: PlaybackParameters::default(),
                         },
                         1
                     )
@@ -1438,6 +1502,7 @@ mod tests {
                 playback_token: 1,
                 mode: PlaybackMode::Playing,
                 volume: 0.3,
+                parameters: PlaybackParameters::default(),
             },
             1,
         );
@@ -1450,7 +1515,8 @@ mod tests {
                     id: Some(10),
                     playback_token: 2,
                     mode: PlaybackMode::Playing,
-                    volume: 0.3
+                    volume: 0.3,
+                    parameters: PlaybackParameters::default(),
                 },
                 2
             )
@@ -1474,6 +1540,7 @@ mod tests {
                 playback_token: 1,
                 mode: PlaybackMode::Paused,
                 volume: 0.9,
+                parameters: PlaybackParameters::default(),
             },
             2,
         );
@@ -1504,5 +1571,105 @@ mod tests {
             ),
             (1, 0)
         );
+    }
+
+    fn assign_with(
+        core: &mut Core<FakeEngine>,
+        token: u64,
+        id: i32,
+        mode: PlaybackMode,
+        speed: f32,
+        adjust_pitch: bool,
+    ) -> Option<Download> {
+        core.command(
+            Command::Assign {
+                entry_id: None,
+                waiting_for_check: false,
+                generation: token,
+                id: Some(id),
+                playback_token: token,
+                mode,
+                volume: 0.5,
+                parameters: PlaybackParameters {
+                    speed,
+                    adjust_pitch,
+                },
+            },
+            token,
+        )
+    }
+    #[test]
+    fn parameters_precede_every_first_sample_and_update_the_same_launch_in_place() {
+        let pair = |speed, adjust_pitch| PlaybackParameters {
+            speed,
+            adjust_pitch,
+        };
+        let mut core = Core::<FakeEngine>::default();
+        // A late edit while the download is pending wins: nothing was decoded with the old pair.
+        assert!(assign_with(&mut core, 1, 10, PlaybackMode::Playing, 1.5, false).is_some());
+        assert!(assign_with(&mut core, 1, 10, PlaybackMode::Playing, 1.2, true).is_none());
+        core.command(
+            Command::Loaded {
+                generation: 1,
+                id: 10,
+                result: Ok(file(b"mp3")),
+            },
+            1,
+        );
+        assert_eq!(core.feedback.pop_front(), Some(Message::Started(1)));
+        assert_eq!(
+            core.player.as_ref().unwrap().play_parameters,
+            [pair(1.2, true)]
+        );
+        // Same entry/token while playing: parameters change, position/transport/feedback do not.
+        core.command(
+            Command::Seek {
+                expected_id: Some(10),
+                playback_token: 1,
+                position: Duration::from_secs(12),
+            },
+            1,
+        );
+        assign_with(&mut core, 1, 10, PlaybackMode::Playing, 0.75, false);
+        assert_eq!(core.state.snapshot.parameters, pair(0.75, false));
+        assert_eq!(core.state.snapshot.position, Duration::from_secs(12));
+        assert_eq!(core.state.snapshot.state, PlayerState::Playing);
+        assert!(core.feedback.is_empty());
+        assert_eq!(core.player.as_ref().unwrap().loads, 1);
+        // Paused edit is kept for resume, which does not reload the file.
+        assign_with(&mut core, 1, 10, PlaybackMode::Paused, 0.75, false);
+        assign_with(&mut core, 1, 10, PlaybackMode::Paused, 2.0, true);
+        assign_with(&mut core, 1, 10, PlaybackMode::Playing, 2.0, true);
+        let player = core.player.as_ref().unwrap();
+        assert_eq!(
+            (player.loads, player.play_parameters.last()),
+            (1, Some(&pair(2.0, true)))
+        );
+        assert_eq!(core.state.snapshot.position, Duration::from_secs(12));
+        // New token with the cached file and an automatic next track never reuse the old pair.
+        assign_with(&mut core, 2, 10, PlaybackMode::Playing, 1.0, false);
+        assert_eq!(
+            core.player.as_ref().unwrap().play_parameters,
+            [pair(1.0, false)]
+        );
+        assert!(assign_with(&mut core, 3, 11, PlaybackMode::Playing, 1.5, true).is_some());
+        core.command(
+            Command::Loaded {
+                generation: 3,
+                id: 11,
+                result: Ok(file(b"mp3")),
+            },
+            3,
+        );
+        assert_eq!(
+            core.player.as_ref().unwrap().play_parameters,
+            [pair(1.5, true)]
+        );
+        // An invalid pair cannot replace a healthy launch.
+        for speed in [f32::NAN, 0.49, 2.01] {
+            assign_with(&mut core, 3, 11, PlaybackMode::Playing, speed, false);
+            assert!(core.state.error.is_some());
+            assert_eq!(core.state.snapshot.parameters, pair(1.5, true));
+        }
     }
 }

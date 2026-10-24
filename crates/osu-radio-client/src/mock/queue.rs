@@ -65,6 +65,7 @@ impl MockQueue {
             cover_beatmap_id: None,
             last_played_at_ms: None,
             volume_percent: None,
+            mods: None,
             availability: if audio.is_some() {
                 QueueAvailability::Checking
             } else {

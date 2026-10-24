@@ -77,6 +77,63 @@ fn listening_metadata_progress_pause_resume_and_unknown_duration() {
     );
 }
 #[test]
+fn speed_scales_source_time_once_and_rate_only_change_republishes_even_paused() {
+    let (track, mut playback) = sample(PlayerState::Playing);
+    let fast = |playback: &mut Playback, speed| {
+        playback.snapshot.parameters = crate::playback::PlaybackParameters {
+            speed,
+            adjust_pitch: false,
+        };
+    };
+    playback.snapshot.duration = Some(Duration::from_secs(240));
+    playback.snapshot.position = Duration::from_secs(90);
+    fast(&mut playback, 1.5);
+    let presence = Presence::from_playback(Some(&track), &playback).unwrap();
+    assert_eq!(presence.key.duration, Some(Duration::from_secs(160)));
+    assert_eq!(presence.position, Duration::from_secs(60));
+    let json = serde_json::to_value(presence.activity()).unwrap();
+    assert_eq!(
+        json["timestamps"]["end"].as_i64().unwrap() - json["timestamps"]["start"].as_i64().unwrap(),
+        160
+    );
+    playback.snapshot.state = PlayerState::Paused;
+    let paused = Presence::from_playback(Some(&track), &playback).unwrap();
+    assert!(paused.paused_label.starts_with("Paused • 1:00 • "));
+    assert!(
+        serde_json::to_value(paused.activity())
+            .unwrap()
+            .get("timestamps")
+            .is_none()
+    );
+    // Rate-only change: same state/seek/token/duration source, new key and a recomputed label.
+    let mut service = Service::default();
+    service.update(Some(&track), &playback);
+    let (sender, receiver) = watch::channel(service.desired.clone());
+    service.sender = Some(sender);
+    fast(&mut playback, 0.75);
+    service.update(Some(&track), &playback);
+    assert!(
+        receiver.has_changed().unwrap(),
+        "rate change wakes IPC while paused"
+    );
+    let slow = service.desired.presence.as_ref().unwrap();
+    assert!(slow.paused_label.starts_with("Paused • 2:00 • "));
+    assert_eq!(slow.key.duration, Some(Duration::from_secs(320)));
+    // Unknown end stays timestamp-free at any speed.
+    playback.snapshot.state = PlayerState::Playing;
+    playback.snapshot.duration = None;
+    assert!(
+        serde_json::to_value(
+            Presence::from_playback(Some(&track), &playback)
+                .unwrap()
+                .activity()
+        )
+        .unwrap()
+        .get("timestamps")
+        .is_none()
+    );
+}
+#[test]
 fn empty_unicode_and_long_metadata_never_leak_paths_or_ids() {
     let (mut track, playback) = sample(PlayerState::Playing);
     track.title = "  ".into();

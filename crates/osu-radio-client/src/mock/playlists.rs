@@ -23,6 +23,7 @@ fn item(id: i32, playlist_id: i32, name: &str, available: bool) -> PlaylistItem 
         playlist_id,
         last_played_at_ms: None,
         volume_percent: None,
+        mods: None,
         source_kind: "stable".into(),
         beatmap_hash: format!("demo-{id}"),
         title: Some("Karakara".into()),

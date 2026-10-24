@@ -25,7 +25,7 @@ impl Controller {
     pub(crate) fn system_media_snapshot(&self) -> Snapshot {
         let mut snapshot = self.player.system_snapshot(
             self.session.is_some(),
-            self.settings.volume.settings.is_some(),
+            self.settings.playback_ready(),
             f64::from(self.assignment_volume()),
             self.settings.preferences.name_preferences,
             self.settings

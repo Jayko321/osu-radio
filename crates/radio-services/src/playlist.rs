@@ -60,6 +60,7 @@ impl PlaylistService<'_> {
         if let Some(playlist) = &mut result {
             ListeningHistoryService::fill_playlist(&transaction, playlist).await?;
             crate::AudioSettingsService::fill_playlist(&transaction, playlist).await?;
+            crate::AudioModsService::fill_playlist(&transaction, playlist).await?;
         }
         transaction.commit().await?;
         Ok(result)
@@ -175,6 +176,7 @@ impl PlaylistService<'_> {
             .ok_or(PlaylistError::NotFound(id))?;
         ListeningHistoryService::fill_playlist(&transaction, &mut result).await?;
         crate::AudioSettingsService::fill_playlist(&transaction, &mut result).await?;
+        crate::AudioModsService::fill_playlist(&transaction, &mut result).await?;
         transaction.commit().await?;
         Ok(result)
     }

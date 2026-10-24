@@ -54,6 +54,7 @@ async fn repository_contracts(url: &str) {
     playlists::migration_contracts(&database, url).await;
     listening_history::migration_contracts(&database, url).await;
     audio_settings::migration_contracts(&database, url).await;
+    audio_mods::contracts(&database, url).await;
     playlists::cover_migration_contracts(&database, url).await;
     playlists::unicode_migration_contracts(&database).await;
     collections::migration_contracts(&database).await;
@@ -116,6 +117,11 @@ async fn missing_settings_do_not_recreate_the_singleton(database: &Database) {
     for error in [
         settings.get().await.unwrap_err(),
         settings.audio_settings().await.unwrap_err(),
+        settings.audio_mods().await.unwrap_err(),
+        settings
+            .update_audio_mods(crate::model::AudioModsSettings::default())
+            .await
+            .unwrap_err(),
         settings
             .update_audio_settings(None, None)
             .await
@@ -435,6 +441,7 @@ async fn drop_application_tables(database: &Database) {
     for table in [
         "queue_entries",
         "audio_volume",
+        "audio_mods",
         "listening_history",
         "playlist_items",
         "playlists",
@@ -472,7 +479,7 @@ async fn concurrent_schema_changes(database: &Database, url: &str) {
                 .await
                 .unwrap()
                 .len(),
-            14
+            15
         );
         let (reset, migrate) = tokio::join!(database.reset(), other.migrate());
         reset.unwrap();
@@ -743,6 +750,7 @@ mod listening_history;
 mod playlists;
 mod queue;
 
+mod audio_mods;
 mod audio_settings;
 
 mod collections;

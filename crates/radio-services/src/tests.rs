@@ -80,6 +80,7 @@ async fn contracts(url: &str) {
     collections::contracts(&database).await;
     listening_history::contracts(&database, &other_pool, url).await;
     audio_settings::contracts(&database, &other_pool, url).await;
+    audio_mods::contracts(&database, &other_pool, url).await;
 }
 
 async fn assert_counts(database: &TestDatabase, expected: [i64; 4]) {
@@ -905,6 +906,7 @@ mod queue_t02;
 mod queue_t03;
 mod queue_t04;
 
+mod audio_mods;
 mod audio_settings;
 
 mod collections;

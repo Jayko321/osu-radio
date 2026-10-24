@@ -11,7 +11,7 @@ depends=(
   'qt6-base>=6.8' 'qt6-declarative>=6.8' 'qt6-svg' 'qt6-wayland'
   'dotnet-runtime-8.0' 'xdg-desktop-portal' 'xdg-desktop-portal-impl'
 )
-makedepends=('rustup' 'dotnet-sdk-8.0' 'lld' 'pkgconf')
+makedepends=('rustup' 'dotnet-sdk-8.0' 'lld' 'pkgconf' 'clang')
 # Rust links with LLD; GCC LTO objects are incompatible with that linker.
 options=('!lto' '!debug')
 optdepends=(

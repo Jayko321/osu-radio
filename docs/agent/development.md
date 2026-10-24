@@ -43,6 +43,43 @@ frontends.
   machine. `--locked` protects Cargo.lock; it does not make builds offline or
   prevent generated artifacts under `target/` and the helper build directories.
 
+### Signalsmith native build
+
+[`osu-radio-player`](../../crates/osu-radio-player/Cargo.toml) locks
+`signalsmith-stretch = 0.1.3`. Its published crate includes the C++ Signalsmith
+Stretch and Linear sources: no system Signalsmith library or submodule checkout
+is required. Its `build.rs` compiles `src/wrapper.cpp` with `cc` in C++14 mode
+and runs bindgen 0.70.1 against `src/wrapper.h`. The toolkit-free client and Qt
+frontend inherit these build requirements through the player.
+
+- Linux: a C++14 compiler and libclang with its resource headers. Ubuntu CI
+  uses `build-essential` and `libclang-dev`; Arch packaging requires `base-devel`
+  and `clang`. libclang is a build dependency; the DSP is statically linked.
+  The existing C++ runtime remains a runtime dependency.
+- Native Windows: use the C++ toolchain matching the Rust/Qt target (MSVC Build
+  Tools and Windows SDK for MSVC), plus LLVM including `libclang.dll`.
+  Set `LIBCLANG_PATH` to LLVM's `bin` directory if needed. This documents
+  prerequisites, not a successful Windows build. Run player tests and then
+  client checks from the [verification matrix](#verification-matrix) on Windows;
+  Linux/cross compilation cannot substitute for that result.
+
+With a system libclang in its usual search path, leave `LIBCLANG_PATH` unset.
+For a nonstandard LLVM, point it to the directory containing the shared
+libclang library. If bindgen reports `stddef.h file not found`, ensure the
+matching Clang resource headers are present; when automatic discovery fails,
+set `BINDGEN_EXTRA_CLANG_ARGS=-resource-dir=/absolute/llvm/lib/clang/VERSION`.
+Use the matching installation/version, not an unrelated LLVM's headers.
+The C++ compiler and libclang parser are separate tools; GCC can compile the
+wrapper while bindgen loads libclang. Do not hardcode workstation LLVM paths
+in CI or the package recipe.
+
+Sources: the locked crate's `build.rs`, plus the
+[bindgen requirements](https://rust-lang.github.io/rust-bindgen/requirements.html)
+and [Signalsmith wrapper](https://github.com/colinmarc/signalsmith-stretch-rs/tree/c4d0cbd41351966f7fc0b18b9d83d9e381aa4e26),
+queried through Context7 and checked against the published 0.1.3 sources.
+The [distribution inventory](../../packaging/arch/licenses/README.md)
+includes wrapper, embedded C++ notices and transitive normal/build dependencies.
+
 ### Arch Linux packaging
 
 The [Arch kit](../../packaging/arch/README.md) contains the
@@ -143,7 +180,8 @@ after checkout to install the repository-pinned toolchain and components from
 [`rust-toolchain.toml`](../../rust-toolchain.toml), without repeating the Rust
 version in the workflow. CI disables incremental compilation, installs the
 .NET 8 SDK for the real scanner helper build, and installs
-`build-essential`, `pkg-config` and `libasound2-dev`. The audio dependency needs
+`build-essential`, `pkg-config`, `libasound2-dev` and `libclang-dev`. Signalsmith
+needs C++14 and bindgen/libclang (see [native build](#signalsmith-native-build)). The audio dependency needs
 ALSA headers to compile; the tests consume a controlled mixer without opening
 an output device. SQLite uses the bundled library from `libsqlite3-sys`;
 the selected HTTP dependencies use rustls, so no OpenSSL development package
@@ -167,22 +205,9 @@ mock processes/executable stubs. None requires Qt. The retained Python 3.14
 bytecode artifact is exercised separately when its magic matches the interpreter;
 other Python versions skip that execution case. It is not treated as identical
 to the current source fixture and is never rewritten by the check.
-Repository metadata checks use Python 3.11+ (`tomllib`):
-`python3 -B -m unittest discover -s tests -v` checks local Markdown targets/anchors,
-workspace/path/lockfile consistency, declared entry points, ignore rules and the
-coverage inventory. It also checks nonempty UTF-8 Markdown/closed example fences,
-player fixture names and full bundled attribution texts (normalizing line endings).
-It does not verify prose claims or external links.
-Agent guides under `docs/agent/` and `docs/specs/*.md` are versioned; implementation
-plans and other `docs/` files stay local and ignored. Link checks skip ignored targets.
-The same suite now checks the pinned toolchain's required components, the scoped
-CI command matrix and Bash syntax, root-anchored nested ignore rules, empty legacy
-metadata/no gitlinks and selected CR/Serena metadata fields. These tooling metadata
-guards deliberately handle the committed simple scalar/list forms; they are not
-a general YAML/schema validator and do not launch Serena. The workflow was also
-validated locally with actionlint 1.7.12 (`-shellcheck= -pyflakes=`); its external
-ShellCheck/Pyflakes integrations and hosted GitHub Actions were not run. The
-validator lives only under ignored `target/test-tools/bin/` in this environment.
+Agent guides under `docs/agent/`, `docs/specs/*.md` and implementation plans and
+task cards under `docs/impl/` are versioned; other `docs/` files stay local and ignored.
+There is no automated repository-metadata or link check; verify changed links by hand.
 `python3 -B -m unittest discover -s crates/radio-scanner/tests -p 'test_*.py' -v`
 compiles the actual std-only build script with `rustc` and tests its protocol using
 a fake `dotnet` on POSIX. These checks cover helper overrides, build arguments,
@@ -280,7 +305,8 @@ playback.
 | Scanner change spanning these paths | `cargo test -p radio-scanner --locked` | Combines the preceding scanner checks; helper build prerequisites still apply. |
 | C# helper source | `dotnet build tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj --configuration Release --nologo`; `cargo test -p radio-scanner --locked -- real_ --test-threads=1` | Rust drives the real helper against temporary minimal/rich Realm fixtures: metadata/media references, collection validation, read-only bytes, CLI errors and schema output. No separate C# test project or C# line instrumentation exists; see [fixture details](../../tools/osu-lazer-realm-parser/README.md). |
 | CLI wiring | `cargo test -p osu-radio-cli --locked` and `cargo clippy -p osu-radio-cli --all-targets --locked` | Unit checks plus [actual-CLI subprocess tests](../../apps/osu-radio-cli/tests/commands.rs): scoped discovery, text/JSON previews, marker selection, exit codes, isolated dotenv, SQLite replacement/reset and source preservation. Synthetic stable sources and private databases; no real-library or PostgreSQL runtime acceptance. |
-| Local audio engine | `cargo test -p osu-radio-player --locked` | MP3 CBR/VBR, Ogg/Vorbis and WAV decoding/seek with controlled mixer consumption; no physical device. |
+| Local audio engine | `cargo test -p osu-radio-player --locked` | MP3 CBR/VBR, Ogg/Vorbis and WAV decoding/seek with controlled mixer consumption, plus tempo/pitch frequency, duration, live-edit and EOF-tail signal tests (needs the [Signalsmith build prerequisites](#signalsmith-native-build)); no physical device and no listening judgment. |
+| Adjustable speed and pitch (DT/HT/NC) | Rows for database, server (docs on/off), client (`mock` off/on), player, media-controls and Qt, then the opt-in probes below | Profiles, wire shape, gate/parameters, time scale and popup have layer tests. The real-server probe covers storage → HTTP → worker parameters across restart/reimport with a **fake engine**; sound quality, native F1/D/E, live drag and Windows need manual acceptance. |
 | Persisted individual/global volume | Repository/service checks on SQLite/PostgreSQL, both server router variants, client mock off/on and Qt offscreen/lint | Verify defaults, upgrade/reimport, shared audio, A/B selection, debounce/retry/stale replies, volume before play and shutdown flush. Physical output and Linux/Windows slider checks remain manual. |
 | Persisted playback queue and assignment protocol | Repository/service tests on each backend, server tests with and without `docs`, client tests with and without `mock`, Qt tests and QML lint below | Use disposable databases; verify recovery, duplicates, stale callbacks/downloads, reconnect and current metadata outside search. Physical output and Windows remain separate. |
 | Queue integration with the real embedded server | Build SQLite server, then run the two opt-in queue probes below | Private SQLite/WAV/NDJSON fixtures; Qt on pause and client with a fake engine. No physical output or native desktop acceptance. |
@@ -306,6 +332,18 @@ cargo test -p osu-radio-client --lib --locked real_server_queue_and_fake_engine_
 
 Executed results, R1–R11 evidence and manual Linux/Windows steps are recorded in
 [T10](../impl/queue-rework/T10.md#отчёт-о-выполнении), separately from this check matrix.
+
+The adjustable speed/pitch probe reuses the same fixture (individual mods on, global
+DT 1.30×, A = NC 1.20×, B/C without profiles) and the worker core with its fake engine.
+It is ignored by default and must be run by name after building the SQLite server
+(set `LIBCLANG_PATH` and `BINDGEN_EXTRA_CLANG_ARGS` as in the build notes if needed):
+
+```sh
+cargo build -p osu-radio-server --locked
+cargo test -p osu-radio-client --lib --locked real_server_mods -- --ignored --test-threads=1
+```
+
+Executed results are in the [T11 report](../impl/adjustable-pitch-speed/T11.md#отчёт-о-выполнении).
 
 ### Repository and backend checks
 

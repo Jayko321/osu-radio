@@ -4,6 +4,7 @@
 //! the current file until replacement succeeds or the player has been dropped.
 
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Source, mixer::Mixer};
+mod stream;
 use std::{
     fs::File,
     io::BufReader,
@@ -11,6 +12,7 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
     time::Duration,
 };
+use stream::Stream;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PlayerState {
@@ -22,12 +24,34 @@ pub enum PlayerState {
     Ended,
 }
 
+/// Engine parameters, independent of mods or track identity. Speed is a ratio.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlaybackParameters {
+    /// Finite playback ratio in 0.5..=2.0; defaults to 1.0.
+    pub speed: f32,
+    /// True follows Rodio's speed/pitch coupling; false preserves source pitch.
+    pub adjust_pitch: bool,
+}
+
+impl Default for PlaybackParameters {
+    fn default() -> Self {
+        Self {
+            speed: 1.0,
+            adjust_pitch: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Snapshot {
     pub state: PlayerState,
+    /// Source coordinates, independent of the current speed and DSP lookahead.
     pub position: Duration,
+    /// Original source duration; never divided by speed.
     pub duration: Option<Duration>,
     pub volume: f32,
+    /// Applied pair (or prepared pair before the first sample), not a pending edit.
+    pub parameters: PlaybackParameters,
 }
 
 impl Default for Snapshot {
@@ -37,6 +61,7 @@ impl Default for Snapshot {
             position: Duration::ZERO,
             duration: None,
             volume: 1.0,
+            parameters: PlaybackParameters::default(),
         }
     }
 }
@@ -57,12 +82,14 @@ pub enum PlayerError {
     Empty,
     #[error("Volume must be a finite value between 0 and 1")]
     InvalidVolume,
+    #[error("Speed must be a finite ratio between 0.5 and 2")]
+    InvalidSpeed,
 }
 
 /// Owns one output stream and one local track; never opens a device until constructed.
 pub struct Player {
     sink: rodio::Player,
-    source: Option<Arc<Mutex<Option<FileDecoder>>>>,
+    source: Option<Arc<Mutex<Option<Stream>>>>,
     output_error: Arc<Mutex<Option<String>>>,
     mixer: Mixer,
     // Drop the sink before the output stream; Drop reclaims the decoder first.
@@ -72,6 +99,7 @@ pub struct Player {
     duration: Option<Duration>,
     offset: Duration,
     volume: f32,
+    parameters: PlaybackParameters,
 }
 
 impl Player {
@@ -102,6 +130,7 @@ impl Player {
             duration: None,
             offset: Duration::ZERO,
             volume: 1.0,
+            parameters: PlaybackParameters::default(),
         }
     }
 
@@ -170,6 +199,24 @@ impl Player {
         Ok(())
     }
 
+    /// Apply at the next PCM block boundary, or prepare immediately while paused.
+    /// Retains source position and pause status.
+    /// May be called before load/play; invalid values leave all state unchanged.
+    pub fn set_parameters(&mut self, parameters: PlaybackParameters) -> Result<(), PlayerError> {
+        if !parameters.speed.is_finite() || !(0.5..=2.0).contains(&parameters.speed) {
+            return Err(PlayerError::InvalidSpeed);
+        }
+        self.check_output()?;
+        let paused = self.snapshot().state != PlayerState::Playing;
+        if let Some(source) = &self.source
+            && let Some(stream) = lock(source).as_mut()
+        {
+            stream.set_parameters(parameters, paused);
+        }
+        self.parameters = parameters;
+        Ok(())
+    }
+
     #[must_use]
     pub fn snapshot(&self) -> Snapshot {
         let ended = self.state == PlayerState::Playing && self.sink.empty();
@@ -180,13 +227,22 @@ impl Player {
         } else {
             self.state
         };
+        let (elapsed, parameters) = self
+            .source
+            .as_ref()
+            .and_then(|source| {
+                lock(source)
+                    .as_ref()
+                    .map(|stream| (stream.position(), stream.parameters()))
+            })
+            .unwrap_or((Duration::ZERO, self.parameters));
         let position = if state == PlayerState::Stopped {
             Duration::ZERO
         } else if ended {
             self.duration
-                .unwrap_or_else(|| self.offset.saturating_add(self.sink.get_pos()))
+                .unwrap_or_else(|| self.offset.saturating_add(elapsed))
         } else {
-            let position = self.offset.saturating_add(self.sink.get_pos());
+            let position = self.offset.saturating_add(elapsed);
             self.duration
                 .map_or(position, |duration| position.min(duration))
         };
@@ -195,6 +251,7 @@ impl Player {
             position,
             duration: self.duration,
             volume: self.volume,
+            parameters,
         }
     }
 
@@ -243,7 +300,7 @@ impl Player {
         let channels = decoder.channels();
         let sample_rate = decoder.sample_rate();
         let duration = decoder.total_duration();
-        let source = Arc::new(Mutex::new(Some(decoder)));
+        let source = Arc::new(Mutex::new(Some(Stream::new(decoder, self.parameters))));
         sink.append(ReleasableSource {
             source: source.clone(),
             channels,
@@ -277,7 +334,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// The worker can close a decoder independently of Rodio's callback/queue lifetime.
 struct ReleasableSource {
-    source: Arc<Mutex<Option<FileDecoder>>>,
+    source: Arc<Mutex<Option<Stream>>>,
     channels: rodio::ChannelCount,
     sample_rate: rodio::SampleRate,
     duration: Option<Duration>,
@@ -290,9 +347,7 @@ impl Iterator for ReleasableSource {
 }
 impl Source for ReleasableSource {
     fn current_span_len(&self) -> Option<usize> {
-        lock(&self.source)
-            .as_ref()
-            .and_then(Source::current_span_len)
+        None
     }
     fn channels(&self) -> rodio::ChannelCount {
         self.channels

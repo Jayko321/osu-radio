@@ -109,6 +109,8 @@ pub(crate) struct QueueEntryResponse {
     last_played_at_ms: Option<i64>,
     #[cfg_attr(feature = "docs", schema(required = true))]
     volume_percent: Option<u8>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    mods: Option<super::audio_mods::AudioModsProfile>,
 }
 impl From<radio_services::QueueSnapshotEntry> for QueueEntryResponse {
     fn from(snapshot: radio_services::QueueSnapshotEntry) -> Self {
@@ -129,6 +131,7 @@ impl From<radio_services::QueueSnapshotEntry> for QueueEntryResponse {
             availability: entry.availability.into(),
             last_played_at_ms: snapshot.last_played_at_ms,
             volume_percent: snapshot.volume_percent,
+            mods: snapshot.mods.map(Into::into),
         }
     }
 }
@@ -170,6 +173,8 @@ pub(crate) struct PlaybackResponse {
     #[cfg_attr(feature = "docs", schema(required = true))]
     volume_percent: Option<u8>,
     #[cfg_attr(feature = "docs", schema(required = true))]
+    mods: Option<super::audio_mods::AudioModsProfile>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
     current_audio_source_id: Option<i32>,
     #[cfg_attr(feature = "docs", schema(required = true))]
     current_playlist_item_id: Option<i32>,
@@ -207,6 +212,7 @@ impl PlaybackResponse {
             availability: assignment.availability.map(Into::into),
             waiting_for_check: assignment.waiting_for_check,
             volume_percent: assignment.volume_percent,
+            mods: assignment.mods.map(Into::into),
             current_audio_source_id: assignment.current_audio_source_id,
             current_playlist_item_id: assignment.current_playlist_item_id,
             track: assignment.track.map(TrackResponse::from),

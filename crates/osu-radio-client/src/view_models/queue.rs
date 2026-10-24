@@ -29,6 +29,7 @@ impl From<QueueEntry> for QueueRow {
             cover_beatmap_id: entry.cover_beatmap_id,
             last_played_at_ms: entry.last_played_at_ms,
             volume_percent: entry.volume_percent,
+            mods: entry.mods,
             difficulties: entry
                 .beatmap_id
                 .zip(entry.beatmap_set_id)

@@ -90,6 +90,7 @@ impl Controller {
                     waiting_for_check,
                     mode,
                     volume: self.assignment_volume(),
+                    parameters: self.assignment_parameters(),
                 });
             }
         } else if mode == PlaybackMode::Playing && !waiting_for_check {
@@ -348,7 +349,9 @@ impl Controller {
                 .flatten(),
             !detail || self.playlists.view.selected_item().is_some(),
             self.session.is_some(),
-            self.settings.volume.settings.is_some(),
+            self.settings.playback_ready(),
+            self.settings
+                .selected_mods(self.player.selected_track.as_ref()),
         );
         if let Some(error) = &self.player.transport_error {
             presentation.message.clone_from(error);
@@ -535,6 +538,7 @@ impl Controller {
             return;
         }
         self.emit_volume();
+        self.settings_work(SettingsViewModel::emit_mods);
         let track = if self.playlists.view.showing_detail() {
             self.playlists.selected_track().cloned()
         } else {
@@ -857,12 +861,22 @@ impl Controller {
     pub(crate) fn selected_volume_id(&self) -> Option<i32> {
         SettingsViewModel::selected_volume_id(&self.settings_input())
     }
+    pub(crate) fn assignment_parameters(&self) -> crate::playback::PlaybackParameters {
+        self.player
+            .assignment
+            .as_ref()
+            .map_or_else(Default::default, |a| {
+                self.settings.assignment_mods(a).into()
+            })
+    }
     pub(crate) fn assignment_volume(&self) -> f32 {
         self.settings.assignment_volume(&self.settings_input())
     }
 
     pub(crate) fn finish_volume_editing(&mut self) {
         self.settings.finish_volume_editing();
+        self.settings.finish_mods_editing();
+        self.settings_work(SettingsViewModel::emit_mods);
     }
     pub(crate) fn volume_deadline(&self) -> Option<Instant> {
         self.settings.volume_deadline()
@@ -965,5 +979,55 @@ impl Controller {
         self.library_work(|library, input, work| {
             library.replace_tracks(tracks, invalidate_artwork, input, work);
         });
+    }
+}
+
+impl Controller {
+    pub(crate) fn load_mods(&mut self) {
+        self.settings_work(SettingsViewModel::load_mods);
+    }
+    pub(crate) fn mods_loaded_result(
+        &mut self,
+        request: u64,
+        revision: u64,
+        result: Result<crate::models::AudioModsSettings, String>,
+    ) {
+        self.settings_work(|settings, input, work| {
+            settings.mods_loaded_result(request, revision, result, input, work);
+        });
+    }
+    pub(crate) fn mods_action(&mut self, action: crate::view_models::ModsAction) {
+        self.settings_work(|settings, input, work| settings.mods_action(action, input, work));
+        // A recomputes from its own launch profile (same entry/token: no restart); B's scale follows its profile.
+        if self.playback.is_some() {
+            self.assign_worker();
+        }
+        self.emit_player();
+    }
+    pub(crate) fn start_mods_save(&mut self) {
+        self.settings_work(SettingsViewModel::start_mods_save);
+    }
+    pub(crate) fn mods_saved(&mut self, result: Result<(), String>) {
+        self.settings_work(|settings, input, work| settings.mods_saved(result, input, work));
+    }
+    pub(crate) async fn flush_mods_saves(&mut self) {
+        self.settings.mods.error.clear();
+        let mut errors = Vec::new();
+        self.settings.finish_mods_editing();
+        loop {
+            self.start_mods_save();
+            let Some(task) = self.settings.mods.save_task.take() else {
+                break;
+            };
+            self.mods_saved(task.await.unwrap_or_else(|error| Err(error.to_string())));
+            if !self.settings.mods.error.is_empty() {
+                // Attempt each target once on shutdown; keep the final error visible.
+                self.settings.mods.pending.pop_front();
+                eprintln!("{}", self.settings.mods.error);
+                errors.push(std::mem::take(&mut self.settings.mods.error));
+            }
+        }
+        self.settings.mods.error = errors.join("\n");
+        self.settings_work(SettingsViewModel::emit_mods);
     }
 }

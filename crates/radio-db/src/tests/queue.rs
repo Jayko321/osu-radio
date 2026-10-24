@@ -152,7 +152,7 @@ async fn populated_upgrade(database: &Database, url: &str, index: Option<i64>, m
     reopened.migrate().await.unwrap();
     assert_eq!(reopened.queue().get().await.unwrap(), state);
     // The frozen reconstruction must retain every field through populated down/up.
-    downgrade_to_v11(database).await.unwrap();
+    downgrade_to(database, 11).await.unwrap();
     assert!(
         !SchemaManager::new(&database.connection)
             .has_table("queue_entries")
@@ -290,14 +290,14 @@ async fn repository_contracts(database: &Database, other: &Database, state: &Que
     mutations.push(bad);
     for candidate in mutations {
         save(database, &candidate).await.unwrap();
-        assert!(downgrade_to_v11(database).await.is_err());
+        assert!(downgrade_to(database, 11).await.is_err());
         assert_eq!(database.queue().get().await.unwrap(), candidate);
         assert_eq!(
             Migrator::get_applied_migrations(&database.connection)
                 .await
                 .unwrap()
                 .len(),
-            14
+            15
         );
         assert!(
             !SchemaManager::new(&database.connection)
@@ -406,7 +406,7 @@ async fn downgrade_guards(database: &Database, state: &QueueState) {
     candidates.push(bad);
     for candidate in candidates {
         save(database, &candidate).await.unwrap();
-        assert!(downgrade_to_v11(database).await.is_err());
+        assert!(downgrade_to(database, 11).await.is_err());
         assert_eq!(database.queue().get().await.unwrap(), candidate);
         assert_eq!(
             database
@@ -423,7 +423,7 @@ async fn downgrade_guards(database: &Database, state: &QueueState) {
                 .await
                 .unwrap()
                 .len(),
-            14
+            15
         );
         save(database, state).await.unwrap();
     }
@@ -433,7 +433,7 @@ async fn downgrade_guards(database: &Database, state: &QueueState) {
     boundary.waiting_for_check = false;
     boundary.history_len = 0;
     save(database, &boundary).await.unwrap();
-    assert!(downgrade_to_v11(database).await.is_err());
+    assert!(downgrade_to(database, 11).await.is_err());
     assert_eq!(database.queue().get().await.unwrap(), boundary);
     save(database, state).await.unwrap();
 }
@@ -458,10 +458,18 @@ async fn save_failure_rolls_back(database: &Database, state: &QueueState) {
     }
 }
 
-// Keep the v13 waiting column/history intact when a v12-to-v11 guard rejects downgrade.
-async fn downgrade_to_v11(database: &Database) -> Result<(), sea_orm::DbErr> {
+// Keep all newer schema/history intact when an older downgrade guard rejects the operation.
+async fn downgrade_to(database: &Database, version: usize) -> Result<(), sea_orm::DbErr> {
     let transaction = database.begin().await.unwrap();
-    let result = Migrator::down(&transaction.connection, Some(3)).await;
+    let count = Migrator::get_applied_migrations(&transaction.connection)
+        .await
+        .unwrap()
+        .len();
+    let result = Migrator::down(
+        &transaction.connection,
+        Some(u32::try_from(count.checked_sub(version).unwrap()).unwrap()),
+    )
+    .await;
     if result.is_ok() {
         transaction.commit().await.unwrap();
     } else {
@@ -488,7 +496,7 @@ async fn waiting_migration(database: &Database, url: &str) {
         (state.revision, state.playback_token, state.last_entry_id),
         (17, 23, 8)
     );
-    downgrade_to_v12(database).await.unwrap();
+    downgrade_to(database, 12).await.unwrap();
     database.migrate().await.unwrap();
     assert_eq!(database.queue().get().await.unwrap(), state);
     let reopened = Database::connect(url).await.unwrap();
@@ -515,7 +523,7 @@ async fn waiting_migration(database: &Database, url: &str) {
         check_generation: assigned.entries[0].check_generation,
     });
     save(database, &assigned).await.unwrap();
-    let error = downgrade_to_v12(database).await.unwrap_err();
+    let error = downgrade_to(database, 12).await.unwrap_err();
     assert!(
         error
             .to_string()
@@ -527,25 +535,14 @@ async fn waiting_migration(database: &Database, url: &str) {
             .await
             .unwrap()
             .len(),
-        14
+        15
     );
     assigned.entries[0].availability = QueueAvailability::Available;
     save(database, &assigned).await.unwrap();
-    downgrade_to_v12(database).await.unwrap();
+    downgrade_to(database, 12).await.unwrap();
     database.migrate().await.unwrap();
     assert_eq!(database.queue().get().await.unwrap(), assigned);
     drop_application_tables(database).await;
-}
-
-async fn downgrade_to_v12(database: &Database) -> Result<(), sea_orm::DbErr> {
-    let transaction = database.begin().await.unwrap();
-    let result = Migrator::down(&transaction.connection, Some(2)).await;
-    if result.is_ok() {
-        transaction.commit().await.unwrap();
-    } else {
-        transaction.rollback().await.unwrap();
-    }
-    result
 }
 
 async fn launch_source_migration(database: &Database, url: &str) {
@@ -586,7 +583,7 @@ async fn launch_source_migration(database: &Database, url: &str) {
         }
         let reopened = Database::connect(url).await.unwrap();
         assert_eq!(reopened.queue().get().await.unwrap(), state);
-        Migrator::down(&database.connection, Some(1)).await.unwrap();
+        downgrade_to(database, 13).await.unwrap();
         database.migrate().await.unwrap();
         assert_eq!(database.queue().get().await.unwrap(), state);
         if state.launch_source.is_some() {
@@ -594,9 +591,7 @@ async fn launch_source_migration(database: &Database, url: &str) {
             rebound.entries[0].audio_source = Some(SourceType::Copied("new/source".into()));
             rebound.entries[0].check_generation = 1;
             save(database, &rebound).await.unwrap();
-            let error = Migrator::down(&database.connection, Some(1))
-                .await
-                .unwrap_err();
+            let error = downgrade_to(database, 13).await.unwrap_err();
             assert!(
                 error
                     .to_string()
@@ -608,7 +603,7 @@ async fn launch_source_migration(database: &Database, url: &str) {
                     .await
                     .unwrap()
                     .len(),
-                14
+                15
             );
         }
         for invalid in [

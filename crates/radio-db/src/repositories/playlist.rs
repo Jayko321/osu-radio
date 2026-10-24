@@ -131,6 +131,7 @@ impl PlaylistRepository<'_> {
                 PlaylistItem {
                     last_played_at_ms: None,
                     volume_percent: None,
+                    mods: None,
                     id: item.id,
                     playlist_id: item.playlist_id,
                     source_kind: item.source_kind,

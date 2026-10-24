@@ -35,6 +35,7 @@ QtObject {
         "qrc:/assets/icons/chevron-down.svg",
         "qrc:/assets/icons/circle-plus.svg",
         "qrc:/assets/icons/copy.svg",
+        "qrc:/assets/icons/gauge.svg",
         "qrc:/assets/icons/layers.svg",
         "qrc:/assets/icons/minus.svg",
         "qrc:/assets/icons/music.svg",

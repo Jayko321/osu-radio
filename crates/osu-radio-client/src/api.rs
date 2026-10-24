@@ -147,6 +147,39 @@ impl ApiClient {
             Err(Self::failure(&path, response).await)
         }
     }
+    pub async fn audio_mods(&self) -> Result<crate::models::AudioModsSettings, ApiError> {
+        self.get("/api/user-data/audio-mods").await
+    }
+    pub async fn update_audio_mods(
+        &self,
+        changes: &crate::models::AudioModsPatch,
+    ) -> Result<crate::models::AudioModsSettings, ApiError> {
+        let path = "/api/user-data/audio-mods";
+        self.json_response(path, self.http.patch(self.url(path)).json(changes))
+            .await
+    }
+    pub async fn set_audio_mods(
+        &self,
+        id: i32,
+        profile: Option<crate::models::AudioModsProfile>,
+    ) -> Result<(), ApiError> {
+        let path = format!("/api/audio-sources/{id}/mods");
+        let Some(profile) = profile else {
+            return self.delete(&path).await;
+        };
+        let response = self
+            .http
+            .put(self.url(&path))
+            .json(&profile)
+            .send()
+            .await
+            .map_err(ApiError::Transport)?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(Self::failure(&path, response).await)
+        }
+    }
     pub async fn playback(&self) -> Result<crate::models::PlaybackAssignment, ApiError> {
         self.get("/api/playback").await
     }

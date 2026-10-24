@@ -349,6 +349,7 @@ fn original_library_tracks(sets: &[BeatmapSet]) -> Vec<Track> {
                 audio_source_id: id,
                 last_played_at_ms: None,
                 volume_percent: None,
+                mods: None,
                 cover_beatmap_id: maps.iter().find(|(m, _)| m.has_cover).map(|(m, _)| m.id),
                 title_original: representative.and_then(|map| map.title.clone()),
                 title_unicode: representative.and_then(|map| map.title_unicode.clone()),

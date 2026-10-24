@@ -11,6 +11,7 @@ pub(super) struct Published {
 
 impl Published {
     pub fn new(snapshot: Snapshot, artwork: Option<&Path>, instance: &str) -> Result<Self, Error> {
+        snapshot.validate_rate()?;
         let mut metadata = Metadata::new();
         if let Some(launch) = snapshot.launch {
             metadata.set_trackid(Some(track_id(instance, launch)?));
@@ -47,7 +48,7 @@ pub(super) const fn status(status: PlaybackStatus) -> mpris_server::PlaybackStat
     }
 }
 
-#[allow(clippy::float_cmp)] // Publish any change to the client's normalized volume value.
+#[allow(clippy::float_cmp)] // Publish any change to the client's volume or actual rate.
 pub(super) fn changes(previous: &Published, current: &Published) -> Vec<Property> {
     let old = &previous.snapshot;
     let new = &current.snapshot;
@@ -60,6 +61,9 @@ pub(super) fn changes(previous: &Published, current: &Published) -> Vec<Property
     }
     if old.volume != new.volume {
         properties.push(Property::Volume(new.volume));
+    }
+    if old.rate != new.rate {
+        properties.push(Property::Rate(new.rate));
     }
     for (changed, property) in [
         (

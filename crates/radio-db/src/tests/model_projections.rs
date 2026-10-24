@@ -412,6 +412,7 @@ async fn playlist_projections(
         cover_beatmap_id: Some(map_id),
         last_played_at_ms: None,
         volume_percent: None,
+        mods: None,
     };
     assert_eq!(
         saved,

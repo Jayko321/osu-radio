@@ -7,6 +7,10 @@ pub struct Model {
     pub id: i32,
     pub individual_volume_enabled: bool,
     pub global_volume_percent: i32,
+    pub individual_mods_enabled: bool,
+    pub global_mods_mode: String,
+    pub global_mods_speed_percent: i32,
+    pub global_mods_adjust_pitch: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

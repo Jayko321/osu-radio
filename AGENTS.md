@@ -53,5 +53,5 @@ For library/framework/SDK/API/CLI/cloud-service guidance, fetch current document
 - Update the affected guide with behavior changes, linking current source/tests and stating verification limits. Update routing here only when ownership, constraints or reading paths change; ordinary edits do not require rewriting all guides.
 - Keep technical facts in `docs/agent/`, task procedures in `.agents/skills/`, and Claude-only notes in `CLAUDE.md`. Link shared procedures instead of duplicating them.
 - Label implementation, placeholders, confirmed direction and deferred decisions separately. Do not turn an implementation detail or a proposed improvement into a product requirement.
-- Check changed links, paths, symbols, flags and examples. Record executed checks separately from suggested commands. `docs/agent/` and `docs/specs/*.md` are versioned; other files under `docs/`, including implementation reports, stay local and ignored.
+- Check changed links, paths, symbols, flags and examples. Record executed checks separately from suggested commands. `docs/agent/`, `docs/specs/*.md` and `docs/impl/` (implementation plans and task cards) are versioned; other files under `docs/` stay local and ignored.
 - Keep database contracts in the database guide and API procedures in the shared API skill.

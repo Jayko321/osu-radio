@@ -33,7 +33,7 @@ stable node `415:250`, lazer node `415:279` (downloaded 2026-09-28).
 
 ## Rust and native components
 
-[RUST-PACKAGES.tsv](RUST-PACKAGES.tsv) records all 308 registry packages in the
+[RUST-PACKAGES.tsv](RUST-PACKAGES.tsv) records all 363 registry packages in the
 selected Linux normal/build dependency graph: exact versions, declared licenses,
 graph roles, enabled features, Cargo.lock source checksums, source archive URLs
 and references to the full texts in [RUST-NOTICES.txt](RUST-NOTICES.txt).
@@ -43,9 +43,11 @@ BoringSSL/fiat notices, encoding_rs's WHATWG notice, Unicode and matchit notices
 Build tools and proc macros are included conservatively; an inventory entry is
 not a claim that its standalone binary is installed.
 
-Inventory basis: commit `48d2c0997ea7d6125d4bf421d692e499c0c3ab0d`, unchanged
-Cargo.lock, `x86_64-unknown-linux-gnu`, Qt and server default features (SQLite and
-API docs; no PostgreSQL). Commands executed on 2026-10-17:
+Inventory basis: working checkout based on
+`cf843383f32ec36e689b033e86bc897c8d5990dd`, Cargo.lock SHA-256
+`a599b51f0111f90aed32f061cabd1d3e72dc551efd2d504242e8dea5741d3fea`,
+`x86_64-unknown-linux-gnu`, Qt and server default features (SQLite and
+API docs; no PostgreSQL). Commands executed on 2026-10-20:
 
 ```sh
 cargo metadata --offline --locked --format-version 1 --filter-platform x86_64-unknown-linux-gnu
@@ -53,8 +55,31 @@ cargo tree -p osu-radio-qt -p osu-radio-server --locked --offline --target x86_6
 ```
 
 This is a resolved build graph, not a symbol-level assertion about optimized
-executables. T04/T05 must compare it with the final build flags and lockfile.
+executables. It describes the current checkout, including Signalsmith and MPRIS,
+not the older published `v0.1.0-alpha` archive still pinned in PKGBUILD.
+Before a new release, compare it with the final build flags and lockfile.
 Changing features, versions, target or toolchain requires another comparison.
+
+The 2026-10-20 comparison added 55 previously absent packages (DSP/bindgen,
+MPRIS/zbus and their transitive normal/build dependencies), and refreshed graph
+roles and enabled features for existing entries. Build roles include transitive
+build dependencies and proc macros. `RUST-NOTICES.txt` retains the complete
+MIT texts from the published `signalsmith-stretch 0.1.3` crate for:
+
+- Rust wrapper: `LICENSE.md`, Copyright 2024 Colin Marc.
+- Embedded Signalsmith Stretch C++: `signalsmith-stretch/LICENSE.txt`,
+  Copyright 2022 Geraint Luff / Signalsmith Audio Ltd.
+- Embedded Signalsmith Linear C++: `signalsmith-linear/LICENSE.txt`,
+  Copyright 2025 Signalsmith Audio.
+
+These embedded sources are covered by that exact crate archive/checksum;
+they are not independently resolved Cargo packages. libclang/bindgen run only
+during the build; the compiled DSP is bundled, not a new runtime shared library.
+The dasp crates omit license files from their published archives: their full MIT
+and Apache copyright notices were retrieved at each `.cargo_vcs_info.json` SHA.
+The complete Apache-2.0 terms are also retained. mpris-server's unmodified
+MPL-2.0 source is available from its exact inventory source URL, with the same
+source/modification/redistribution rights described below for Symphonia.
 
 The full upstream texts absent from published crate archives were obtained from
 the commits in their `.cargo_vcs_info.json`; each text's source is recorded.

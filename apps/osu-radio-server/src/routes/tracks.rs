@@ -12,6 +12,8 @@ pub(crate) struct TrackResponse {
     pub audio_source_id: i32,
     pub last_played_at_ms: Option<i64>,
     pub volume_percent: Option<u8>,
+    #[cfg_attr(feature = "docs", schema(required = true))]
+    pub mods: Option<super::audio_mods::AudioModsProfile>,
     pub title: Option<String>,
     pub title_unicode: Option<String>,
     pub artist: Option<String>,
@@ -35,6 +37,7 @@ impl From<radio_services::LibraryTrack> for TrackResponse {
             audio_source_id: track.audio_source_id,
             last_played_at_ms: track.last_played_at_ms,
             volume_percent: track.volume_percent,
+            mods: track.mods.map(Into::into),
             title: track.title,
             title_unicode: track.title_unicode,
             artist: track.artist,
@@ -88,6 +91,7 @@ mod tests {
             audio_source_id: 17,
             last_played_at_ms: Some(1_700_000_000_123),
             volume_percent: Some(0),
+            mods: None,
             title: Some("Title".into()),
             title_unicode: Some("題".into()),
             artist: Some("Artist".into()),
@@ -112,7 +116,7 @@ mod tests {
         assert_eq!(
             actual,
             serde_json::json!({
-                "audio_source_id": 17, "last_played_at_ms": 1_700_000_000_123_i64, "volume_percent": 0,
+                "audio_source_id": 17, "last_played_at_ms": 1_700_000_000_123_i64, "volume_percent": 0, "mods": null,
                 "title": "Title", "title_unicode": "題", "artist": "Artist", "artist_unicode": "演奏者", "cover_beatmap_id": 71,
                 "difficulties": [
                     {"beatmap_id": 71, "beatmap_set_id": 31, "difficulty_name": "Hard", "set_has_multiple_audio_sources": true},
@@ -126,6 +130,7 @@ mod tests {
             audio_source_id: 18,
             last_played_at_ms: None,
             volume_percent: None,
+            mods: None,
             title: None,
             title_unicode: None,
             artist: None,
@@ -136,7 +141,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(TrackResponse::from(empty)).unwrap(),
             serde_json::json!({
-                "audio_source_id": 18, "last_played_at_ms": null, "volume_percent": null, "title": null, "title_unicode": null,
+                "audio_source_id": 18, "last_played_at_ms": null, "volume_percent": null, "mods": null, "title": null, "title_unicode": null,
                 "artist": null, "artist_unicode": null, "cover_beatmap_id": null, "difficulties": []
             })
         );

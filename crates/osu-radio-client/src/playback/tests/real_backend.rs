@@ -4,9 +4,10 @@ use super::*;
 use crate::{
     ApiClient, ServerOptions, Session,
     models::{
-        PlaybackAssignment, PlaybackCommand, QueueAvailability, QueueItemRef, QueuePlacement,
-        QueueState,
+        AudioModsMode, AudioModsPatch, AudioModsProfile, PlaybackAssignment, PlaybackCommand,
+        QueueAvailability, QueueItemRef, QueuePlacement, QueueState,
     },
+    view_models::mods::Editor,
 };
 
 async fn settled(api: &ApiClient) -> QueueState {
@@ -28,6 +29,15 @@ async fn settled(api: &ApiClient) -> QueueState {
 }
 
 async fn drive(core: &mut Core<FakeEngine>, api: &ApiClient, assignment: &PlaybackAssignment) {
+    drive_with(core, api, assignment, PlaybackParameters::default()).await;
+}
+
+async fn drive_with(
+    core: &mut Core<FakeEngine>,
+    api: &ApiClient,
+    assignment: &PlaybackAssignment,
+    parameters: PlaybackParameters,
+) {
     let generation = assignment.playback_token;
     let download = core.command(
         Command::Assign {
@@ -38,6 +48,7 @@ async fn drive(core: &mut Core<FakeEngine>, api: &ApiClient, assignment: &Playba
             playback_token: assignment.playback_token,
             mode: assignment.mode,
             volume: f32::from(assignment.volume_percent.unwrap_or(100)) / 100.0,
+            parameters,
         },
         generation,
     );
@@ -74,10 +85,7 @@ fn seek(core: &mut Core<FakeEngine>, assignment: &PlaybackAssignment) {
     );
 }
 
-#[tokio::test]
-#[ignore = "needs a built SQLite osu-radio-server and python3; uses a private directory"]
-#[allow(clippy::too_many_lines)] // One scenario follows real entry identity across every layer and restart.
-async fn real_server_queue_and_fake_engine_preserve_launches_across_edits_and_reimport() {
+fn prepared() -> (tempfile::TempDir, ServerOptions) {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let server = root
         .join("target/debug/osu-radio-server")
@@ -104,6 +112,14 @@ async fn real_server_queue_and_fake_engine_preserve_launches_across_edits_and_re
         working_directory: Some(directory.path().to_owned()),
         ..Default::default()
     };
+    (directory, options)
+}
+
+#[tokio::test]
+#[ignore = "needs a built SQLite osu-radio-server and python3; uses a private directory"]
+#[allow(clippy::too_many_lines)] // One scenario follows real entry identity across every layer and restart.
+async fn real_server_queue_and_fake_engine_preserve_launches_across_edits_and_reimport() {
+    let (directory, options) = prepared();
     let session = Session::start(options.clone()).await.unwrap();
     let api = session.api();
     let original = api.queue().await.unwrap();
@@ -385,4 +401,292 @@ async fn real_server_queue_and_fake_engine_preserve_launches_across_edits_and_re
         !directory.path().join("data").exists(),
         "explicit fixture URL must bypass XDG fallback"
     );
+}
+
+fn profile(mode: AudioModsMode, speed_percent: u16, adjust_pitch: bool) -> AudioModsProfile {
+    AudioModsProfile {
+        mode,
+        speed_percent,
+        adjust_pitch,
+    }
+}
+
+async fn audio_of(api: &ApiClient, title: &str) -> i32 {
+    let tracks = api.search_tracks("").await.unwrap();
+    tracks
+        .iter()
+        .find(|t| t.title.as_deref() == Some(title))
+        .unwrap()
+        .audio_source_id
+}
+
+/// The client's own rule: individual mode never inherits the global set.
+async fn effective(api: &ApiClient, assignment: &PlaybackAssignment) -> PlaybackParameters {
+    let mut editor = Editor::default();
+    editor.settings = api.audio_mods().await.unwrap();
+    editor
+        .effective(assignment.current_audio_source_id, assignment.mods)
+        .into()
+}
+
+#[tokio::test]
+#[ignore = "needs a built SQLite osu-radio-server and python3; uses a private directory"]
+#[allow(clippy::too_many_lines)] // One scenario follows each profile across storage, server, worker and restart.
+async fn real_server_mods_follow_each_launch_across_restart_reimport_and_live_edits() {
+    let nc_120 = profile(AudioModsMode::Dt, 120, true);
+    let dt_150 = profile(AudioModsMode::Dt, 150, false);
+    let ht_75 = profile(AudioModsMode::Ht, 75, false);
+    let ht_60 = profile(AudioModsMode::Ht, 60, false);
+    let pair = |speed, adjust_pitch| PlaybackParameters {
+        speed,
+        adjust_pitch,
+    };
+    let (directory, options) = prepared();
+    let marker = directory.path().join("source/client.realm");
+    let session = Session::start(options.clone()).await.unwrap();
+    let api = session.api();
+
+    // Fixture: individual mode, global DT 1.30x, A = NC 1.20x, B and C without a profile.
+    let (a, b, c) = (
+        audio_of(api, "A").await,
+        audio_of(api, "B").await,
+        audio_of(api, "C").await,
+    );
+    let settings = api.audio_mods().await.unwrap();
+    assert!(settings.individual_mods_enabled);
+    assert_eq!(
+        settings.global_profile,
+        profile(AudioModsMode::Dt, 130, false)
+    );
+    let mods_of = |tracks: &[crate::models::LibraryTrack], id| {
+        tracks
+            .iter()
+            .find(|t| t.audio_source_id == id)
+            .unwrap()
+            .mods
+    };
+    let tracks = api.search_tracks("").await.unwrap();
+    assert_eq!(
+        (
+            mods_of(&tracks, a),
+            mods_of(&tracks, b),
+            mods_of(&tracks, c)
+        ),
+        (Some(nc_120), None, None)
+    );
+
+    // Toggling the mode erases neither set.
+    let global_only = api
+        .update_audio_mods(&AudioModsPatch {
+            individual_mods_enabled: Some(false),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(global_only.global_profile, settings.global_profile);
+    assert_eq!(
+        mods_of(&api.search_tracks("").await.unwrap(), a),
+        Some(nc_120)
+    );
+    api.update_audio_mods(&AudioModsPatch {
+        individual_mods_enabled: Some(true),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    api.set_audio_mods(b, Some(ht_75)).await.unwrap();
+    assert_eq!(
+        mods_of(&api.search_tracks("").await.unwrap(), b),
+        Some(ht_75)
+    );
+
+    // A (shared by two difficulties) starts from the queue with its own pair before the first sample.
+    let ids = api
+        .queue()
+        .await
+        .unwrap()
+        .entries
+        .iter()
+        .map(|e| e.id)
+        .collect::<Vec<_>>();
+    let mut core = Core::<FakeEngine>::default();
+    let playing = api.play_queue_entry(ids[1]).await.unwrap();
+    assert_eq!(playing.mods, Some(nc_120));
+    assert_eq!(effective(api, &playing).await, pair(1.2, true));
+    drive_with(&mut core, api, &playing, effective(api, &playing).await).await;
+    let started = confirm(&mut core, api).await;
+    seek(&mut core, &playing);
+    let engine = core.player.as_ref().unwrap();
+    assert_eq!(engine.play_parameters, [pair(1.2, true)]);
+    assert_eq!(engine.snapshot.parameters, pair(1.2, true));
+
+    // Editing B while A sounds changes neither the launch nor the queue token/revision.
+    let queue_before = api.queue().await.unwrap();
+    api.set_audio_mods(b, Some(ht_60)).await.unwrap();
+    let queue_after = api.queue().await.unwrap();
+    assert_eq!(
+        (queue_after.revision, queue_after.playback_token),
+        (queue_before.revision, queue_before.playback_token)
+    );
+    let unchanged = api.playback().await.unwrap();
+    assert_eq!(unchanged, started);
+    drive_with(&mut core, api, &unchanged, effective(api, &unchanged).await).await;
+    let engine = core.player.as_ref().unwrap();
+    assert_eq!((engine.loads, engine.play_parameters.len()), (1, 1));
+    assert_eq!(engine.snapshot.position, Duration::from_secs(17));
+    assert!(core.feedback.is_empty());
+
+    // Live edits of A keep the token, source, position and pause state.
+    api.set_audio_mods(a, Some(dt_150)).await.unwrap();
+    let live = api.playback().await.unwrap();
+    assert_eq!(live.playback_token, playing.playback_token);
+    assert_eq!(live.mods, Some(dt_150));
+    drive_with(&mut core, api, &live, effective(api, &live).await).await;
+    let engine = core.player.as_ref().unwrap();
+    assert_eq!(engine.snapshot.parameters, pair(1.5, false));
+    assert_eq!(engine.snapshot.position, Duration::from_secs(17));
+    assert_eq!((engine.loads, engine.play_parameters.len()), (1, 1));
+    api.playback_command(&PlaybackCommand::Pause).await.unwrap();
+    api.set_audio_mods(a, Some(profile(AudioModsMode::Dt, 150, true)))
+        .await
+        .unwrap();
+    let paused = api.playback().await.unwrap();
+    assert_eq!(paused.mode, PlaybackMode::Paused);
+    drive_with(&mut core, api, &paused, effective(api, &paused).await).await;
+    let engine = core.player.as_ref().unwrap();
+    assert_eq!(engine.snapshot.state, PlayerState::Paused);
+    assert_eq!(engine.snapshot.parameters, pair(1.5, true));
+    assert_eq!(engine.snapshot.position, Duration::from_secs(17));
+    let resumed = api
+        .playback_command(&PlaybackCommand::Play {
+            audio_source_id: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(resumed.playback_token, playing.playback_token);
+    drive_with(&mut core, api, &resumed, effective(api, &resumed).await).await;
+    core.command(
+        Command::Seek {
+            expected_id: resumed.current_audio_source_id,
+            playback_token: resumed.playback_token,
+            position: Duration::from_secs(23),
+        },
+        resumed.playback_token,
+    );
+    let engine = core.player.as_ref().unwrap();
+    assert_eq!(engine.snapshot.state, PlayerState::Playing);
+    assert_eq!(engine.snapshot.parameters, pair(1.5, true));
+    assert_eq!(engine.snapshot.position, Duration::from_secs(23));
+    assert_eq!(engine.loads, 1);
+    assert!(core.feedback.is_empty());
+
+    // Restart: settings and both profile sets come back from the database.
+    session.shutdown().await.unwrap();
+    let session = Session::start(options).await.unwrap();
+    let api = session.api();
+    let restored = api.audio_mods().await.unwrap();
+    assert!(restored.individual_mods_enabled);
+    assert_eq!(restored.global_profile, settings.global_profile);
+    let tracks = api.search_tracks("").await.unwrap();
+    assert_eq!(
+        (
+            mods_of(&tracks, a),
+            mods_of(&tracks, b),
+            mods_of(&tracks, c)
+        ),
+        (
+            Some(profile(AudioModsMode::Dt, 150, true)),
+            Some(ht_60),
+            None
+        )
+    );
+
+    // Removing and importing the same source identity restores the profiles.
+    let folder = api.osu_folders().await.unwrap()[0].id;
+    api.remove_osu_folder(folder).await.unwrap();
+    assert!(api.search_tracks("").await.unwrap().is_empty());
+    api.import_osu_folder(marker.to_str().unwrap())
+        .await
+        .unwrap();
+    let queue = settled(api).await;
+    let (a, b, c) = (
+        audio_of(api, "A").await,
+        audio_of(api, "B").await,
+        audio_of(api, "C").await,
+    );
+    let tracks = api.search_tracks("").await.unwrap();
+    assert_eq!(
+        (
+            mods_of(&tracks, a),
+            mods_of(&tracks, b),
+            mods_of(&tracks, c)
+        ),
+        (
+            Some(profile(AudioModsMode::Dt, 150, true)),
+            Some(ht_60),
+            None
+        )
+    );
+    assert_eq!(
+        queue
+            .entries
+            .iter()
+            .filter(|e| e.audio_source_id == Some(a))
+            .map(|e| e.mods)
+            .collect::<Vec<_>>(),
+        [Some(profile(AudioModsMode::Dt, 150, true)); 2],
+        "both difficulties of the shared audio use one profile"
+    );
+
+    // Explicit Play of B starts with B's pair; C and A then start with their own, not the previous one.
+    let mut core = Core::<FakeEngine>::default();
+    let selected = api
+        .playback_command(&PlaybackCommand::Play {
+            audio_source_id: Some(b),
+        })
+        .await
+        .unwrap();
+    assert_eq!(selected.mods, Some(ht_60));
+    drive(&mut core, api, &selected).await;
+    settled(api).await;
+    let released = api.playback().await.unwrap();
+    drive_with(&mut core, api, &released, effective(api, &released).await).await;
+    confirm(&mut core, api).await;
+    assert_eq!(
+        core.player.as_ref().unwrap().play_parameters,
+        [pair(0.6, false)]
+    );
+    api.insert_queue(
+        &[
+            QueueItemRef::Audio { audio_source_id: c },
+            QueueItemRef::Audio { audio_source_id: a },
+        ],
+        QueuePlacement::Next,
+    )
+    .await
+    .unwrap();
+    settled(api).await;
+    let token = api.playback().await.unwrap().playback_token;
+    for (audio, expected_mods, expected) in [
+        (c, None, pair(1.0, false)),
+        (
+            a,
+            Some(profile(AudioModsMode::Dt, 150, true)),
+            pair(1.5, true),
+        ),
+    ] {
+        let next = api
+            .playback_command(&PlaybackCommand::Finished {
+                playback_token: api.playback().await.unwrap().playback_token,
+            })
+            .await
+            .unwrap();
+        assert_eq!(next.current_audio_source_id, Some(audio));
+        assert_ne!(next.playback_token, token);
+        assert_eq!(next.mods, expected_mods);
+        drive_with(&mut core, api, &next, effective(api, &next).await).await;
+        confirm(&mut core, api).await;
+        assert_eq!(core.player.as_ref().unwrap().play_parameters, [expected]);
+    }
+    session.shutdown().await.unwrap();
 }
