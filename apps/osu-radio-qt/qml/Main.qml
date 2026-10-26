@@ -112,6 +112,24 @@ Basic.ApplicationWindow {
         enabled: !root.hotkeysBlocked
         onActivated: { const field = root.activeSearch(); if (field) field.forceActiveFocus(Qt.ShortcutFocusReason); }
     }
+    // The tray service reports availability; LiveWindowMedia's Close filter hides instead of closing while closeToTray holds.
+    property bool trayAvailable: false
+    property bool quitting: false
+    readonly property bool closeToTray: bridge.settings.closeToTray && trayAvailable && !quitting
+    property int shownVisibility: Window.Windowed
+    onVisibilityChanged: v => { if (v === Window.Windowed || v === Window.Maximized) shownVisibility = v; }
+    function trayOnline(): void { trayAvailable = true; }
+    function trayOffline(): void { trayAvailable = false; }
+    function showFromTray(): void {
+        if (shownVisibility === Window.Maximized) showMaximized(); else showNormal();
+        raise();
+        requestActivate();
+    }
+    function toggleFromTray(): void {
+        if (visible && visibility !== Window.Minimized) hide(); else showFromTray();
+    }
+    // close() does nothing on a hidden window; quitting also lets a visible window's Close take the detach path.
+    function quitFromTray(): void { quitting = true; Qt.quit(); }
     AppBridge {
         id: bridge
         objectName: "appBridge"

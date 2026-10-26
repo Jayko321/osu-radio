@@ -54,6 +54,8 @@ pub enum AppCommand {
         completed: oneshot::Sender<Result<(), osu_radio_media_controls::Error>>,
     },
     PublishSystemMedia,
+    /// A transport action from a local desktop surface; it follows the same rules as a media key.
+    SystemMedia(osu_radio_media_controls::Event),
     DisconnectSystemMedia {
         completed: oneshot::Sender<()>,
     },
@@ -465,6 +467,7 @@ impl Controller {
             AppCommand::Queue(action) => self.queue_action(action),
             AppCommand::SetVisibleQueueMedia(visible) => self.set_visible_queue_media(visible),
             AppCommand::TogglePlayback => self.toggle_playback(),
+            AppCommand::SystemMedia(event) => self.system_media_event(event),
             AppCommand::SetQueueVisible(visible) => self.set_queue_visible(visible),
             AppCommand::Playlist(action) => self.playlist_action(action),
             AppCommand::OpenFolderSelection => self.open_selection(),

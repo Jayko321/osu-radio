@@ -11,6 +11,7 @@
 //! Qt bridge and runtime glue. Shared application behavior lives in osu-radio-client.
 pub mod bridge;
 pub mod runtime;
+mod tray;
 
 // CXX-Qt inherited-method declarations cannot carry must_use attributes.
 #[allow(clippy::must_use_candidate)]

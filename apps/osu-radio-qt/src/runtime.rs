@@ -14,6 +14,7 @@ pub mod ffi {
         fn attach_window_media(hwnd: isize);
         fn begin_window_media_detach();
         fn window_media_detached() -> bool;
+        fn stop_tray();
     }
     unsafe extern "C++" {
         include!("src/runtime.h");
@@ -59,13 +60,26 @@ pub mod ffi {
         type QString = cxx_qt_lib::QString;
         #[rust_name = "load_local_preferences"]
         #[must_use]
-        fn loadLocalPreferences(titles: &mut bool, artists: &mut bool, discord: &mut bool) -> bool;
+        fn loadLocalPreferences(
+            titles: &mut bool,
+            artists: &mut bool,
+            discord: &mut bool,
+            close_to_tray: &mut bool,
+        ) -> bool;
         #[rust_name = "save_track_name_preference"]
         #[must_use]
         fn saveTrackNamePreference(title: bool, enabled: bool) -> QString;
         #[rust_name = "save_discord_rich_presence"]
         #[must_use]
         fn saveDiscordRichPresence(enabled: bool) -> QString;
+        #[rust_name = "tray_call"]
+        fn trayCall(method: &QString);
+        #[rust_name = "tray_icon_rgba"]
+        #[must_use]
+        fn trayIconRgba(size: i32) -> QByteArray;
+        #[rust_name = "save_close_to_tray"]
+        #[must_use]
+        fn saveCloseToTray(enabled: bool) -> QString;
         include!("cxx-qt-lib/qbytearray.h");
         type QByteArray = cxx_qt_lib::QByteArray;
         include!("cxx-qt-lib/qvector.h");
@@ -141,6 +155,7 @@ fn attach_window_media(hwnd: isize) {
     let Some(runtime) = RuntimeContext::current() else {
         return;
     };
+    crate::tray::start(&runtime);
     #[cfg(target_os = "windows")]
     let context = {
         let Some(hwnd) = std::num::NonZeroIsize::new(hwnd) else {
@@ -173,6 +188,10 @@ fn attach_window_media(hwnd: isize) {
     }
     #[cfg(not(any(target_os = "windows", target_os = "linux")))]
     let _ = (runtime, hwnd);
+}
+
+fn stop_tray() {
+    crate::tray::stop();
 }
 
 fn begin_window_media_detach() {
@@ -222,7 +241,7 @@ fn window_media_detached() -> bool {
 }
 
 impl RuntimeContext {
-    fn controllers(&self) -> Vec<AppController> {
+    pub(crate) fn controllers(&self) -> Vec<AppController> {
         self.controllers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)

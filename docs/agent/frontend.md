@@ -1102,6 +1102,41 @@ and does not reconnect automatically. GUI, HTTP and local audio continue.
 distinguish Windows HWND publication from a real panel, media keys and physical
 audio. `playerctl shuffle/loop` and the SMTC widget are manual checks. Linux runtime execution remains unverified in the current Windows checkout.
 
+## System tray
+
+Implementation: live Qt registers a tray icon through [`tray.rs`](../../apps/osu-radio-qt/src/tray.rs)
+when the window attaches; probes (`OSU_RADIO_QT_SMOKE_TEST`) and the offline gallery do not.
+Linux uses a `StatusNotifierItem` via `ksni` on the existing runtime
+([`linux.rs`](../../apps/osu-radio-qt/src/tray/linux.rs)); Windows uses `tray-icon` created on
+the Qt thread, whose messages Qt's loop pumps, and removed in `~LiveWindowMedia` through
+`stop_tray` ([`windows.rs`](../../apps/osu-radio-qt/src/tray/windows.rs)). Menu: Open,
+Play / Pause, Previous, Next, Quit; left click toggles the window (Windows: right click opens
+the menu). Transport items send `AppCommand::SystemMedia`, so they follow the same
+current-track and availability rules as media keys. Window actions reach the Qt thread through
+`trayCall` in [runtime.h](../../apps/osu-radio-qt/src/runtime.h) and call QML functions
+in [Main.qml](../../apps/osu-radio-qt/qml/Main.qml); the icon is `logos/lazer.png`
+scaled in Qt.
+
+Close hides the window instead of closing only while `closeToTray` holds: the
+Settings > Window switch is on (default on, QSettings `window/close_to_tray`, read with
+the other local preferences) **and** a tray is registered. Without a
+StatusNotifierWatcher, or while it is offline, Close closes the app as before; other
+platforms (macOS) never report a tray. Quit sets `quitting` and uses `Qt.quit()`; a hidden
+window cannot be closed, so the detach poll calls `QCoreApplication::quit()` for it.
+
+Not implemented: macOS, a playing/paused label or per-item enablement in the menu, and
+restoring focus on compositors that refuse activation.
+
+Verification. Linux, 2026-10-26, KDE Plasma Wayland, D-Bus driving the real binary:
+registration, click toggle, compositor Close hides, Open, Quit from a visible and a hidden
+window, and the switch off. Windows: only `windows.rs` is checked, compiled and linted
+(`cargo clippy -D warnings`) for `x86_64-pc-windows-msvc` in a scratch crate that stubs
+`tray.rs`; the full crate cannot be checked from Linux (it needs MSVC tools and Qt for
+Windows), so the common `tray.rs`, the runtime wiring and `stop_tray` on Windows, and
+everything at runtime (icon, right-click menu, left-click toggle, Quit, icon removal on
+exit, Explorer restart) are unverified. Transport items were clicked on Linux but not
+exercised with real playback; a visual check of the icon is manual.
+
 ## Queue-rework integration verification
 
 The [T10 report](../impl/queue-rework/T10.md#отчёт-о-выполнении) records exact

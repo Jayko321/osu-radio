@@ -3380,6 +3380,9 @@ QtObject {
             bridge.settings.setDiscordRichPresence(true);
             bridge.connectSession();
             check(bridge.settings.discordRichPresence, "RPC rapid toggles and reconnect retain latest choice");
+            check(bridge.settings.closeToTray === (testCase !== "discord-read") && !window.closeToTray, "close-to-tray defaults on, restores the saved choice and needs a tray host");
+            bridge.settings.setCloseToTray(false);
+            check(!bridge.settings.closeToTray, "close-to-tray toggle changes live preference");
             finish();
         }
     }

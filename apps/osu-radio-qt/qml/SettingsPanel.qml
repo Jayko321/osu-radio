@@ -15,11 +15,12 @@ Item {
     readonly property bool individualVolumeMatches: matches(audioSettingsHeader.text, individualVolumeSwitch.text)
     readonly property bool globalVolumeMatches: settingsPane.bridge.settings.individualVolumeEnabled && matches(audioSettingsHeader.text, globalVolumeLabel.settingName)
     readonly property bool individualModsMatches: matches(audioSettingsHeader.text, individualModsSwitch.text)
+    readonly property bool trayMatches: matches("Window", "Close button hides to tray")
     readonly property bool discordMatches: matches("Integrations", "Discord Rich Presence")
     readonly property bool versionMatches: matches(aboutSettingsHeader.text, aboutVersion.settingName)
     readonly property bool licenseMatches: matches(aboutSettingsHeader.text, aboutLicense.settingName)
     readonly property bool projectMatches: matches(aboutSettingsHeader.text, aboutProjectLabel.text)
-    readonly property bool hasMatches: foldersMatch || individualVolumeMatches || globalVolumeMatches || individualModsMatches || discordMatches || versionMatches || licenseMatches || projectMatches
+    readonly property bool hasMatches: foldersMatch || individualVolumeMatches || globalVolumeMatches || individualModsMatches || trayMatches || discordMatches || versionMatches || licenseMatches || projectMatches
     function matches(section: string, setting: string): bool {
         return query.length === 0 || section.toLowerCase().includes(query) || setting.toLowerCase().includes(query);
     }
@@ -360,6 +361,46 @@ Item {
                         visible: settingsPane.bridge.settings.audioSettingsCanRetry
                         enabled: settingsPane.bridge.connected
                         onClicked: settingsPane.bridge.settings.retryAudioSettings()
+                    }
+                }
+            }
+            Column {
+                objectName: "traySettingsSection"
+                visible: settingsPane.trayMatches
+                width: parent.width
+                spacing: 12
+                SectionHeader {
+                    text: "Window"
+                    iconName: "layers"
+                }
+                SectionCard {
+                    width: parent.width
+                    AppSwitch {
+                        objectName: "closeToTraySwitch"
+                        width: parent.width
+                        text: "Close button hides to tray"
+                        font.family: settingsPane.fontFamily
+                        font.pixelSize: 16
+                        checked: settingsPane.bridge.settings.closeToTray
+                        onToggled: settingsPane.bridge.settings.setCloseToTray(checked)
+                    }
+                    Text {
+                        width: parent.width
+                        text: "Keep playing in the system tray when the window is closed. Quit from the tray menu."
+                        color: Theme.muted
+                        font.family: settingsPane.fontFamily
+                        font.pixelSize: 14
+                        wrapMode: Text.Wrap
+                    }
+                    Text {
+                        objectName: "trayPreferenceStatus"
+                        width: parent.width
+                        text: settingsPane.bridge.settings.trayPreferenceMessage
+                        visible: text.length > 0
+                        color: Theme.text
+                        font.family: settingsPane.fontFamily
+                        font.pixelSize: 14
+                        wrapMode: Text.Wrap
                     }
                 }
             }

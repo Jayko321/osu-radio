@@ -5,6 +5,7 @@
 #include <QtCore/QEventLoop>
 #include <QtCore/QPointer>
 #include <QtGui/QCloseEvent>
+#include <QtGui/QImage>
 #include <QtGui/QGuiApplication>
 #include <QtGui/QScreen>
 #include <QtGui/QStyleHints>
@@ -24,6 +25,7 @@
 void attach_window_media(std::intptr_t hwnd) noexcept;
 void begin_window_media_detach() noexcept;
 bool window_media_detached() noexcept;
+void stop_tray() noexcept;
 
 class LiveWindowMedia final : public QObject {
     QPointer<QQuickWindow> window;
@@ -76,6 +78,12 @@ protected:
     bool eventFilter(QObject *object, QEvent *event) override {
         if (object != window || event->type() != QEvent::Close || window_media_detached())
             return false;
+        // QML sets this only while the tray icon exists and the user wants close to hide.
+        if (window->property("closeToTray").toBool()) {
+            event->ignore();
+            window->hide();
+            return true;
+        }
         event->ignore();
         closing = true;
         begin_window_media_detach();
@@ -108,7 +116,9 @@ public:
             if (closing && window_media_detached()) {
                 poll.stop();
                 acknowledged();
-                if (window) window->close();
+                // close() does nothing on a window hidden to the tray; the second quit passes the filter.
+                if (window && window->isVisible()) window->close();
+                else QCoreApplication::quit();
             }
         });
         if (probe) {
@@ -139,6 +149,7 @@ public:
         }
     }
     ~LiveWindowMedia() override {
+        stop_tray();
         poll.stop();
         for (auto *timer : findChildren<QTimer *>()) timer->stop();
         waitForDetach();
@@ -146,24 +157,40 @@ public:
     }
 };
 
+inline QPointer<QQuickWindow> trayWindow;
+// Tray callbacks arrive on the Rust runtime; the window's own QML functions run on the Qt thread.
+inline void trayCall(const QString &method) {
+    if (auto *window = trayWindow.data())
+        QMetaObject::invokeMethod(window, method.toUtf8().constData(), Qt::QueuedConnection);
+}
+inline QByteArray trayIconRgba(int size) {
+    QImage image(QStringLiteral(":/assets/logos/lazer.png"));
+    if (image.isNull()) return {};
+    image = image.scaled(size, size, Qt::KeepAspectRatio, Qt::SmoothTransformation)
+        .convertToFormat(QImage::Format_RGBA8888);
+    return QByteArray(reinterpret_cast<const char *>(image.constBits()), static_cast<qsizetype>(image.sizeInBytes()));
+}
 inline std::unique_ptr<LiveWindowMedia> connectLiveWindow(QQmlApplicationEngine &engine) {
     auto *window = engine.rootObjects().isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(engine.rootObjects().first());
     if (!window) return {};
+    trayWindow = window;
     return std::make_unique<LiveWindowMedia>(window);
 }
 #if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
 #error "osu-radio-qt requires Qt 6.8 or newer for native QML window interactions"
 #endif
-inline bool loadLocalPreferences(bool &titles, bool &artists, bool &discord) {
+inline bool loadLocalPreferences(bool &titles, bool &artists, bool &discord, bool &closeToTray) {
     QSettings settings(QSettings::NativeFormat, QSettings::UserScope,
         QStringLiteral("osu-radio"), QStringLiteral("osu-radio-qt"));
     settings.setFallbacksEnabled(false);
     titles = settings.value(QStringLiteral("display/use_unicode_titles"), false).toBool();
     artists = settings.value(QStringLiteral("display/use_unicode_artists"), false).toBool();
     discord = settings.value(QStringLiteral("integrations/discord_rich_presence"), false).toBool();
+    closeToTray = settings.value(QStringLiteral("window/close_to_tray"), true).toBool();
     settings.sync();
     if (settings.status() == QSettings::NoError) return true;
     titles = artists = discord = false;
+    closeToTray = true;
     return false;
 }
 inline QString saveTrackNamePreference(bool title, bool enabled) {
@@ -184,6 +211,15 @@ inline QString saveDiscordRichPresence(bool enabled) {
     settings.sync();
     return settings.status() == QSettings::NoError ? QString()
         : QStringLiteral("Could not save Discord preference. Your choice applies for this session.");
+}
+inline QString saveCloseToTray(bool enabled) {
+    QSettings settings(QSettings::NativeFormat, QSettings::UserScope,
+        QStringLiteral("osu-radio"), QStringLiteral("osu-radio-qt"));
+    settings.setFallbacksEnabled(false);
+    settings.setValue(QStringLiteral("window/close_to_tray"), enabled);
+    settings.sync();
+    return settings.status() == QSettings::NoError ? QString()
+        : QStringLiteral("Could not save the tray preference. Your choice applies for this session.");
 }
 inline void configureEngine(QQmlApplicationEngine &engine, bool smoke) {
     // Dialog internals import unqualified Controls; match the app's Basic controls.

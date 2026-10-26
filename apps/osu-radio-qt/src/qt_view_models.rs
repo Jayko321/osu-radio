@@ -260,6 +260,14 @@ pub mod ffi {
             READ,
             NOTIFY
         )]
+        #[qproperty(bool, close_to_tray, cxx_name = "closeToTray", READ, NOTIFY)]
+        #[qproperty(
+            QString,
+            tray_preference_message,
+            cxx_name = "trayPreferenceMessage",
+            READ,
+            NOTIFY
+        )]
         #[qproperty(bool, use_unicode_titles, cxx_name = "useUnicodeTitles", READ, NOTIFY)]
         #[qproperty(
             bool,
@@ -382,6 +390,9 @@ pub mod ffi {
         #[qproperty(bool, mods_saving, cxx_name = "modsSaving", READ, NOTIFY)]
         #[qproperty(QString, mods_message, cxx_name = "modsMessage", READ, NOTIFY)]
         type SettingsViewModel = super::SettingsViewModelRust;
+        #[qinvokable]
+        #[cxx_name = "setCloseToTray"]
+        fn change_close_to_tray(self: Pin<&mut SettingsViewModel>, enabled: bool);
         #[qinvokable]
         #[cxx_name = "setDiscordRichPresence"]
         fn change_discord_rich_presence(self: Pin<&mut SettingsViewModel>, enabled: bool);
@@ -1366,6 +1377,8 @@ pub struct SettingsViewModelRust {
     pub(crate) folder_can_retry: bool,
     pub(crate) discord_rich_presence: bool,
     pub(crate) discord_preference_message: QString,
+    pub(crate) close_to_tray: bool,
+    pub(crate) tray_preference_message: QString,
     pub(crate) use_unicode_titles: bool,
     pub(crate) use_unicode_artists: bool,
     pub(crate) track_name_preferences_message: QString,
@@ -1408,6 +1421,8 @@ impl Default for SettingsViewModelRust {
             folder_can_retry: Default::default(),
             discord_rich_presence: false,
             discord_preference_message: QString::default(),
+            close_to_tray: true,
+            tray_preference_message: QString::default(),
             use_unicode_titles: false,
             use_unicode_artists: false,
             track_name_preferences_message: QString::default(),
@@ -1617,6 +1632,18 @@ impl ffi::SettingsViewModel {
         QString
     );
     property_setter!(
+        set_close_to_tray,
+        close_to_tray,
+        close_to_tray_changed,
+        bool
+    );
+    property_setter!(
+        set_tray_preference_message,
+        tray_preference_message,
+        tray_preference_message_changed,
+        QString
+    );
+    property_setter!(
         set_use_unicode_titles,
         use_unicode_titles,
         use_unicode_titles_changed,
@@ -1755,6 +1782,16 @@ impl ffi::SettingsViewModel {
             self.set_discord_preference_message(message);
         }
     }
+    pub fn change_close_to_tray(mut self: Pin<&mut Self>, enabled: bool) {
+        self.as_mut().load_local_preferences();
+        if self.close_to_tray == enabled {
+            return;
+        }
+        self.as_mut().set_close_to_tray(enabled);
+        if RuntimeContext::current().is_some() {
+            self.set_tray_preference_message(native::save_close_to_tray(enabled));
+        }
+    }
     pub(crate) fn track_name_preferences(&self) -> TrackNamePreferences {
         TrackNamePreferences {
             use_unicode_titles: self.use_unicode_titles,
@@ -1773,8 +1810,15 @@ impl ffi::SettingsViewModel {
         let mut titles = false;
         let mut artists = false;
         let mut discord = false;
+        let mut close_to_tray = true;
         // One QSettings read shares any FormatError across all preferences.
-        let loaded = native::load_local_preferences(&mut titles, &mut artists, &mut discord);
+        let loaded = native::load_local_preferences(
+            &mut titles,
+            &mut artists,
+            &mut discord,
+            &mut close_to_tray,
+        );
+        self.as_mut().set_close_to_tray(close_to_tray);
         self.as_mut().set_use_unicode_titles(titles);
         self.as_mut().set_use_unicode_artists(artists);
         self.as_mut().set_discord_rich_presence(discord);

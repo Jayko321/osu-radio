@@ -1357,6 +1357,7 @@ fn discord_preference_persists_searches_and_toggles_without_discord_or_server() 
     let path = directory.path().join("config/osu-radio/osu-radio-qt.conf");
     let saved = std::fs::read_to_string(&path).expect("Discord settings");
     assert!(saved.contains("discord_rich_presence=true"), "{saved}");
+    assert!(saved.contains("close_to_tray=false"), "{saved}");
     std::fs::write(
         &path,
         format!("{saved}\n[display]\nuse_unicode_titles=true\nuse_unicode_artists=true\n[unrelated]\nkeep=value\n"),
