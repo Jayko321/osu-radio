@@ -5,6 +5,7 @@ use sea_orm::{
     QueryOrder, Set,
     sea_query::{Alias, Expr, ExprTrait, Order, Query},
 };
+use std::collections::{BTreeMap, HashSet};
 
 use crate::{
     entities::{audio_source, beatmap, beatmap_metadata, beatmap_set},
@@ -16,6 +17,52 @@ pub struct BeatmapSetRepository<'a> {
 }
 
 impl BeatmapSetRepository<'_> {
+    /// Literal matches on Rust-normalized text; return IDs rather than library text.
+    pub async fn matching_audio_sources(&self, word: &str) -> Result<Vec<i32>> {
+        #[cfg(feature = "sqlite")]
+        let (parameter, contains) = ("?", "instr");
+        #[cfg(feature = "postgres")]
+        let (parameter, contains) = ("$1", "strpos");
+        let statement = sea_orm::Statement::from_sql_and_values(
+            self.connection.get_database_backend(),
+            format!(
+                "WITH needle(word) AS (VALUES (CAST({parameter} AS TEXT))) \
+                 SELECT DISTINCT audio_source_id AS id FROM beatmaps \
+                 WHERE audio_source_id IS NOT NULL AND (\
+                   id IN (SELECT id FROM beatmaps, needle WHERE {contains}(search_difficulty_name, word) > 0) \
+                   OR metadata_hash IN (SELECT hash FROM beatmap_metadata, needle WHERE \
+                     {contains}(search_title, word) > 0 OR {contains}(search_title_unicode, word) > 0 \
+                     OR {contains}(search_artist, word) > 0 OR {contains}(search_artist_unicode, word) > 0) \
+                   OR beatmap_set_id IN (SELECT beatmap_set_id FROM beatmap_set_tags WHERE tag_id IN \
+                     (SELECT id FROM tags, needle WHERE {contains}(name, word) > 0))) \
+                 ORDER BY audio_source_id"
+            ),
+            [word.into()],
+        );
+        let mut ids = Vec::new();
+        super::query_each::<IdRow>(&self.connection, statement, |row| {
+            ids.push(row.id);
+            Ok(())
+        })
+        .await?;
+        Ok(ids)
+    }
+
+    pub async fn multiple_audio_set_ids(&self) -> Result<HashSet<i32>> {
+        let statement = sea_orm::Statement::from_string(
+            self.connection.get_database_backend(),
+            "SELECT beatmap_set_id AS id FROM beatmaps GROUP BY beatmap_set_id \
+             HAVING COUNT(DISTINCT audio_source_id) > 1",
+        );
+        let mut ids = HashSet::new();
+        super::query_each::<IdRow>(&self.connection, statement, |row| {
+            ids.insert(row.id);
+            Ok(())
+        })
+        .await?;
+        Ok(ids)
+    }
+
     pub async fn insert(
         &self,
         installation_id: i32,
@@ -64,17 +111,18 @@ impl BeatmapSetRepository<'_> {
             "SELECT beatmap_set_id AS set_id, audio_source_id, metadata_hash, difficulty_name \
              FROM beatmaps WHERE audio_source_id IS NOT NULL",
         );
-        Ok(SearchDifficultyRow::find_by_statement(statement)
-            .all(&self.connection)
-            .await?
-            .into_iter()
-            .map(|row| crate::model::SearchDifficulty {
-                set_id: row.set_id,
-                audio_source_id: row.audio_source_id,
-                metadata_hash: row.metadata_hash,
-                difficulty_name: row.difficulty_name,
-            })
-            .collect())
+        Ok(
+            super::query_all::<SearchDifficultyRow>(&self.connection, statement)
+                .await?
+                .into_iter()
+                .map(|row| crate::model::SearchDifficulty {
+                    set_id: row.set_id,
+                    audio_source_id: row.audio_source_id,
+                    metadata_hash: row.metadata_hash,
+                    difficulty_name: row.difficulty_name,
+                })
+                .collect(),
+        )
     }
 
     pub async fn all_with_audio_sources(&self) -> Result<Vec<BeatmapSetWithAudio>> {
@@ -148,8 +196,8 @@ impl BeatmapSetRepository<'_> {
                 Alias::new("difficulty_name"),
             )
             .expr_as(
-                Expr::col((beatmap::Entity, Map::BackgroundPath)),
-                Alias::new("background_path"),
+                Expr::col((beatmap::Entity, Map::BackgroundPath)).is_not_null(),
+                Alias::new("has_cover"),
             )
             .columns([
                 (beatmap_metadata::Entity, Meta::Title),
@@ -177,44 +225,19 @@ impl BeatmapSetRepository<'_> {
             .order_by((audio_source::Entity, Audio::Id), Order::Asc)
             .order_by((beatmap::Entity, Map::Id), Order::Asc)
             .to_owned();
-        let backend = self.connection.get_database_backend();
-        let rows = if let Some(ids) = ids {
-            let mut rows = Vec::new();
-            for chunk in ids.chunks(500) {
-                let mut filtered = query.clone();
-                filtered.and_where(
-                    Expr::col((beatmap::Entity, Map::AudioSourceId)).is_in(chunk.iter().copied()),
-                );
-                rows.extend(
-                    SetWithAudio::find_by_statement(backend.build(&filtered))
-                        .all(&self.connection)
-                        .await?,
-                );
-            }
-            rows.sort_by_key(|row| (row.id, row.audio_id, row.map_id));
-            rows.dedup_by_key(|row| (row.id, row.map_id));
-            rows
-        } else {
-            SetWithAudio::find_by_statement(backend.build(&query))
-                .all(&self.connection)
-                .await?
-        };
-        let mut sets = Vec::<BeatmapSetWithAudio>::new();
-        for row in rows {
-            if sets.last().is_none_or(|set| set.beatmap_set.id != row.id) {
-                sets.push(BeatmapSetWithAudio {
-                    beatmap_set: BeatmapSet {
-                        id: row.id,
-                        online_id: row.online_id,
-                        hash: row.hash,
-                        installation_id: row.installation_id,
-                    },
-                    has_multiple_audio_sources: false,
-                    audio_sources: Vec::new(),
-                    beatmaps: Vec::new(),
-                });
-            }
-            let set = sets.last_mut().context("aggregate group missing")?;
+        let mut sets = BTreeMap::new();
+        let mut consume = |row: SetWithAudio| -> Result<()> {
+            let set = sets.entry(row.id).or_insert_with(|| BeatmapSetWithAudio {
+                beatmap_set: BeatmapSet {
+                    id: row.id,
+                    online_id: row.online_id,
+                    hash: row.hash,
+                    installation_id: row.installation_id,
+                },
+                has_multiple_audio_sources: false,
+                audio_sources: Vec::new(),
+                beatmaps: Vec::new(),
+            });
             if let Some(id) = row.audio_id
                 && set.audio_sources.last().is_none_or(|audio| audio.id != id)
             {
@@ -236,10 +259,28 @@ impl BeatmapSetRepository<'_> {
                     title_unicode: row.title_unicode,
                     artist: row.artist,
                     artist_unicode: row.artist_unicode,
-                    has_cover: row.background_path.is_some(),
+                    has_cover: row.has_cover,
                 });
             }
+            Ok(())
+        };
+        let backend = self.connection.get_database_backend();
+        if let Some(ids) = ids {
+            let mut ids = ids.to_vec();
+            ids.sort_unstable();
+            ids.dedup();
+            // Disjoint ascending audio chunks preserve each set's audio/map order.
+            for chunk in ids.chunks(500) {
+                let mut filtered = query.clone();
+                filtered.and_where(
+                    Expr::col((beatmap::Entity, Map::AudioSourceId)).is_in(chunk.iter().copied()),
+                );
+                super::query_each(&self.connection, backend.build(&filtered), &mut consume).await?;
+            }
+        } else {
+            super::query_each(&self.connection, backend.build(&query), &mut consume).await?;
         }
+        let mut sets: Vec<_> = sets.into_values().collect();
         for set in &mut sets {
             set.has_multiple_audio_sources = set.audio_sources.len() > 1;
         }
@@ -258,7 +299,7 @@ struct SetWithAudio {
     audio_location: Option<String>,
     map_id: Option<i32>,
     difficulty_name: Option<String>,
-    background_path: Option<String>,
+    has_cover: bool,
     title: Option<String>,
     title_unicode: Option<String>,
     artist: Option<String>,
@@ -280,4 +321,9 @@ struct SearchDifficultyRow {
     audio_source_id: i32,
     metadata_hash: Option<String>,
     difficulty_name: Option<String>,
+}
+
+#[derive(FromQueryResult)]
+struct IdRow {
+    id: i32,
 }

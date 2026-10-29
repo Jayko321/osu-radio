@@ -3,7 +3,9 @@ pub use crate::model::BeatmapSetWithAudio;
 use anyhow::{Context, Result};
 use radio_core::import_types::ImportedBeatmapSet;
 use radio_db::{Database, Transaction, repositories::BeatmapSetRepository};
-use std::collections::{HashMap, HashSet};
+#[cfg(test)]
+use std::collections::HashMap;
+use std::collections::HashSet;
 
 pub(crate) mod tracks;
 pub use tracks::{LibraryTrack, TrackDifficulty};
@@ -42,13 +44,25 @@ impl BeatmapSetService<'_> {
         if words.is_empty() {
             return transaction.beatmap_sets().all_with_audio_sources().await;
         }
-        let metadata = transaction.beatmap_metadata().search_metadata().await?;
-        let difficulties = transaction.beatmap_sets().search_difficulties().await?;
-        let mut tags = Vec::with_capacity(words.len());
+        let mut ids: Option<HashSet<i32>> = None;
         for word in &words {
-            tags.push(transaction.tags().matching_set_ids(word).await?);
+            let matching: HashSet<_> = transaction
+                .beatmap_sets()
+                .matching_audio_sources(word)
+                .await?
+                .into_iter()
+                .collect();
+            if let Some(ids) = &mut ids {
+                ids.retain(|id| matching.contains(id));
+            } else {
+                ids = Some(matching);
+            }
+            if ids.as_ref().is_some_and(HashSet::is_empty) {
+                return Ok(Vec::new());
+            }
         }
-        let (ids, multiple_audio_sets) = matching_audio(metadata, difficulties, &tags, &words);
+        let ids: Vec<_> = ids.unwrap_or_default().into_iter().collect();
+        let multiple_audio_sets = transaction.beatmap_sets().multiple_audio_set_ids().await?;
         let sets = transaction
             .beatmap_sets()
             .for_audio_sources(&ids, &multiple_audio_sets)
@@ -82,6 +96,7 @@ impl BeatmapSetService<'_> {
 }
 
 /// Match shared metadata once, then union word matches across every reference of global audio.
+#[cfg(test)]
 fn matching_audio(
     metadata: Vec<crate::model::SearchMetadata>,
     difficulties: Vec<crate::model::SearchDifficulty>,
@@ -153,6 +168,7 @@ fn matching_audio(
     (ids, multiple_audio_sets)
 }
 
+#[cfg(test)]
 fn match_text(matches: &mut [bool], words: &[String], text: &str) {
     for (matched, word) in matches.iter_mut().zip(words) {
         *matched |= text.contains(word);

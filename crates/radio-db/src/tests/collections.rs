@@ -29,7 +29,7 @@ pub(super) async fn migration_contracts(database: &Database) {
     crate::migrations::Migrator::up(&database.connection, Some(1))
         .await
         .unwrap();
-    assert_eq!(database.beatmaps().get(map.id).await.unwrap(), Some(map));
+    assert_eq!(read_v11_beatmap(database, map.id).await, Some(map));
     let row = database
         .connection
         .query_one_raw(sea_orm::Statement::from_string(

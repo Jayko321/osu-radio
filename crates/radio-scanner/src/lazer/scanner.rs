@@ -1,6 +1,6 @@
 use std::{
     env,
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
     process::Stdio,
 };
@@ -16,6 +16,13 @@ use crate::lazer::types::{LazerRecord, parse_lazer_line};
 
 const HELPER_PATH_ENV: &str = "OSU_LAZER_REALM_PARSER_PATH";
 const BUILT_HELPER_PATH: &str = env!("OSU_LAZER_REALM_PARSER_BUILT_PATH");
+// Package layout, relative to the directory of the running backend/CLI executable.
+#[cfg(windows)]
+pub(crate) const INSTALLED_HELPER_PATH: &str = "helper/osu-lazer-realm-parser.exe";
+#[cfg(not(windows))]
+pub(crate) const INSTALLED_HELPER_PATH: &str = "../lib/osu-radio/osu-lazer-realm-parser";
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub async fn import_from_lazer_realm(realm_path: &Path) -> Result<Vec<ImportedBeatmapSet>> {
     Ok(import_snapshot_from_lazer_realm(realm_path)
@@ -24,10 +31,36 @@ pub async fn import_from_lazer_realm(realm_path: &Path) -> Result<Vec<ImportedBe
 }
 
 pub async fn import_snapshot_from_lazer_realm(realm_path: &Path) -> Result<ImportedSnapshot> {
-    let helper_path = env::var_os(HELPER_PATH_ENV)
-        .map_or_else(|| PathBuf::from(BUILT_HELPER_PATH), PathBuf::from);
+    let helper_path = select_helper(
+        env::var_os(HELPER_PATH_ENV),
+        env::current_exe().ok().as_deref(),
+        BUILT_HELPER_PATH,
+    )?;
 
     import_snapshot_from_lazer_realm_with_helper(realm_path, helper_path).await
+}
+
+/// Runtime override, then the installed helper next to `current_exe`, then the build-time path.
+/// An explicit override is never replaced by another helper.
+pub(crate) fn select_helper(
+    runtime_override: Option<OsString>,
+    current_exe: Option<&Path>,
+    built: &str,
+) -> Result<PathBuf> {
+    if let Some(helper) = runtime_override {
+        if helper.is_empty() {
+            bail!("{HELPER_PATH_ENV} is set but empty");
+        }
+        return Ok(PathBuf::from(helper));
+    }
+
+    let installed = current_exe
+        .and_then(Path::parent)
+        .map(|directory| directory.join(INSTALLED_HELPER_PATH));
+    Ok(match installed {
+        Some(installed) if installed.is_file() => installed,
+        _ => PathBuf::from(built),
+    })
 }
 
 pub async fn import_from_lazer_realm_with_helper(
@@ -46,19 +79,21 @@ pub async fn import_snapshot_from_lazer_realm_with_helper(
     helper_path: impl AsRef<OsStr>,
 ) -> Result<ImportedSnapshot> {
     let helper_path = helper_path.as_ref();
-    let mut child = Command::new(helper_path)
+    let mut command = Command::new(helper_path);
+    command
         .arg(realm_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .with_context(|| {
-            format!(
-                "failed to start osu!lazer Realm helper `{}` for `{}`",
-                Path::new(helper_path).display(),
-                realm_path.display()
-            )
-        })?;
+        .kill_on_drop(true);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    let mut child = command.spawn().with_context(|| {
+        format!(
+            "failed to start osu!lazer Realm helper `{}` for `{}`",
+            Path::new(helper_path).display(),
+            realm_path.display()
+        )
+    })?;
 
     let stdout = child
         .stdout

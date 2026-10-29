@@ -49,7 +49,7 @@ async fn fixture(database: &Database, index: Option<i64>, mode: &str) {
 #[allow(clippy::too_many_lines)] // One frozen v11 fixture exercises the full reversible migration and repository lifecycle.
 async fn populated_upgrade(database: &Database, url: &str, index: Option<i64>, mode: &str) {
     fixture(database, index, mode).await;
-    let library = database.beatmaps().get(91).await.unwrap();
+    let library = read_v11_beatmap(database, 91).await;
     let other = Database::connect(url).await.unwrap();
     let (one, two) = tokio::join!(database.migrate(), other.migrate());
     one.unwrap();
@@ -315,7 +315,7 @@ async fn repository_contracts(database: &Database, other: &Database, state: &Que
                 .await
                 .unwrap()
                 .len(),
-            16
+            17
         );
         assert!(
             !SchemaManager::new(&database.connection)
@@ -378,7 +378,7 @@ async fn queue_modes_contracts(database: &Database, other: &Database, state: &Qu
             .await
             .unwrap()
             .len(),
-        16
+        17
     );
     save(database, state).await.unwrap();
 }
@@ -483,7 +483,7 @@ async fn downgrade_guards(database: &Database, state: &QueueState) {
                 .await
                 .unwrap()
                 .len(),
-            16
+            17
         );
         save(database, state).await.unwrap();
     }
@@ -595,7 +595,7 @@ async fn waiting_migration(database: &Database, url: &str) {
             .await
             .unwrap()
             .len(),
-        16
+        17
     );
     assigned.entries[0].availability = QueueAvailability::Available;
     save(database, &assigned).await.unwrap();
@@ -663,7 +663,7 @@ async fn launch_source_migration(database: &Database, url: &str) {
                     .await
                     .unwrap()
                     .len(),
-                16
+                17
             );
         }
         for invalid in [

@@ -29,7 +29,7 @@ impl ServerConfig {
 
         let database_url = match env::var(DATABASE_URL_ENV) {
             Ok(url) => url,
-            #[cfg(all(target_os = "linux", feature = "sqlite"))]
+            #[cfg(all(any(target_os = "linux", windows), feature = "sqlite"))]
             Err(env::VarError::NotPresent) => default_sqlite_path()?,
             Err(error) => {
                 return Err(error).with_context(|| {
@@ -46,21 +46,11 @@ impl ServerConfig {
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "sqlite"))]
+#[cfg(all(any(target_os = "linux", windows), feature = "sqlite"))]
 fn default_sqlite_path() -> Result<String> {
-    use std::{fs, path::PathBuf};
+    use std::fs;
 
-    let base = env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .or_else(|| {
-            env::var_os("HOME")
-                .map(PathBuf::from)
-                .filter(|path| path.is_absolute())
-                .map(|home| home.join(".local/share"))
-        })
-        .context("Cannot determine SQLite data directory: set an absolute XDG_DATA_HOME or HOME")?;
-    let directory = base.join("osu-radio");
+    let directory = user_data_home()?.join("osu-radio");
     let path = directory.join("osu-radio.db");
     let url = path
         .to_str()
@@ -73,4 +63,30 @@ fn default_sqlite_path() -> Result<String> {
         )
     })?;
     Ok(url)
+}
+
+#[cfg(all(target_os = "linux", feature = "sqlite"))]
+fn user_data_home() -> Result<std::path::PathBuf> {
+    use std::path::PathBuf;
+
+    env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| {
+            env::var_os("HOME")
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .map(|home| home.join(".local/share"))
+        })
+        .context("Cannot determine SQLite data directory: set an absolute XDG_DATA_HOME or HOME")
+}
+
+#[cfg(all(windows, feature = "sqlite"))]
+fn user_data_home() -> Result<std::path::PathBuf> {
+    use std::path::PathBuf;
+
+    env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .context("Cannot determine SQLite data directory: set an absolute LOCALAPPDATA")
 }

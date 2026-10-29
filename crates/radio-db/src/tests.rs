@@ -203,6 +203,25 @@ async fn assert_unrelated_table(database: &Database) {
     assert_eq!(rows[0].try_get::<i32>("", "id").unwrap(), 42);
 }
 
+/// Frozen v11 projection; current entities require the latest search columns.
+async fn read_v11_beatmap(database: &Database, id: i32) -> Option<crate::model::Beatmap> {
+    let row = database.connection.query_one_raw(sea_orm::Statement::from_string(
+        database.connection.get_database_backend(),
+        format!("SELECT id,beatmap_set_id,difficulty_name,bpm,hash,md5_hash,metadata_hash,audio_source_id,background_path FROM beatmaps WHERE id={id}"),
+    )).await.unwrap()?;
+    Some(crate::model::Beatmap {
+        id: row.try_get("", "id").unwrap(),
+        beatmap_set_id: row.try_get("", "beatmap_set_id").unwrap(),
+        difficulty_name: row.try_get("", "difficulty_name").unwrap(),
+        bpm: row.try_get("", "bpm").unwrap(),
+        hash: row.try_get("", "hash").unwrap(),
+        md5_hash: row.try_get("", "md5_hash").unwrap(),
+        metadata_hash: row.try_get("", "metadata_hash").unwrap(),
+        audio_source_id: row.try_get("", "audio_source_id").unwrap(),
+        background_path: row.try_get("", "background_path").unwrap(),
+    })
+}
+
 fn marker(name: &str) -> OsuMarker {
     OsuMarker {
         kind: OsuKind::Lazer,
@@ -479,7 +498,7 @@ async fn concurrent_schema_changes(database: &Database, url: &str) {
                 .await
                 .unwrap()
                 .len(),
-            16
+            17
         );
         let (reset, migrate) = tokio::join!(database.reset(), other.migrate());
         reset.unwrap();

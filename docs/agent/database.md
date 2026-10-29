@@ -147,27 +147,57 @@ transactions. Applications cannot obtain those handles through `Services`.
 
 `Database::begin_read` exposes an opaque transaction for consistent multi-query
 reads: a regular SQLite read transaction or PostgreSQL `REPEATABLE READ READ ONLY`.
-`BeatmapSetService` reads minimal unique metadata and audio-bearing difficulty
-relationships, plus matching set IDs per unique normalized word, inside that
-transaction. `TagRepository::matching_set_ids` binds literal substring values to
-SQLite `instr` / PostgreSQL `strpos`, selects tag IDs first, and resolves distinct
-set IDs through the existing `tag_id` index. It never loads repeated tag names
-for search or interprets input as a pattern.
+`BeatmapSetService` lowercases and deduplicates whitespace-separated words, then
+intersects matching global audio IDs across words inside that transaction.
+[`matching_audio_sources`](../../crates/radio-db/src/repositories/beatmap_set.rs)
+binds one literal word at a time to SQLite `instr` / PostgreSQL `strpos` over
+normalized metadata, difficulty names and tags. A word can match any reference
+of an audio source; different words may match different difficulties or sets.
+There is no 64-word or combined SQL parameter limit. No wildcard interpretation,
+locale-dependent SQL lowercase, server-side text cache or full-library text
+projection is used on this path. Substring matching still scans text in the
+database; this is not a full-text index or a promise of constant-time search.
 
-The service normalizes shared metadata once per hash and unions dynamic word
-vectors by global audio ID, across sets and difficulties. There is no 64-word
-limit. After matching, the same transaction loads full data only for the matching
-audio IDs, in chunks of at most 500 parameters, restoring set/audio/map order.
-Multiplicity is computed from unfiltered relationships and supplied to the
-filtered aggregate loader. No matches skip full loading. Blank queries retain
-the original single aggregate query, including empty sets on the legacy API.
-`search_tracks` groups that result for Songs; formatting remains in the client.
+[`m20261027_000017_search_text`](../../crates/radio-db/src/migrations/m20261027_000017_search_text.rs)
+adds `search_title`, `search_title_unicode`, `search_artist` and
+`search_artist_unicode` to metadata, plus `search_difficulty_name` to beatmaps.
+These are derived, non-null text columns, independently normalized with Rust
+`str::to_lowercase` (NULL becomes empty), preserving Unicode expansion and
+contextual lowercase. They do not participate in immutable metadata identity.
+The migration backfills existing rows in keyset pages of at most 128 and runs
+under the schema-change transaction/lock; a failure leaves the previous schema
+and original library intact. Downgrade drops only these derived columns.
+Metadata and beatmap repositories fill them on insertion, including reimport.
+Direct SQL test fixtures must supply corresponding normalized text themselves.
+
+After matching, the same transaction loads full data only for matching audio IDs
+in disjoint, sorted chunks of at most 500 parameters. Multiplicity is computed
+from unfiltered database relationships with `COUNT(DISTINCT audio_source_id)`.
+No matches skip full loading. Blank queries use one aggregate SELECT, including
+empty sets on the legacy API. `search_tracks` groups the result for Songs;
+formatting remains in the client.
+
+The aggregate loader consumes rows through
+[`query_each`](../../crates/radio-db/src/repositories/mod.rs) directly into ordered
+set groups, without a full intermediate row vector or full-row sort. Repeated
+input audio IDs are removed before chunking, preserving set/audio/map order.
+Only the presence flag is selected for background paths. The Songs conversion
+retains representative text and final difficulty rows instead of regrouping full
+per-difficulty metadata. The returned library still scales with result size.
+The older metadata/difficulty projections remain for reference benchmarks and
+contracts, using `query_all` on the same streaming helper. Reader regression
+checks order, empty results and release after cancellation, decoding errors and
+consumer errors. RSS may retain allocator arenas after results are freed.
 
 [Search contracts](../../crates/radio-services/src/tests/search.rs) cover literal
-symbols, cross-reference matches, 70 unique words, three ID chunks, and a committed
+symbols, Unicode expansion/context, cross-reference matches, 70 unique words,
+three ID chunks, and a committed
 replacement from a second pool between projections and full result loading.
-Both backends must retain the old snapshot. The existing tag migration is unchanged;
-this optimization adds no schema or persistent index.
+Both backends must retain the old snapshot. The
+[migration lifecycle](../../crates/radio-db/src/tests/migration_lifecycle.rs)
+checks NULL/Unicode backfill across multiple pages, unchanged identities,
+reversible upgrades and SQLite rollback after an injected update failure.
+The existing tag migration and metadata hash encoding are unchanged.
 
 ## Playback queue
 
@@ -678,6 +708,16 @@ application data before registration. Output reports inserted sets/beatmaps and
 the distinct audio sources referenced by the snapshot, including reused sources.
 
 ## Verification limits
+
+Executed on 2026-10-27 for the search/RAM change: SQLite repository/service
+contracts and disposable PostgreSQL contracts passed, including normalized-field
+backfill/downgrade, injected SQLite migration failure, and old-snapshot SQL search
+after a concurrent replacement. Server HTTP/startup suites passed with docs on
+and off; scoped all-target Clippy passed for SQLite and both PostgreSQL router
+variants. An A–B–A release comparison on private copies of the desktop library
+matched 168 HTTP responses byte-for-byte and reduced post-search RSS from
+236–249 to 173 MiB. Original application databases were not migrated by the
+probe. GUI, real imports, Windows and long-running leak behavior were not tested.
 
 [Service contracts](../../crates/radio-services/src/tests.rs) cover registration races,
 partial updates, generated IDs, full/empty replacement, shared cleanup, forced

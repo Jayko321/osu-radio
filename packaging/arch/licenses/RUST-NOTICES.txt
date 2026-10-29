@@ -1,6 +1,6 @@
 Rust dependency notices for osu! radio (Arch Linux x86_64)
-Snapshot: 2026-10-20, working checkout based on cf843383f32ec36e689b033e86bc897c8d5990dd.
-Cargo.lock SHA-256: a599b51f0111f90aed32f061cabd1d3e72dc551efd2d504242e8dea5741d3fea.
+Snapshot: 2026-10-27, working checkout based on c9f2500bad0c645d4e5e2db5dcdd9f6b712ac551 (3 packages added since 2026-10-20: arc-swap, ksni, pastey).
+Cargo.lock SHA-256: a9038e8690b970f54515a8e3a6b101214b100366ef0bc902e72539be39ff6ed0.
 Selected packages: osu-radio-qt + osu-radio-server, default features (SQLite + docs).
 Normal and build edges; no dev edges or other target platforms. Build dependencies
 and proc macros are included conservatively; they are not separate installed apps.
@@ -88,6 +88,17 @@ Text: 62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a | LICENSE
 Text source: https://static.crates.io/crates/anyhow/anyhow-1.0.103.crate
 Text: 23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3 | LICENSE-MIT
 Text source: https://static.crates.io/crates/anyhow/anyhow-1.0.103.crate
+
+COMPONENT arc-swap 1.9.3
+Declared license: MIT OR Apache-2.0
+Source: https://static.crates.io/crates/arc-swap/arc-swap-1.9.3.crate
+Source archive SHA-256: 380962b3d93b99642e50b9febf72c071e97e8b32d86eae9cf4ef582bb960ae6e
+Graph role: normal dependency
+Features: (none)
+Text: a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2 | LICENSE-APACHE
+Text source: https://static.crates.io/crates/arc-swap/arc-swap-1.9.3.crate
+Text: ff3f1cd12af8866d9bde961d6cc40df774cd131d484de31d3170c4b02b21a7b5 | LICENSE-MIT
+Text source: https://static.crates.io/crates/arc-swap/arc-swap-1.9.3.crate
 
 COMPONENT arrayvec 0.7.8
 Declared license: MIT OR Apache-2.0
@@ -1824,6 +1835,15 @@ Text source: https://static.crates.io/crates/jobserver/jobserver-0.1.35.crate
 Text: 378f5840b258e2779c39418f3f2d7b2ba96f1c7917dd6be0713f88305dbda397 | LICENSE-MIT
 Text source: https://static.crates.io/crates/jobserver/jobserver-0.1.35.crate
 
+COMPONENT ksni 0.3.7
+Declared license: Unlicense
+Source: https://static.crates.io/crates/ksni/ksni-0.3.7.crate
+Source archive SHA-256: 1bcc1cb43797140f74b711f1c4a49f48a7a7429f211c5fb78264e7bcd1e99caf
+Graph role: normal dependency
+Features: default,tokio
+Text: 7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c | UNLICENSE
+Text source: https://static.crates.io/crates/ksni/ksni-0.3.7.crate
+
 COMPONENT lazy_static 1.5.0
 Declared license: MIT OR Apache-2.0
 Source: https://static.crates.io/crates/lazy_static/lazy_static-1.5.0.crate
@@ -2276,6 +2296,17 @@ Text: 62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a | LICENSE
 Text source: https://static.crates.io/crates/paste/paste-1.0.15.crate
 Text: 23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3 | LICENSE-MIT
 Text source: https://static.crates.io/crates/paste/paste-1.0.15.crate
+
+COMPONENT pastey 0.2.3
+Declared license: MIT OR Apache-2.0
+Source: https://static.crates.io/crates/pastey/pastey-0.2.3.crate
+Source archive SHA-256: 2ee67f1008b1ba2321834326597b8e186293b049a023cdef258527550b9935b4
+Graph role: build dependency
+Features: (none)
+Text: 62c7a1e35f56406896d7aa7ca52d0cc0d272ac022b5d2796e7d6905db8a3636a | LICENSE-APACHE
+Text source: https://static.crates.io/crates/pastey/pastey-0.2.3.crate
+Text: 23f18e03dc49df91622fe2a76176497404e46ced8a715d9d2b67a7446571cca3 | LICENSE-MIT
+Text source: https://static.crates.io/crates/pastey/pastey-0.2.3.crate
 
 COMPONENT percent-encoding 2.3.2
 Declared license: MIT OR Apache-2.0
@@ -11694,6 +11725,34 @@ limitations under the License.
 
 END TEXT 7cfd738c53d61c79f07e348f622bf7707c9084237054d37fbe07788a75f5881c
 
+BEGIN TEXT 7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c
+This is free and unencumbered software released into the public domain.
+
+Anyone is free to copy, modify, publish, use, compile, sell, or
+distribute this software, either in source code form or as a compiled
+binary, for any purpose, commercial or non-commercial, and by any
+means.
+
+In jurisdictions that recognize copyright laws, the author or authors
+of this software dedicate any and all copyright interest in the
+software to the public domain. We make this dedication for the benefit
+of the public at large and to the detriment of our heirs and
+successors. We intend this dedication to be an overt act of
+relinquishment in perpetuity of all present and future rights to this
+software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+For more information, please refer to <http://unlicense.org/>
+
+END TEXT 7e12e5df4bae12cb21581ba157ced20e1986a0508dd10d0e8a4ab9a4cf94e85c
+
 BEGIN TEXT 807242105c35b459ada8a1e76a94e017103d230e8e8fefd0bbcee625fb0d816d
 The Uuid Project is copyright 2013-2014, The Rust Project Developers and
 copyright 2018, The Uuid Developers.
@@ -19082,6 +19141,35 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
 END TEXT fb77f0a9c53e473abe5103c8632ef9f0f2874d4fb3f17cb2d8c661aab9cee9d7
+
+BEGIN TEXT ff3f1cd12af8866d9bde961d6cc40df774cd131d484de31d3170c4b02b21a7b5
+Copyright (c) 2017 arc-swap developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+END TEXT ff3f1cd12af8866d9bde961d6cc40df774cd131d484de31d3170c4b02b21a7b5
 
 BEGIN TEXT ff8f68cb076caf8cefe7a6430d4ac086ce6af2ca8ce2c4e5a2004d4552ef52a2
 Copyright (c) 2016 Amanieu d'Antras

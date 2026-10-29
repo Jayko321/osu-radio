@@ -90,7 +90,7 @@ fn environment_only_uses_explicit_address() {
     );
 }
 
-#[cfg(not(all(target_os = "linux", feature = "sqlite")))]
+#[cfg(not(all(any(target_os = "linux", windows), feature = "sqlite")))]
 #[test]
 fn selected_database_url_is_still_required() {
     let directory = directory_without_dotenv();
@@ -251,6 +251,50 @@ fn linux_sqlite_defaults_are_private_absolute_and_only_used_without_a_url() {
     assert!(!unused.exists());
 }
 
+#[cfg(all(windows, feature = "sqlite"))]
+#[test]
+fn windows_sqlite_defaults_use_an_absolute_local_app_data_and_only_without_a_url() {
+    let directory = directory_without_dotenv();
+    let local = directory.path().join("Local с пробелами");
+    let expected = local.join("osu-radio").join("osu-radio.db");
+    check_in_subprocess(
+        directory.path(),
+        "sqlite-default",
+        &[
+            ("LOCALAPPDATA", local.to_str().unwrap()),
+            ("EXPECTED_SQLITE_PATH", expected.to_str().unwrap()),
+        ],
+    );
+    for value in [None, Some(""), Some("relative\\data")] {
+        let variables = value.map_or_else(Vec::new, |value| vec![("LOCALAPPDATA", value)]);
+        check_in_subprocess(directory.path(), "missing-home", &variables);
+    }
+    let blocked = directory.path().join("blocked");
+    fs::write(&blocked, b"file instead of directory").unwrap();
+    check_in_subprocess(
+        directory.path(),
+        "mkdir-error",
+        &[("LOCALAPPDATA", blocked.to_str().unwrap())],
+    );
+    for value in ["relative\\data", ""] {
+        check_in_subprocess(
+            directory.path(),
+            "default-address",
+            &[(DATABASE_URL_ENV, DATABASE_URL), ("LOCALAPPDATA", value)],
+        );
+    }
+    let unused = directory.path().join("unused");
+    check_in_subprocess(
+        directory.path(),
+        "default-address",
+        &[
+            (DATABASE_URL_ENV, DATABASE_URL),
+            ("LOCALAPPDATA", unused.to_str().unwrap()),
+        ],
+    );
+    assert!(!unused.exists());
+}
+
 #[test]
 #[ignore = "invoked by configuration tests in an isolated child process"]
 fn configuration_probe() {
@@ -278,7 +322,7 @@ fn configuration_probe() {
                 Some(env::VarError::NotPresent)
             ));
         }
-        #[cfg(all(target_os = "linux", feature = "sqlite"))]
+        #[cfg(all(any(target_os = "linux", windows), feature = "sqlite"))]
         "sqlite-default" => {
             let config = ServerConfig::from_env().unwrap();
             let expected = env::var("EXPECTED_SQLITE_PATH").unwrap();
@@ -289,7 +333,7 @@ fn configuration_probe() {
                 "configuration creates only the directory"
             );
         }
-        #[cfg(all(target_os = "linux", feature = "sqlite"))]
+        #[cfg(all(any(target_os = "linux", windows), feature = "sqlite"))]
         "missing-home" | "mkdir-error" => {
             let error = ServerConfig::from_env()
                 .err()

@@ -1,0 +1,14 @@
+{
+  "arch_image": "archlinux@sha256:e82623936fa1a69700b48e98b058df6eaab18b737c27473a7234a40fdecb9413",
+  "arch_snapshot": "2026/10/29",
+  "windows": {
+    "qt": "6.8.3",
+    "dotnet_sdk": "10.0.113",
+    "msvc": "14.44.35207",
+    "windows_sdk": "10.0.26100.0",
+    "inno_url": "https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe",
+    "inno_sha256": "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732"
+  },
+  "windows_materials_url": null,
+  "windows_materials_sha256": null
+}

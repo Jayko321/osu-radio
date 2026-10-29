@@ -4,6 +4,11 @@ use std::{env, path::PathBuf};
 
 use osu_radio_client::{OsuFolderChanges, RegisterOsuFolder, ServerOptions, Session};
 
+#[cfg(target_os = "linux")]
+const DATA_HOME_ENV: &str = "XDG_DATA_HOME";
+#[cfg(windows)]
+const DATA_HOME_ENV: &str = "LOCALAPPDATA";
+
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -41,9 +46,9 @@ async fn the_embedded_server_answers_on_the_port_it_reports() {
     let session = Session::start(options.clone()).await.unwrap();
     assert!(!cwd.join("osu-radio.db").exists());
     assert!(!cwd.join("library.sqlite").exists());
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     assert!(
-        PathBuf::from(env::var_os("XDG_DATA_HOME").unwrap())
+        PathBuf::from(env::var_os(DATA_HOME_ENV).unwrap())
             .join("osu-radio/osu-radio.db")
             .is_file()
     );
@@ -97,7 +102,6 @@ async fn the_embedded_server_answers_on_the_port_it_reports() {
     assert_eq!(session.api().user_data().await.unwrap().id, 1);
     session.shutdown().await.unwrap();
 
-    #[cfg(target_os = "linux")]
     for location in [directory.path(), cwd.as_path()] {
         for contents in [
             b"SQLITE_DATABASE_URL=must-not-open.sqlite\nOSU_RADIO_SERVER_ADDRESS=invalid\n"
@@ -138,9 +142,10 @@ fn check_in_subprocess() {
         .env_clear()
         .env("OSU_RADIO_EMBEDDED_TEST_CHILD", "1")
         .env("OSU_RADIO_SKIP_DOTENV", "0")
-        .env("HOME", directory.path().join("home"))
-        .env("XDG_DATA_HOME", directory.path().join("data with spaces"));
-    #[cfg(not(target_os = "linux"))]
+        .env("HOME", directory.path().join("home"));
+    #[cfg(any(target_os = "linux", windows))]
+    command.env(DATA_HOME_ENV, directory.path().join("data с пробелами"));
+    #[cfg(not(any(target_os = "linux", windows)))]
     command.env(
         "SQLITE_DATABASE_URL",
         directory.path().join("library.sqlite"),

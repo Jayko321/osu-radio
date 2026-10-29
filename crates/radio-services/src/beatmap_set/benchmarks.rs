@@ -91,9 +91,9 @@ async fn seed(connection: &sea_orm::DatabaseConnection, size: i32) {
     for statement in [
         "INSERT INTO osu_installations (id,user_data_id,kind,root_path,marker_path) VALUES (1,1,'lazer','\"/synthetic\"','\"/synthetic/client.realm\"')".to_owned(),
         format!("WITH RECURSIVE numbers(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM numbers WHERE n<{size}) INSERT INTO beatmap_sets(id,installation_id) SELECT n,1 FROM numbers"),
-        "INSERT INTO beatmap_metadata(hash,title,title_unicode,artist,artist_unicode) SELECT CAST(id AS TEXT),'Starlight orchestra','ЗВЁЗДЫ','Synthetic artist','ЁЖ' FROM beatmap_sets".to_owned(),
+        "INSERT INTO beatmap_metadata(hash,title,title_unicode,artist,artist_unicode,search_title,search_title_unicode,search_artist,search_artist_unicode) SELECT CAST(id AS TEXT),'Starlight orchestra','ЗВЁЗДЫ','Synthetic artist','ЁЖ','starlight orchestra','звёзды','synthetic artist','ёж' FROM beatmap_sets".to_owned(),
         "INSERT INTO audio_sources(id,kind,location) SELECT id*2-1,'local','/audio/' || CAST(id AS TEXT) || '.mp3' FROM beatmap_sets UNION ALL SELECT id*2,'local','/audio/' || CAST(id AS TEXT) || '-other.mp3' FROM beatmap_sets".to_owned(),
-        "INSERT INTO beatmaps(id,beatmap_set_id,metadata_hash,audio_source_id,difficulty_name) SELECT s.id*4-d.n,s.id,CAST(s.id AS TEXT),s.id*2-CASE WHEN d.n<2 THEN 1 ELSE 0 END,CASE d.n WHEN 0 THEN 'Easy' WHEN 1 THEN 'Hard' WHEN 2 THEN 'Insane' ELSE 'Extra' END FROM beatmap_sets s CROSS JOIN (SELECT 0 AS n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3) d".to_owned(),
+        "INSERT INTO beatmaps(id,beatmap_set_id,metadata_hash,audio_source_id,difficulty_name,search_difficulty_name) SELECT s.id*4-d.n,s.id,CAST(s.id AS TEXT),s.id*2-CASE WHEN d.n<2 THEN 1 ELSE 0 END,CASE d.n WHEN 0 THEN 'Easy' WHEN 1 THEN 'Hard' WHEN 2 THEN 'Insane' ELSE 'Extra' END,CASE d.n WHEN 0 THEN 'easy' WHEN 1 THEN 'hard' WHEN 2 THEN 'insane' ELSE 'extra' END FROM beatmap_sets s CROSS JOIN (SELECT 0 AS n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3) d".to_owned(),
         "INSERT INTO tags(id,name) VALUES (1,'rocket'),(2,'piano')".to_owned(),
         "INSERT INTO beatmap_set_tags(beatmap_set_id,tag_id) SELECT s.id,t.id FROM beatmap_sets s CROSS JOIN tags t".to_owned(),
     ] {
@@ -273,7 +273,7 @@ async fn synthetic_fixture_validates_benchmark_search_and_all_reference_stages()
     let connection = sea_orm::Database::connect(options).await.unwrap();
     seed(&connection, 6).await;
     connection
-        .execute_unprepared("UPDATE beatmap_metadata SET title_unicode='星の曲' WHERE hash='1'")
+        .execute_unprepared("UPDATE beatmap_metadata SET title_unicode='星の曲', search_title_unicode='星の曲' WHERE hash='1'")
         .await
         .unwrap();
     connection

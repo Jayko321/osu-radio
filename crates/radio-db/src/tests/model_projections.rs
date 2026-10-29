@@ -269,6 +269,30 @@ pub(super) async fn contracts(database: &Database) {
         .search_metadata()
         .await
         .unwrap();
+    assert_eq!(
+        transaction
+            .beatmap_sets()
+            .matching_audio_sources("projection")
+            .await
+            .unwrap(),
+        [audio.id]
+    );
+    assert_eq!(
+        transaction
+            .beatmap_sets()
+            .matching_audio_sources("easy")
+            .await
+            .unwrap(),
+        [audio.id]
+    );
+    assert_eq!(
+        transaction
+            .beatmap_sets()
+            .multiple_audio_set_ids()
+            .await
+            .unwrap(),
+        multiple
+    );
     assert_eq!(search.len(), 1);
     assert_eq!(
         (

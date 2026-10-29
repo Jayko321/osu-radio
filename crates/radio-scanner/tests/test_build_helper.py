@@ -106,7 +106,7 @@ class BuildHelperTests(unittest.TestCase):
         result = self.run_build()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("failed to start dotnet", result.stderr)
-        self.assertIn(".NET 8 SDK or set OSU_LAZER_REALM_PARSER_PATH", result.stderr)
+        self.assertIn(".NET 10 SDK or set OSU_LAZER_REALM_PARSER_PATH", result.stderr)
         self.assertNotIn("cargo:rustc-env=", result.stdout)
 
     def test_failed_dotnet_does_not_advertise_a_helper(self):

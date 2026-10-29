@@ -39,8 +39,8 @@ features. See the [packaging instructions](../../packaging/arch/README.md) for
 dependencies and release verification limits; installed acceptance is T05/T06.
 
 `ServerConfig::from_env` calls `dotenvy::dotenv()` before reading configuration,
-unless the process variable `OSU_RADIO_SKIP_DOTENV` is exactly `1`. The Linux
-client sets this variable on its child server, so embedded startup never searches
+unless the process variable `OSU_RADIO_SKIP_DOTENV` is exactly `1`. The Linux and
+Windows client sets this variable on its child server, so embedded startup never searches
 the current directory or its ancestors for `.env`. Standalone startup keeps
 dotenv loading by default; other switch values do not disable it.
 A missing `.env` (`NotFound`) is allowed: process environment alone can supply
@@ -54,7 +54,11 @@ back to `$HOME/.local/share/osu-radio/osu-radio.db`; HOME must then be absolute.
 Only this default path creates its parent directory. Failure to determine or
 create it propagates before readiness. Explicit SQLite paths, URLs and `:memory:`
 retain priority and their existing semantics, including missing-parent errors.
-Other platforms still require `SQLITE_DATABASE_URL`; PostgreSQL always requires
+On Windows the SQLite build uses `%LOCALAPPDATA%\osu-radio\osu-radio.db`; an
+absent, empty or relative `LOCALAPPDATA`, or a directory that cannot be created,
+ends startup with `Cannot determine SQLite data directory` / `Failed to create SQLite
+data directory` (no cwd or install-directory fallback). Explicit URLs keep priority and
+do not touch `LOCALAPPDATA`. Other platforms still require `SQLITE_DATABASE_URL`; PostgreSQL always requires
 `POSTGRES_DATABASE_URL` and never uses this fallback. Startup opens
 the pool and applies versioned migrations without resetting. Legacy tables without
 SeaORM history are rejected with instructions to use a new database or explicit reset. `OSU_RADIO_SERVER_ADDRESS` defaults to
@@ -85,15 +89,17 @@ change the HTTP contracts or select a hosted-source provider.
 `127.0.0.1:0`, as the child's `OSU_RADIO_SERVER_ADDRESS`. Port zero requests an
 OS-assigned port. The option can be overridden; the supervisor does not always
 force port zero. `ServerOptions::working_directory` changes the child's working
-directory when present; otherwise it inherits the parent directory. On Linux
-the child receives `OSU_RADIO_SKIP_DOTENV=1` regardless of the inherited value.
-Other platforms retain dotenv search in the working directory and its ancestors.
+directory when present; otherwise it inherits the parent directory. On Linux and
+Windows the child receives `OSU_RADIO_SKIP_DOTENV=1` regardless of the inherited
+value; other platforms retain dotenv search. On Windows the child is created with
+`CREATE_NO_WINDOW` (no console window; stdout/stderr pipes are unaffected).
 
 [Configuration regressions](../../apps/osu-radio-server/src/config/tests.rs)
 run in separate processes with cleared application environments and temporary
 working directories. They cover environment-only configuration, the default and
-explicit address, the Linux SQLite XDG/HOME fallback (including spaces, missing
-HOME and directory creation errors), required URLs on other configurations,
+explicit address, the Linux SQLite XDG/HOME and Windows LOCALAPPDATA fallbacks (including spaces/Cyrillic,
+missing, empty or relative values, directory creation errors and an explicit URL
+with an unusable LOCALAPPDATA; the Windows probes have not run on a Windows host), required URLs on other configurations,
 valid dotenv loading, exact skip-switch semantics, process-variable precedence
 and fatal parse/read errors. The
 [repository dotenv test](../../apps/osu-radio-server/src/config/tests.rs) separately
@@ -104,7 +110,7 @@ configured database. A checkout without that optional file skips this read.
 
 The [startup tests](../../apps/osu-radio-server/tests/startup.rs) launch the actual
 SQLite server without `.env`, using in-memory storage or private XDG/HOME
-paths and an ephemeral loopback port. The default-path test saves a folder and
+paths (a Windows test uses a private LOCALAPPDATA) and an ephemeral loopback port. The default-path tests save a folder and
 reads it after restart without a database URL, checking source preservation and
 no database in cwd. They also check configuration/connection/bind failures, including a held
 loopback port, nonzero exit and no false readiness announcement. Child-only
@@ -495,13 +501,14 @@ case folding or accent normalization. Special characters have no SQL wildcard or
 regular-expression meaning. Missing/whitespace-only queries preserve the complete
 library response, including empty sets, and existing order is retained without ranking.
 
-Both endpoints use the same optimized service search. Minimal unique metadata,
-audio relationships and per-word matching tag set IDs are read in one snapshot
-(SQLite transaction, PostgreSQL repeatable-read/read-only). The service matches
-shared metadata once per hash, unions matches by audio ID, then loads complete
-results only for matched audio in batches of at most 500 parameters inside that
-same transaction. No matches skip full loading; blank queries keep the full
-aggregate path. See [database](database.md).
+Both endpoints use the same service search and read snapshot (SQLite transaction,
+PostgreSQL repeatable-read/read-only). SQL matches each word against derived
+Rust-normalized text columns and normalized tags, returning only audio IDs.
+The service intersects those IDs across words, then loads complete results for
+matched audio in sorted, disjoint batches of at most 500 parameters inside the
+same transaction. It does not load the entire library's text into Rust for each
+search. No matches skip full loading; blank queries keep the streamed aggregate
+path. See [database](database.md#search-reads) for normalization and migration.
 All audio references participate globally by ID. Tags apply to all audio in their
 set; matching a difficulty does not include unrelated audio from the same set.
 The response retains only matched audio and all their metadata references, keeping
@@ -524,7 +531,8 @@ selection, split sets, shared audio, repeated names and encoded query symbols.
 
 Matching takes O(K × S) for K query words and S searchable text/relationships.
 Database reads, sorting, response serialization and transport are separate costs;
-this is not an O(n) promise for the whole HTTP request. No search migration is needed.
+this is not an O(n) promise for the whole HTTP request. Migration v17 backfills
+the normalized text in bounded pages; immutable metadata identity is unchanged.
 [Service search contracts](../../crates/radio-services/src/tests/search.rs) exercise
 matching and concurrent replacement across a read snapshot on both backends.
 [HTTP tests](../../apps/osu-radio-server/src/routes/beatmap_sets.rs) exercise actual

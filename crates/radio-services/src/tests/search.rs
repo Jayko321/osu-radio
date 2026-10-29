@@ -15,7 +15,7 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase) {
     for map in &mut imported[0].beatmaps {
         let meta = map.metadata.as_mut().unwrap();
         meta.artist = Some("Orchestra".into());
-        meta.artist_unicode = Some("ЁЖ".into());
+        meta.artist_unicode = Some("ЁЖ İSTANBUL ΟΣ".into());
         meta.title_unicode = Some("ЗВЁЗДЫ".into());
         meta.user_tags.clear();
         meta.tags = Some("ROCKET a+b%_&?#".into());
@@ -52,7 +52,20 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase) {
         assert_eq!(service.search_with_audio_sources(query).await.unwrap(), all);
     }
     for query in [
-        "roc", "ROCK", "orCH", "ёж", "звёз", "a+b%_&?#", "%", "_", "a+b", "&?#",
+        "roc",
+        "ROCK",
+        "orCH",
+        "ёж",
+        "звёз",
+        "a+b%_&?#",
+        "%",
+        "_",
+        "a+b",
+        "&?#",
+        "i\u{0307}stan",
+        "İSTAN",
+        "ΟΣ",
+        "ος",
     ] {
         assert_eq!(
             paths(&service.search_with_audio_sources(query).await.unwrap()),
@@ -149,6 +162,24 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase) {
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
+    assert_eq!(
+        transaction
+            .beatmap_sets()
+            .matching_audio_sources("rocket")
+            .await
+            .unwrap()
+            .into_iter()
+            .collect::<HashSet<_>>(),
+        ids.iter().copied().collect()
+    );
+    assert!(
+        transaction
+            .beatmap_sets()
+            .matching_audio_sources("replacement")
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let multiple = before
         .iter()
         .filter(|set| set.has_multiple_audio_sources)

@@ -21,6 +21,7 @@ mod m20261016_000014_queue_launch_source;
 mod m20261020_000015_audio_mods;
 
 mod m20261024_000016_queue_modes;
+mod m20261027_000017_search_text;
 
 pub(crate) struct Migrator;
 
@@ -44,6 +45,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20261016_000014_queue_launch_source::Migration),
             Box::new(m20261020_000015_audio_mods::Migration),
             Box::new(m20261024_000016_queue_modes::Migration),
+            Box::new(m20261027_000017_search_text::Migration),
         ]
     }
 }

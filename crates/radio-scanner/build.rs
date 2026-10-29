@@ -49,7 +49,7 @@ fn main() {
         .status()
         .unwrap_or_else(|error| {
             panic!(
-                "failed to start dotnet while building {}: {error}. Install the .NET 8 SDK or set OSU_LAZER_REALM_PARSER_PATH to a prebuilt helper",
+                "failed to start dotnet while building {}: {error}. Install the .NET 10 SDK or set OSU_LAZER_REALM_PARSER_PATH to a prebuilt helper",
                 project.display()
             )
         });

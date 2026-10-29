@@ -28,9 +28,12 @@ frontends.
 - Building `radio-scanner` runs [`build.rs`](../../crates/radio-scanner/build.rs),
   which invokes `dotnet build --configuration Release` for the
   [Realm helper project](../../tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj).
-  It targets `net8.0`; use the .NET 8 SDK or a compatible SDK able to build that
-  target, and a runtime capable of launching the produced helper. This build
-  dependency also reaches the CLI and server through `radio-scanner`.
+  It targets `net10.0`; use the .NET 10 SDK and a .NET 10 runtime to launch the
+  development helper. The fixture generator uses the same target and Realm
+  `20.1.0`. Self-contained publish directories include the runtime; see the
+  [helper README](../../tools/osu-lazer-realm-parser/README.md) for both publish
+  modes. This build dependency also reaches the CLI and server through
+  `radio-scanner`.
 - A prebuilt helper can bypass that build via
   `OSU_LAZER_REALM_PARSER_PATH`. Use a real helper for runtime imports; the build
   override itself does not validate that the file exists or works.
@@ -39,6 +42,11 @@ frontends.
   to check actual interactions. Consult current upstream documentation through
   Context7 for platform package/setup advice instead of copying package lists
   from another OS or Qt version.
+- Windows GUI builds also require `rc.exe` from the Windows SDK in the build
+  environment to embed `packaging/icons/osu-radio.ico`. Native compilation and
+  the unfinished Setup staging are tracked in [T08](../impl/first-release-packaging/T08.md).
+  The [Windows candidate](../../packaging/windows/README.md) was built with MSVC/Qt
+  in GitHub Actions and partially exercised in Wine; its license audit is open.
 - Cargo and .NET dependency restoration may need network access on a fresh
   machine. `--locked` protects Cargo.lock; it does not make builds offline or
   prevent generated artifacts under `target/` and the helper build directories.
@@ -82,94 +90,113 @@ includes wrapper, embedded C++ notices and transitive normal/build dependencies.
 
 ### Arch Linux packaging
 
-The [Arch kit](../../packaging/arch/README.md) contains the
-[PKGBUILD](../../packaging/arch/PKGBUILD), generated
-[.SRCINFO](../../packaging/arch/.SRCINFO), menu entry and distribution notices.
-It targets x86_64 and the `v0.1.0-alpha` GitHub archive at source commit
-`bf941c29b2e69fa73aca6c1c6a7c1643f3a7f3f9`. T05 supplied the actual archive
-SHA-256 and regenerated `.SRCINFO`; do not use `SKIP`. Build/install with `makepkg -si`
-from a separate packaging directory as an ordinary user.
+The [Arch recipes](../../packaging/arch/README.md) provide mutually exclusive
+[`osu-radio-git`](../../packaging/arch/osu-radio-git/PKGBUILD) and
+[`osu-radio-bin`](../../packaging/arch/osu-radio-bin/PKGBUILD) with system Qt and
+.NET 10. The Git recipe builds the full main history; the binary recipe installs
+the T05 Arch system layout and requires only runtime dependencies. Both retain
+XDG/QSettings paths, include icons and notices, and supply the same commands.
 
-The recipe installs the pinned Rust toolchain through rustup into its own home,
-uses private Cargo/NuGet/.NET homes and caches, selects SDK 8, and explicitly
-links with LLD. Production Rust output is in `src/target-production`, separate
-from development/test targets. Qt and the default SQLite/API-docs server use
-`cargo build --release --locked`; PostgreSQL is not enabled. The real helper
-uses framework-dependent `dotnet publish --runtime linux-x64 --self-contained false`.
-Its complete publish directory and all [notices](../../packaging/arch/licenses/README.md)
-are packaged. System HOME and user data are not changed by the recipe.
+The `-bin` release checksum is intentionally invalid until T09 stages the real
+asset after the separately authorized tag move. Candidate archives and old tag
+checksums must not be used as release evidence. Generate `.SRCINFO` with
+`makepkg --printsrcinfo` for each recipe. The partial T09
+[recipe staging script](../../packaging/release/stage-arch-recipes.py) reads
+recipes from a selected commit and checks the archive's recorded clean source;
+it does not verify the remote tag or artifact contents. Its focused check is
+`python3 -B -m unittest discover -s packaging/release -p 'test_*.py' -v`.
+Check the
+[T07 report](../impl/first-release-packaging/T07.md) for executed checks and
+remaining acceptance. The [older Arch release reports](../impl/arch-linux-release.md)
+remain historical and do not validate the new variants.
 
-Material checks (no build/install):
+### Release candidate CI
 
-```sh
-bash -n packaging/arch/PKGBUILD
-desktop-file-validate packaging/arch/osu-radio.desktop
-makepkg --dir packaging/arch --printsrcinfo
-```
+The manual [release staging workflow](../../.github/workflows/release-staging.yml)
+checks out one full `source_sha` on Windows and in a pinned Arch container. It
+calls the existing packaging builders, then generates recipes/`.SRCINFO`, a
+commit source archive, manifest and SHA-256 in a separate directory. All actions
+are pinned by commit, and only read permissions are granted. Uploads include
+hidden `.SRCINFO` files from the isolated output, never the source checkout.
 
-Compare the final output with the checked-in `.SRCINFO`. Local-source recipe
-verification is recorded in [T04](../impl/arch-linux-release/T04.md); clean Arch
-chroot, published-tag checksum/dependency analysis and installed components
-belong to T05. KDE menu, real libraries/audio and update/reinstall acceptance
-belong to T06; material checks do not establish those outcomes.
+[Release inputs and handoff](../../packaging/release/README.md) document the
+required reviewed Windows notices, matching Qt sources/patches and hashes.
+`inputs.json` currently lacks their URL/checksum, so preflight intentionally
+fails. The manifest remains explicitly a candidate; it does not verify or move
+the remote tag. Missing files, dirty/mismatched source provenance and altered
+hashes fail assembly before an output directory is published. This validates
+handoff integrity, not licensing or installed application behavior. See
+[T09](../impl/first-release-packaging/T09.md) for executed checks and blockers.
 
-The [T05 report](../impl/arch-linux-release/T05.md#отчёт-о-выполнении)
-records initial unavailability, then separately authorized publication of the
-source tag on 2026-10-17. All 357 archive files matched the source commit;
-the valid archive passed integrity checks and a corrupted copy was rejected.
-The clean build uses official `pacstrap -N`/`arch-chroot -N -r`, subordinate
-uid/gid mappings, separate build/runtime roots and a private package-manager
-keyring. A working resolv.conf is copied into the private root for `-r`, and
-proc is remounted in the final PID namespace before running .NET CLI (the
-wrapper's nested PID namespace otherwise mismatches `/proc/<pid>`). Only signed system package archives may come from the shared pacman
-cache; Cargo/rustup/NuGet caches start empty inside the build root. Follow the current Arch
-[clean-chroot procedure](https://wiki.archlinux.org/title/Building_in_a_clean_chroot)
-and [namcap guidance](https://wiki.archlinux.org/title/Creating_packages).
+Run `python3 -B -m unittest discover -s packaging/release -p 'test_*.py' -v`
+on Arch with Git and `makepkg` as an ordinary user; run the existing Windows
+packaging unit checks after changing its builder. Validate workflow YAML with
+`actionlint .github/workflows/release-staging.yml`. Native Windows/Arch builds,
+downloaded CI artifacts and physical audio remain distinct acceptance checks.
 
-T05 produced `target/arch-t05/osu-radio-0.1.0alpha-1-x86_64.pkg.tar.zst`,
-SHA-256 `ba4221bd7f1d4dab0ebed2024705a89ae245bf990d640b19af5dfebbe6ffb608`.
-The actual source-tag build and runtime-only installation passed. With source
-and build trees unavailable and no SDK, the installed helper exported a valid
-synthetic Realm fixture, the server answered HTTP and created private XDG SQLite,
-and installed Qt passed software/offscreen gallery and actual empty-backend probes.
-All 308 registry package versions/features/source hashes matched the license
-inventory. Namcap had warnings and no E-errors: its missing `OsuRadio` module is
-embedded; plugin/runtime/portal dependencies are intentional. Prebuilt native
-Realm 20.1.0 retains partial RELRO (no BIND_NOW), a recorded vendor hardening limit.
-See the report for other warning dispositions and exact environment versions.
-Those results handed the verified package to T06; subsequent native checks are
-recorded below.
+### Installed first-release acceptance
 
-The [T06 report](../impl/arch-linux-release/T06.md#отчёт-о-выполнении)
-records partial installed-package acceptance on real KDE Wayland (KWin 6.7.5,
-Qt 6.12.0), using the runtime root above through bwrap and two private profiles.
-Default HOME and absolute XDG data/config/cache paths, actual child startup,
-installed About/search/values, real lazer import (13,115 sets / 53,799 maps),
-explicit Play and an active stereo PipeWire stream to Xonar U7 MKII passed.
-The test copy retains genuine Realm metadata but media for only two sets.
-Its 13 files and corresponding original osu! files retained their hashes.
-The runtime root needed the desktop's `pipewire-alsa` integration; signed system
-archives supplied it and its dependencies without changing the host or recipe.
-An active hardware stream does not establish that a person heard the output.
+[T10](../impl/first-release-packaging/T10.md#отчёт-о-выполнении) records partial
+verification on 2026-10-29. The saved Windows Setup, Arch archive and two packages
+match their earlier candidate hashes, but do not share one final source. T09 has
+not supplied a final manifest/bundle; native Windows 10 22H2/LTSC 2021/11 and Arch
+desktop import/audio/lifecycle acceptance remains open. The
+[requirements evidence table](../specs/first-release-packaging.md#фактическая-проверка-r1r9-t10-2026-10-29)
+keeps earlier Wine/offscreen results separate from that acceptance.
 
-Normal window close removed the owned server and the run's temporary audio file;
-an open temp-directory fd distinguished client cleanup from namespace teardown.
-Actual pacman upgrade from a test-only packaging revision 0.1.0alpha-0.1 to the
-final 0.1.0alpha-1, a separate reinstall, and subsequent startups retained all
-12 compared library/settings/migration tables and QSettings bytes. Queue/history
-runtime recovery is excluded from that comparison. Absolute XDG overrides also
-placed Mesa shader cache in the private cache directory, with no files in HOME
-or cwd, and restored both native Unicode controls on the second launch.
+Current-checkout SQLite contracts passed (11 tests). Separately, the server from
+the T05 candidate archive rejected legacy and unknown-future SQLite histories on
+two starts each, preserving the schema, rows and database file identity. These
+private-database checks establish neither a clean installed GUI workflow nor
+Windows runtime behavior. No product or packaging code changed for T10.
 
-T06 remains partial: the host package/menu was untouched, stable was not found
-in the explicitly scoped discovery, audible output is unconfirmed, and actual
-keyboard/browser rendering checks remain open. The real KDE picker opened but
-`xdg-desktop-portal-kde` crashed with SIGSEGV during AT-SPI interaction; selection
-did not complete. The cause is unproven and was not treated as an application
-defect. Global accessibility was restored to its original false state.
-About's Project action sent the correct native OpenURI request. Product sources,
-storage/protocols and the final package were unchanged; these installed-runtime
-checks did not rerun Cargo suites or Clippy and do not establish release acceptance.
+### Arch system archive
+
+[`packaging/linux`](../../packaging/linux/README.md) builds GUI/server in a clean
+Arch x86_64 root with system Qt and a framework-dependent .NET 10 helper.
+Ubuntu and AppImage are deferred in the [release plan](../impl/first-release-packaging.md).
+Historical Ubuntu pins/scripts and the [T05 report](../impl/first-release-packaging/T05.md)
+remain available; their glibc baseline and Qt 6.8.3 failures do not describe this build.
+
+- Prepare a fresh Arch root with the packages in the packaging README; Rust comes
+  from `rust-toolchain.toml`. `build.sh WORKDIR` uses private caches/target, the
+  system `qmake6`, explicit .NET 10 SDK selection and LLD. The helper is published
+  from copied sources, without stale `bin/obj` directories. Cargo.lock and default
+  SQLite + API docs features are retained.
+- GUI and server are built together by
+  `cargo build --release --locked -p osu-radio-qt -p osu-radio-server`.
+  Build-time source commit/dirty changes and source-file hashes are captured with
+  exact Arch packages, package database hashes, versions and flags. Build from an
+  immutable checkout/snapshot. No library is loaded from a downloaded Qt tree.
+- `stage-archive.sh` creates `osu-radio-<version>-arch-x86_64.tar.gz` and SHA-256,
+  retaining `usr/bin/{osu-radio-qt,osu-radio,osu-radio-server}`, the full helper in
+  `usr/lib/osu-radio`, desktop entry, PNG icons and complete notices. It rejects
+  missing outputs, self-contained helper payloads and mismatched helper inventories.
+  `BUILD-INFO.txt` includes ELF/symbol requirements, executable/helper hashes and
+  packaging input hashes; `SOURCE-FILES.sha256` describes the build-time sources.
+  Staging cannot relabel binaries with a later checkout's commit.
+- The system supplies Qt, ALSA, glibc, libgcc/libstdc++, .NET 10 and the desktop
+  portal. Use the actual Qt/symbol requirements in `BUILD-INFO.txt` for the Arch
+  recipe; no portability to other distributions is claimed. Installed helper
+  lookup uses `../lib/osu-radio` before the absolute build-time fallback.
+- `runtime-check.sh` runs in a second fresh root without SDKs/compilers/source or
+  build binds. As an ordinary user from `/`, it checks system ELF dependencies,
+  explicit failure with an empty .NET runtime root, default user SQLite creation,
+  the server reading two beatmaps from synthetic `full.realm` through the installed
+  helper without changing its hash, and the offscreen GUI starting its child server.
+  SIGTERM cleanup is test-owned; native normal-close/audio acceptance belongs to T10.
+- Run the Qt tests/probes, generated-import QML lint and scoped Clippy on the same
+  Arch package state. T05 records executed results separately from native desktop,
+  actual package installation/conflicts (T07) and final clean-SHA CI builds (T09).
+  Historical Qt 6.8.3 teardown crashes are not declared fixed by an Arch Qt pass.
+
+Executed for T05 on 2026-10-29, Arch Qt 6.12.0 / .NET 10.0.13: release build,
+archive self-check/negative controls, installed runtime-only smoke, QML lint,
+three scoped Clippy configurations and formatting passed. Qt tests passed lib 6,
+main 2 and 32 launch probes; 3 probes were ignored. The warmed-artwork probe
+failed both in the suite and alone: `/api/playlists/1/cover` was requested twice
+instead of once (`launch_smoke.rs:1245`). This remains open; T05 is implemented
+with partial Qt verification. See the card for artifact hashes and evidence.
 
 ### Linux CI
 
@@ -179,7 +206,7 @@ jobs on Ubuntu 24.04. Each job runs `rustup toolchain install --no-self-update`
 after checkout to install the repository-pinned toolchain and components from
 [`rust-toolchain.toml`](../../rust-toolchain.toml), without repeating the Rust
 version in the workflow. CI disables incremental compilation, installs the
-.NET 8 SDK for the real scanner helper build, and installs
+.NET 10 SDK for the real scanner helper build, and installs
 `build-essential`, `pkg-config`, `libasound2-dev` and `libclang-dev`. Signalsmith
 needs C++14 and bindgen/libclang (see [native build](#signalsmith-native-build)). The audio dependency needs
 ALSA headers to compile; the tests consume a controlled mixer without opening
@@ -225,14 +252,14 @@ Clippy, not `cargo fmt` or the helper's NuGet restore.
 
 | Input | Current use | Source |
 | --- | --- | --- |
-| `OSU_LAZER_REALM_PARSER_PATH` | Build-time helper bypass and runtime helper override; prefer an absolute path. | [Build script](../../crates/radio-scanner/build.rs), [lazer process reader](../../crates/radio-scanner/src/lazer/scanner.rs) |
+| `OSU_LAZER_REALM_PARSER_PATH` | Build-time helper bypass and runtime helper override (empty or invalid is an error, no fallback); prefer an absolute path. Without it the runtime uses the helper installed next to the executable (`../lib/osu-radio/…` / `helper/…exe`), then the build-time path. | [Build script](../../crates/radio-scanner/build.rs), [lazer process reader](../../crates/radio-scanner/src/lazer/scanner.rs) |
 | `OSU_LAZER_REALM_PARSER_BUILT_PATH` | Set by the build script and embedded with `env!`; this is generated build output, not the normal user override. | [Lazer process reader](../../crates/radio-scanner/src/lazer/scanner.rs) |
 | `DOTNET_CLI_HOME` | Used by the helper build when supplied; otherwise the build script uses `target/dotnet-home`. | [Build script](../../crates/radio-scanner/build.rs) |
 | `OSU_RADIO_SERVER_ADDRESS` | Standalone default is `127.0.0.1:3000`; the supervisor supplies `ServerOptions::address`, default `127.0.0.1:0`. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
 | `OSU_RADIO_SERVER_URL` | Qt connects to this existing HTTP(S) server instead of starting a child. No local server binary or database URL is needed. Empty/invalid values fail the connection. Gallery ignores it. | [AppBridge](../../apps/osu-radio-qt/src/app_bridge.rs), [session](../../crates/osu-radio-client/src/session.rs) |
 | `OSU_RADIO_SERVER_BIN` | Server executable override after explicit `ServerOptions::binary`, before sibling and `PATH` lookup. | [Supervisor](../../crates/osu-radio-client/src/server.rs) |
-| `SQLITE_DATABASE_URL` / `POSTGRES_DATABASE_URL` | CLI requires its selected URL; PostgreSQL server also requires its URL. Linux SQLite server alone defaults to `$XDG_DATA_HOME/osu-radio/osu-radio.db`, or `$HOME/.local/share/osu-radio/osu-radio.db` for missing/empty/relative XDG. Explicit SQLite paths, URLs and `:memory:` retain priority; only the fallback creates parent directories. | [Server config](../../apps/osu-radio-server/src/config.rs) |
-| `OSU_RADIO_SKIP_DOTENV`, `.env` and working directory | Exactly `1` skips server dotenv loading; the Linux supervisor sets it on every child. Standalone defaults to searching cwd and ancestors. Missing files are allowed, process variables take priority, and other read/parse errors are fatal. `ServerOptions::working_directory` still controls cwd. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
+| `SQLITE_DATABASE_URL` / `POSTGRES_DATABASE_URL` | CLI requires its selected URL; PostgreSQL server also requires its URL. Linux and Windows SQLite servers default to `$XDG_DATA_HOME/osu-radio/osu-radio.db` (`$HOME/.local/share/osu-radio/osu-radio.db` for missing/empty/relative XDG) and `%LOCALAPPDATA%\osu-radio\osu-radio.db` respectively; an unusable Windows `LOCALAPPDATA` is a startup error. Explicit SQLite paths, URLs and `:memory:` retain priority; only the fallback creates parent directories. | [Server config](../../apps/osu-radio-server/src/config.rs) |
+| `OSU_RADIO_SKIP_DOTENV`, `.env` and working directory | Exactly `1` skips server dotenv loading; the Linux and Windows supervisor sets it on every child. Standalone defaults to searching cwd and ancestors. Missing files are allowed, process variables take priority, and other read/parse errors are fatal. `ServerOptions::working_directory` still controls cwd. | [Server config](../../apps/osu-radio-server/src/config.rs), [supervisor](../../crates/osu-radio-client/src/server.rs) |
 
 Discovery's default candidates also consult OS location inputs such as
 `XDG_DATA_HOME` on Linux and `APPDATA`, `LOCALAPPDATA`, `USERPROFILE`, and program
@@ -493,7 +520,7 @@ validation. Check the affected interactions using the [GUI skill](../../.agents/
 
 The ignored [embedded-server test](../../crates/osu-radio-client/tests/embedded_server.rs)
 also launches a real server and exercises database-backed requests. It is not a
-replacement for the isolated readiness parser tests; it clears inherited app configuration in a subprocess and creates its own temporary HOME/XDG SQLite database (explicit private URL outside Linux), and requires a built SQLite server. Run with `env -u SQLITE_DATABASE_URL -u POSTGRES_DATABASE_URL cargo test -p osu-radio-client --test embedded_server --locked -- --ignored`. It covers registration, duplicates, label clearing, enabled edits, deletion, media route registration, remote ownership with a missing local binary, restart persistence and (Linux) ignored valid/malformed/unreadable `.env` in cwd and its parent.
+replacement for the isolated readiness parser tests; it clears inherited app configuration in a subprocess and creates its own temporary HOME/XDG or LOCALAPPDATA SQLite database (explicit private URL on other platforms), and requires a built SQLite server. Run with `env -u SQLITE_DATABASE_URL -u POSTGRES_DATABASE_URL cargo test -p osu-radio-client --test embedded_server --locked -- --ignored`. It covers registration, duplicates, label clearing, enabled edits, deletion, media route registration, remote ownership with a missing local binary, restart persistence and (Linux, Windows) ignored valid/malformed/unreadable `.env` in cwd and its parent.
 
 ## Component gallery
 
@@ -554,7 +581,7 @@ executed result):
 | --- | --- |
 | `cargo` or `rustc` unavailable | Verify the active shell's `PATH` and installed Rust toolchain; do not claim checks passed. |
 | Scanner/CLI/server build cannot start `dotnet` | Check SDK availability and the helper override. The server transitively builds the scanner even if the use case only validates folders. |
-| Helper cannot launch at runtime | Confirm the resolved helper exists, has the platform executable form/permissions, and has a compatible .NET runtime; preserve its stderr in reported failures. |
+| Helper cannot launch at runtime | Confirm the resolved helper (override → installed path relative to the executable → build-time path) exists, has the platform executable form/permissions, and has a compatible .NET runtime; preserve its stderr in reported failures. |
 | `Failed to load .env` | Inspect the discovered file in the actual child's working directory or ancestors for parse/read errors. Only `NotFound` is ignored; an existing broken file is fatal even with environment configuration. |
 | GUI cannot find the server binary | Build the server first and check explicit option, environment override, sibling executable, then `PATH`. |
 | Embedded startup times out | Check forwarded stderr and the readiness marker before changing timeout settings. |

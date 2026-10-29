@@ -1,0 +1,174 @@
+name: Release candidate staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full clean source commit containing the packaging inputs and scripts
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  SOURCE_SHA: ${{ inputs.source_sha }}
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  inputs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      arch_image: ${{ steps.inputs.outputs.arch_image }}
+      pins: ${{ steps.inputs.outputs.inputs }}
+    steps:
+      - name: Require an immutable commit ID
+        run: '[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]'
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: inputs
+        run: python3 -B packaging/release/stage.py check "$SOURCE_SHA"
+
+  windows:
+    needs: inputs
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+          toolset: ${{ fromJSON(needs.inputs.outputs.pins).windows.msvc }}
+          sdk: ${{ fromJSON(needs.inputs.outputs.pins).windows.windows_sdk }}
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: ${{ fromJSON(needs.inputs.outputs.pins).windows.dotnet_sdk }}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13.3'
+      # Use the pinned implementation directly; the composite wrapper uses mutable action tags.
+      - uses: jurplel/install-qt-action/action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: ${{ fromJSON(needs.inputs.outputs.pins).windows.qt }}
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qtshadertools
+          aqtversion: '==3.3.0'
+          py7zrversion: '==1.0.0'
+          dir: ${{ runner.temp }}/qt
+      - name: Build Windows handoff with T08
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Start-Transcript -Path "$env:RUNNER_TEMP/windows-build.log"
+          # aqt writes this diagnostic file into cwd; keep the source tree clean.
+          if (Test-Path aqtinstall.log) { Move-Item aqtinstall.log "$env:RUNNER_TEMP/aqtinstall.log" }
+          rustup toolchain install --no-self-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup target add x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ./packaging/release/ci-windows.ps1 -SourceSha $env:SOURCE_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Stop-Transcript
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-handoff
+          path: ${{ runner.temp }}/windows-handoff/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: windows-build-log
+          path: ${{ runner.temp }}/windows-build.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  arch:
+    needs: inputs
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ needs.inputs.outputs.arch_image }}
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 90
+    steps:
+      - name: Prepare pinned Arch package snapshot
+        env:
+          ARCH_SNAPSHOT: ${{ fromJSON(needs.inputs.outputs.pins).arch_snapshot }}
+        run: |
+          printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' "$ARCH_SNAPSHOT" > /etc/pacman.d/mirrorlist
+          pacman -Syyuu --noconfirm --needed base-devel git python
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build Arch archive with T05
+        run: bash packaging/release/ci-arch.sh "$SOURCE_SHA" 2>&1 | tee "$RUNNER_TEMP/arch-build.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: arch-handoff
+          path: /work/dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: arch-build-log
+          path: ${{ runner.temp }}/arch-build.log
+          if-no-files-found: warn
+          retention-days: 14
+
+  stage:
+    needs: [inputs, windows, arch]
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ needs.inputs.outputs.arch_image }}
+    timeout-minutes: 15
+    steps:
+      - name: Prepare pinned Arch package snapshot
+        shell: bash
+        env:
+          ARCH_SNAPSHOT: ${{ fromJSON(needs.inputs.outputs.pins).arch_snapshot }}
+        run: |
+          printf 'Server = https://archive.archlinux.org/repos/%s/$repo/os/$arch\n' "$ARCH_SNAPSHOT" > /etc/pacman.d/mirrorlist
+          pacman -Syyuu --noconfirm --needed base-devel git python
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: windows-handoff
+          path: ${{ runner.temp }}/windows-handoff
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: arch-handoff
+          path: ${{ runner.temp }}/arch-handoff
+      - name: Assemble candidate with T07 recipes and manifest
+        shell: bash
+        run: |
+          useradd --create-home packager
+          chown -R packager "$GITHUB_WORKSPACE" "$RUNNER_TEMP/windows-handoff" "$RUNNER_TEMP/arch-handoff"
+          install -d -o packager "$RUNNER_TEMP/release"
+          runuser -u packager -- python3 -B packaging/release/stage.py assemble "$SOURCE_SHA" "$RUNNER_TEMP/arch-handoff/osu-radio-0.1.0-alpha-arch-x86_64.tar.gz" "$RUNNER_TEMP/windows-handoff" "$RUNNER_TEMP/release/candidate"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: osu-radio-0.1.0-alpha-candidate-${{ inputs.source_sha }}
+          path: ${{ runner.temp }}/release/candidate/
+          include-hidden-files: true # Both generated .SRCINFO files are required.
+          if-no-files-found: error
+          retention-days: 14

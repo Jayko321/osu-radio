@@ -256,6 +256,75 @@ mod helper_process {
     }
 
     #[tokio::test]
+    async fn relocated_executable_finds_the_installed_helper_and_explicit_override_wins() {
+        const FIXTURE: &str = "OSU_RADIO_TEST_INSTALLED_LAZER_HELPER";
+        const TEST: &str = "lazer::tests::helper_process::relocated_executable_finds_the_installed_helper_and_explicit_override_wins";
+        if let Some(expected) = std::env::var_os(FIXTURE) {
+            let result = crate::import_from_lazer_realm(Path::new("unused.realm")).await;
+            let expected = expected.to_str().unwrap();
+            match expected.strip_prefix("error:") {
+                Some(message) => assert!(result.unwrap_err().to_string().contains(message)),
+                None => assert_eq!(
+                    result.unwrap()[0].beatmaps[0]
+                        .metadata
+                        .as_ref()
+                        .unwrap()
+                        .title
+                        .as_deref(),
+                    Some(expected)
+                ),
+            }
+            return;
+        }
+
+        // A whole bundle in a spaced/Cyrillic path, run from an unrelated cwd.
+        let bundle = TempDir::new().unwrap();
+        let root = bundle.path().join("Приложение osu radio");
+        let current = std::env::current_exe().unwrap();
+        let executable = root.join("bin").join(current.file_name().unwrap());
+        fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        fs::copy(&current, &executable).unwrap();
+        let helper = root.join("lib/osu-radio/osu-lazer-realm-parser");
+        fs::create_dir_all(helper.parent().unwrap()).unwrap();
+        let script = |title: &str| {
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' '{{\"source\":\"Lazer\",\"beatmaps\":[{{\"metadata\":{{\"title\":\"{title}\"}}}}]}}'\n"
+            )
+        };
+        fs::write(&helper, script("installed")).unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o700)).unwrap();
+        let (_other, explicit) = fake_helper(script("explicit").trim_start_matches("#!/bin/sh\n"));
+        let cwd = TempDir::new().unwrap();
+
+        let run = |expected: &str, helper_env: Option<&Path>| {
+            let mut child = std::process::Command::new(&executable);
+            child
+                .env_clear()
+                .args(["--exact", TEST, "--nocapture"])
+                .env(FIXTURE, expected)
+                .current_dir(cwd.path());
+            if let Some(helper_env) = helper_env {
+                child.env("OSU_LAZER_REALM_PARSER_PATH", helper_env);
+            }
+            if let Some(profile) = std::env::var_os("LLVM_PROFILE_FILE") {
+                child.env("LLVM_PROFILE_FILE", profile);
+            }
+            let output = child.output().unwrap();
+            assert!(
+                output.status.success(),
+                "{expected}: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        run("installed", None);
+        run("explicit", Some(&explicit));
+        // A broken explicit override is an error even though a working installed helper exists.
+        run("error:failed to start", Some(&root.join("missing helper")));
+        run("error:set but empty", Some(Path::new("")));
+    }
+
+    #[tokio::test]
     async fn accepts_a_fake_ndjson_helper() {
         let (_directory, helper) = fake_helper(
             "printf '%s\\n' '{\"source\":\"Lazer\",\"beatmaps\":[{\"metadata\":{\"title\":\"test\"}}]}'",
@@ -853,4 +922,40 @@ fn real_helper_accepts_an_unrelated_schema_only_in_inspection_mode() {
     let row: serde_json::Value = serde_json::from_slice(&schema.stdout).unwrap();
     assert_eq!(row["name"], "SchemaExtras");
     assert_eq!(std::fs::read(&missing).unwrap(), before);
+}
+
+#[test]
+fn helper_selection_order_is_override_then_installed_then_built() {
+    use super::scanner::{INSTALLED_HELPER_PATH, select_helper};
+    let bundle = tempfile::TempDir::new().unwrap();
+    let executable = bundle.path().join("bin/app");
+    let installed = executable.parent().unwrap().join(INSTALLED_HELPER_PATH);
+    let select = |helper: Option<&str>, exe: Option<&Path>| {
+        select_helper(helper.map(Into::into), exe, "/build/helper")
+    };
+
+    assert_eq!(
+        select(None, Some(&executable)).unwrap(),
+        Path::new("/build/helper")
+    );
+    assert_eq!(select(None, None).unwrap(), Path::new("/build/helper"));
+
+    std::fs::create_dir_all(installed.parent().unwrap()).unwrap();
+    std::fs::write(&installed, b"").unwrap();
+    assert_eq!(select(None, Some(&executable)).unwrap(), installed);
+    assert_eq!(
+        select(Some("/chosen"), Some(&executable)).unwrap(),
+        Path::new("/chosen")
+    );
+    // A missing explicit override stays explicit; an empty one is rejected up front.
+    assert_eq!(
+        select(Some("/missing"), Some(&executable)).unwrap(),
+        Path::new("/missing")
+    );
+    assert!(
+        select(Some(""), Some(&executable))
+            .unwrap_err()
+            .to_string()
+            .contains("empty")
+    );
 }

@@ -73,8 +73,11 @@ impl EmbeddedServer {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
 
-        #[cfg(target_os = "linux")]
         command.env("OSU_RADIO_SKIP_DOTENV", "1");
+
+        // Piped stdio stays attached; this only stops Windows from opening a console window.
+        #[cfg(windows)]
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
 
         if let Some(directory) = &options.working_directory {
             command.current_dir(directory);

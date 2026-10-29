@@ -20,7 +20,7 @@ The confirmed product direction is desktop music playback from local osu! instal
 | Helper invocation and cleanup | [`lazer/scanner.rs`](../../crates/radio-scanner/src/lazer/scanner.rs) | Process lifetime, pipes, parsing loop, diagnostic propagation. |
 | Helper output mapping | [`lazer/types.rs`](../../crates/radio-scanner/src/lazer/types.rs) | Private wire records map into public core values. |
 | Realm extraction | [`Program.cs`](../../tools/osu-lazer-realm-parser/Program.cs) | Dynamic, read-only Realm access and NDJSON production. |
-| Helper build integration | [`build.rs`](../../crates/radio-scanner/build.rs), [helper project](../../tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj) | Build-time executable selection; helper targets .NET 8. |
+| Helper build integration | [`build.rs`](../../crates/radio-scanner/build.rs), [helper project](../../tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj) | Build-time executable selection; helper and fixture generator target .NET 10 with Realm 20.1.0. |
 | CLI presentation and selection | [`scan.rs`](../../apps/osu-radio-cli/src/commands/scan.rs), [`import.rs`](../../apps/osu-radio-cli/src/commands/import.rs), [`helpers.rs`](../../apps/osu-radio-cli/src/commands/helpers.rs), [`types.rs`](../../apps/osu-radio-cli/src/types.rs) | Keep reusable discovery and import logic in the crates. |
 
 Discovery is also used for backend folder inspection in [installation service](../../crates/radio-services/src/osu_installation.rs). Changes to candidate selection can affect that caller even without importing anything. Its database-dependent behavior is outside this guide.
@@ -92,7 +92,7 @@ Dropping `Discovery` sets the shared worker stop flag and closes the receiver, r
 
 `import_snapshot(OsuMarker)` imports both stable and lazer into the complete `ImportedSnapshot`; `import_snapshot_with_helper` supplies an explicit lazer helper executable. Stable exposes `import_snapshot_from_stable_db(&Path)` and lazer exposes `import_snapshot_from_lazer_realm` / `import_snapshot_from_lazer_realm_with_helper`. `get_beatmap_sets`, `import_from_stable_db`, and the existing lazer wrappers fully read and validate the snapshot before returning only its sets. Failed decoding never returns partial imports. CLI `import` previews sets while `store` persists the complete snapshot.
 
-`import_from_lazer_realm` selects the configured helper; `import_from_lazer_realm_with_helper` accepts an executable explicitly and is the process-test seam. These compatibility wrappers return a fully materialized `Vec<ImportedBeatmapSet>` after validating collections too. Line-by-line decoding does not make the public import result streaming, and a CLI output limit does not reduce helper extraction or memory use.
+`import_from_lazer_realm` and `import_snapshot_from_lazer_realm` select the helper in the order: non-empty runtime `OSU_LAZER_REALM_PARSER_PATH` (empty is an error; a missing/invalid path fails at spawn and is never replaced), then the installed helper relative to `std::env::current_exe()`'s directory, then the build-time `OSU_LAZER_REALM_PARSER_BUILT_PATH`. The installed layout is the compiled-in constant `INSTALLED_HELPER_PATH` in [`lazer/scanner.rs`](../../crates/radio-scanner/src/lazer/scanner.rs): `../lib/osu-radio/osu-lazer-realm-parser` (Linux, covers `usr/bin` + `usr/lib/osu-radio` for archive, Arch and AppImage) or `helper/osu-lazer-realm-parser.exe` (Windows). `build.rs` is unchanged by this: it only supplies the absolute development fallback, so packaging (T05/T07/T08) places the helper at that layout and needs no build-time flag. The `*_with_helper` functions use exactly the path they are given. Windows children are started with `CREATE_NO_WINDOW` (pipes unchanged). `import_from_lazer_realm` `import_from_lazer_realm_with_helper` accepts an executable explicitly and is the process-test seam. These compatibility wrappers return a fully materialized `Vec<ImportedBeatmapSet>` after validating collections too. Line-by-line decoding does not make the public import result streaming, and a CLI output limit does not reduce helper extraction or memory use.
 
 The CLI's `scan --root` constrains discovery, resolving a relative root against the working directory. `--source` becomes the walk's kind filter; `--first` and `--limit` stop marker discovery and conflict with each other. A scan limit of zero is rejected. Text output renders arrivals as they are received; JSON output collects first.
 
@@ -196,3 +196,17 @@ Executed for the collection-import change (Linux, 2026-10-04):
 `cargo test -p radio-scanner --locked` passed all 48 tests, including the genuine
 Realm fixture round trip. Game installations were not read or modified;
 Windows helper execution and real-library compatibility remain unverified.
+
+Executed for [T03](../impl/first-release-packaging/T03.md) (Arch Linux x64, 2026-10-27): helper selection order and the relocated-bundle process probe (`helper_selection_order_is_override_then_installed_then_built`, `relocated_executable_finds_the_installed_helper_and_explicit_override_wins` in [`lazer/tests.rs`](../../crates/radio-scanner/src/lazer/tests.rs)); Windows branch only type-checked with `cargo check --target x86_64-pc-windows-msvc`, never run.
+
+Executed for [.NET 10 migration T01](../impl/first-release-packaging/T01.md)
+(Arch Linux x64, 2026-10-27): five build-script tests and five real-helper tests
+passed; the latter also passed separately against framework-dependent and
+self-contained `linux-x64` publish apphosts. A separate runtime probe used
+pre-generated synthetic Realm files with system .NET hidden: self-contained
+NDJSON/schema/errors matched the framework-dependent baseline, input SHA-256
+values stayed unchanged, and no media directory was created. The
+framework-dependent apphost failed without system .NET as a negative control.
+Scoped scanner Clippy and workspace formatting passed. Windows directories were
+cross-published only; native Windows and actual lazer-library compatibility
+remain unverified. SDK/runtime/native Realm versions and artifacts are in T01.

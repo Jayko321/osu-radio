@@ -38,7 +38,7 @@ jobs:
         run: rustup toolchain install --no-self-update
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
       - name: Install native build dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev libclang-dev dbus-daemon
       - name: Scanner helper build script tests
@@ -69,7 +69,7 @@ jobs:
         run: rustup toolchain install --no-self-update
       - uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
       - name: Install native build dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev libclang-dev
       - name: Lint headless packages (SQLite, API docs enabled)

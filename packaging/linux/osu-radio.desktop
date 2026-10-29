@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=osu! radio
+Comment=Listen to music from local osu! libraries
+Exec=osu-radio
+Icon=osu-radio
+Terminal=false
+Categories=AudioVideo;Audio;Player;

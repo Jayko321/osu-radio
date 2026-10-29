@@ -6,6 +6,7 @@ pub struct Model {
     #[sea_orm(primary_key)]
     pub id: i32,
     pub difficulty_name: Option<String>,
+    pub search_difficulty_name: String,
     pub bpm: Option<f64>,
     pub hash: Option<String>,
     pub md5_hash: Option<String>,

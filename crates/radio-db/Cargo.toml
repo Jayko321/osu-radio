@@ -11,7 +11,7 @@ workspace = true
 anyhow.workspace = true
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
 radio-core = { path = "../radio-core/" }
-sea-orm = { version = "=2.0.2", default-features = false, features = ["macros", "runtime-tokio-rustls", "with-json"] }
+sea-orm = { version = "=2.0.2", default-features = false, features = ["macros", "runtime-tokio-rustls", "stream", "with-json"] }
 sea-orm-migration = { version = "=2.0.2", default-features = false, features = ["runtime-tokio-rustls"] }
 serde_json = "1.0.145"
 hex = "0.4"

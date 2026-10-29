@@ -20,6 +20,11 @@ impl BeatmapRepository<'_> {
         Ok(into_model(
             beatmap::ActiveModel {
                 difficulty_name: Set(imported.difficulty_name.clone()),
+                search_difficulty_name: Set(imported
+                    .difficulty_name
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_lowercase()),
                 bpm: Set(imported.bpm),
                 hash: Set(imported.hash.clone()),
                 md5_hash: Set(imported.md5_hash.clone()),

@@ -33,6 +33,8 @@ The standalone component gallery needs no server or working-directory assets.
   On 2026-10-17 the maintainer confirmed oral permission to redistribute both
   images. No separate image license text was supplied; the project's MIT
   license does not relicense them.
+  `packaging/icons/` holds ICO/PNG downscales of `lazer.png` for packaging;
+  see its [README](../../../packaging/icons/README.md). They have the same status.
 
 The Arch distribution carries the complete notices and the dependency inventory
 in [packaging/arch/licenses](../../../packaging/arch/licenses/README.md).

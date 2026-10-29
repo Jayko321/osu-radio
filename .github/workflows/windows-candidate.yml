@@ -1,0 +1,73 @@
+name: Windows installer candidate
+
+on:
+  push:
+    branches: [ci/t08-windows-candidate]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        with:
+          arch: x64
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        with:
+          dotnet-version: '10.0.113'
+      - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: qtshadertools
+          aqtversion: '==3.3.0'
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install --no-self-update
+          rustup target add x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install pinned Inno Setup
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.3.exe'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' -OutFile $installer
+          if ((Get-FileHash $installer -Algorithm SHA256).Hash -ne '9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732') { throw 'Inno installer checksum mismatch' }
+          $signature = Get-AuthenticodeSignature $installer
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Pyrsys B\.V\.') { throw 'Inno installer signature invalid' }
+          $inno = Join-Path $env:RUNNER_TEMP 'inno'
+          $process = Start-Process -FilePath $installer -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', "/DIR=$inno" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Inno Setup install failed: $($process.ExitCode)" }
+      - name: Build diagnostic candidate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $materials = Join-Path $env:RUNNER_TEMP 'candidate-materials'
+          New-Item -ItemType Directory $materials | Out-Null
+          Copy-Item LICENSE $materials
+          Copy-Item packaging/arch/licenses/* $materials
+          Set-Content (Join-Path $materials 'NOT-RELEASE-READY.txt') 'Diagnostic candidate only. Windows-specific license, Qt source and runtime inventory has not been audited.'
+          $iscc = Join-Path $env:RUNNER_TEMP 'inno/ISCC.exe'
+          $redist = Join-Path $env:VCToolsRedistDir 'x64/Microsoft.VC143.CRT'
+          $hash = (Get-FileHash $iscc -Algorithm SHA256).Hash
+          $sdkConfig = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) 'global.json'
+          Set-Content $sdkConfig '{"sdk":{"version":"10.0.113","rollForward":"disable"}}'
+          python packaging/windows/build.py --qt "$env:QT_ROOT_DIR" --redist "$redist" --iscc "$iscc" --materials "$materials" --work "$env:RUNNER_TEMP/osu-radio-build" --qt-version 6.8.3 --dotnet-sdk 10.0.113 --msvc-version "$env:VCToolsVersion" --windows-sdk "$($env:WindowsSDKVersion.TrimEnd('\'))" --iscc-sha256 "$hash"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload diagnostic candidate
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-installer-candidate-not-for-release
+          path: |
+            ${{ runner.temp }}/osu-radio-build/output/*.exe
+            ${{ runner.temp }}/osu-radio-build/payload.sha256
+          if-no-files-found: error
+          retention-days: 7

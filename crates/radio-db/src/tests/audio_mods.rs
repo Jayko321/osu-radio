@@ -45,7 +45,7 @@ pub(super) async fn contracts(database: &Database, url: &str) {
         .record_started(&source, 8, 1234)
         .await
         .unwrap();
-    let map = database.beatmaps().get(91).await.unwrap();
+    let map = read_v11_beatmap(database, 91).await;
     let playlist = database.playlists().get(91).await.unwrap();
     let other = Database::connect(url).await.unwrap();
     let (one, two) = tokio::join!(database.migrate(), other.migrate());
@@ -176,7 +176,7 @@ pub(super) async fn contracts(database: &Database, url: &str) {
     );
     constraints(database, &source).await;
     // Downgrading past v15 removes only mods (and the newer queue modes) and re-upgrades without losing models.
-    Migrator::down(&database.connection, Some(2)).await.unwrap();
+    Migrator::down(&database.connection, Some(3)).await.unwrap();
     database.migrate().await.unwrap();
     assert_eq!(database.beatmaps().get(91).await.unwrap(), map);
     assert_eq!(database.playlists().get(91).await.unwrap(), playlist);

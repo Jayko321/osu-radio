@@ -5,8 +5,15 @@ This is an implementation-detail helper for `radio-scanner`. It opens osu!lazer'
 to stdout. Diagnostics and failures are written to stderr.
 
 Cargo builds the helper automatically when `radio-scanner` is built. This requires
-the .NET 8 SDK. To use an already-built helper instead, set
+the .NET 10 SDK. Both the helper and fixture generator target `net10.0` and keep
+Realm `20.1.0`. To use an already-built helper instead, set
 `OSU_LAZER_REALM_PARSER_PATH` while building or running the Rust application.
+
+At runtime the backend/CLI looks for the helper in this order: a non-empty
+`OSU_LAZER_REALM_PARSER_PATH` (an invalid override is an error, never replaced by
+another helper); the installed helper relative to the running executable's directory
+(`../lib/osu-radio/osu-lazer-realm-parser` on Linux, `helper/osu-lazer-realm-parser.exe`
+on Windows); the path baked in at build time.
 
 Build or run it directly with:
 
@@ -15,6 +22,23 @@ dotnet build tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj
 dotnet run --project tools/osu-lazer-realm-parser -- --schema /path/to/client.realm
 dotnet run --project tools/osu-lazer-realm-parser -- /path/to/client.realm
 ```
+
+Publish a directory with an apphost for the target OS (`linux-x64` on Linux,
+`win-x64` on Windows):
+
+```sh
+dotnet publish tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj -c Release -r linux-x64 --self-contained false -o /absolute/path/helper-fdd
+dotnet publish tools/osu-lazer-realm-parser/osu-lazer-realm-parser.csproj -c Release -r linux-x64 --self-contained true -o /absolute/path/helper-scd
+```
+
+The framework-dependent directory needs a .NET 10 runtime; the self-contained
+directory includes it. Keep the whole publish directory, including native Realm
+libraries. Do not enable trimming, AOT or single-file publishing. See the
+[.NET publishing documentation](https://learn.microsoft.com/en-us/dotnet/core/deploying/).
+To exercise either directory, set `OSU_LAZER_REALM_PARSER_PATH` to its absolute
+apphost path at Cargo build time and run the real-helper tests below. Cargo's
+build script tracks changes to that variable. Generate fixtures with the SDK
+before testing self-contained execution without a system runtime.
 
 `--schema` emits one JSON object per Realm object type, including its persisted
 fields. The default mode emits one `radio-core`-shaped beatmap-set object per
@@ -49,3 +73,5 @@ temporary directories and check the production executable and Rust importer:
 Run `cargo test -p radio-scanner --locked -- real_ --test-threads=1` from the root.
 These tests use synthetic Realm data, not a real lazer installation. Native
 Windows/macOS behavior and C# source-line coverage remain unverified.
+For the .NET 10 Linux publish and no-system-runtime results, see the
+[T01 report](../../docs/impl/first-release-packaging/T01.md#отчёт-о-выполнении).

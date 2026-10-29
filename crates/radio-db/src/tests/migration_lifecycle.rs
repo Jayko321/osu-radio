@@ -14,6 +14,7 @@ pub(super) async fn contracts(database: &Database) {
     initial_schema_constraints_and_ownership(database).await;
     reversible_migrations_preserve_the_library(database).await;
     background_downgrade_and_native_path_guard(database).await;
+    search_text_upgrade(database).await;
 }
 
 #[allow(clippy::too_many_lines)] // Keep the complete frozen v1 ownership fixture together.
@@ -171,12 +172,12 @@ async fn reversible_migrations_preserve_the_library(database: &Database) {
     .await
     .unwrap();
     assert_schema(database, 4).await;
-    for version in 5..=16 {
+    for version in 5..=17 {
         Migrator::up(&database.connection, Some(1)).await.unwrap();
         assert_schema(database, version).await;
         assert_library(database, &installation, set.id, map.id).await;
     }
-    for version in (4..=15).rev() {
+    for version in (4..=16).rev() {
         Migrator::down(&database.connection, Some(1)).await.unwrap();
         assert_schema(database, version).await;
         assert_library(database, &installation, set.id, map.id).await;
@@ -192,7 +193,7 @@ async fn reversible_migrations_preserve_the_library(database: &Database) {
     assert_schema(database, 4).await;
     assert_library(database, &installation, set.id, map.id).await;
     database.migrate().await.unwrap();
-    assert_schema(database, 16).await;
+    assert_schema(database, 17).await;
     assert_library(database, &installation, set.id, map.id).await;
     assert_eq!(
         database.queue().get().await.unwrap(),
@@ -232,6 +233,11 @@ async fn assert_schema(database: &Database, version: usize) {
     }
     for (table, column, since) in [
         ("beatmaps", "background_path", 2),
+        ("beatmaps", "search_difficulty_name", 17),
+        ("beatmap_metadata", "search_title", 17),
+        ("beatmap_metadata", "search_title_unicode", 17),
+        ("beatmap_metadata", "search_artist", 17),
+        ("beatmap_metadata", "search_artist_unicode", 17),
         ("playback_queue", "current_entry_id", 12),
         ("playback_queue", "waiting_for_check", 13),
         ("playback_queue", "launch_audio_source_id", 14),
@@ -319,6 +325,131 @@ async fn assert_library(
         .unwrap()
         .unwrap();
     assert_eq!(row.try_get::<i32>("", "id").unwrap(), 42);
+}
+
+#[allow(clippy::too_many_lines)] // One frozen fixture covers paged backfill, rollback and reversible upgrades.
+async fn search_text_upgrade(database: &Database) {
+    use sea_orm::sea_query::{Alias, Query};
+    Migrator::up(&database.connection, Some(16)).await.unwrap();
+    sql(database, "INSERT INTO osu_installations (id,user_data_id,kind,root_path,marker_path) VALUES (1,1,'stable','\"/search-upgrade\"','\"/search-upgrade/osu!.db\"')").await;
+    sql(
+        database,
+        "INSERT INTO beatmap_sets (id,installation_id) VALUES (1,1)",
+    )
+    .await;
+    sql(
+        database,
+        "INSERT INTO audio_sources (id,kind,location) VALUES (1,'local','search-upgrade')",
+    )
+    .await;
+    // Cross two backfill page boundaries and retain NULL fields and metadata identities.
+    for id in 1..=257 {
+        let text = (id % 2 == 1).then_some("İSTANBUL ЁЖ ΟΣ");
+        database
+            .connection
+            .execute(
+                Query::insert()
+                    .into_table(Alias::new("beatmap_metadata"))
+                    .columns(
+                        ["hash", "title", "title_unicode", "artist", "artist_unicode"]
+                            .map(Alias::new),
+                    )
+                    .values_panic([
+                        format!("legacy-{id:03}").into(),
+                        text.into(),
+                        text.into(),
+                        text.into(),
+                        text.into(),
+                    ]),
+            )
+            .await
+            .unwrap();
+        database
+            .connection
+            .execute(
+                Query::insert()
+                    .into_table(Alias::new("beatmaps"))
+                    .columns(
+                        [
+                            "id",
+                            "beatmap_set_id",
+                            "audio_source_id",
+                            "metadata_hash",
+                            "difficulty_name",
+                        ]
+                        .map(Alias::new),
+                    )
+                    .values_panic([
+                        id.into(),
+                        1.into(),
+                        1.into(),
+                        format!("legacy-{id:03}").into(),
+                        text.into(),
+                    ]),
+            )
+            .await
+            .unwrap();
+    }
+    #[cfg(feature = "sqlite")]
+    {
+        sql(database, "CREATE TRIGGER fail_search_upgrade BEFORE UPDATE ON beatmap_metadata BEGIN SELECT RAISE(ABORT, 'backfill failure'); END").await;
+        assert!(database.migrate().await.is_err());
+        assert_schema(database, 16).await;
+        sql(database, "DROP TRIGGER fail_search_upgrade").await;
+    }
+    for _ in 0..2 {
+        database.migrate().await.unwrap();
+        assert_schema(database, 17).await;
+        let rows = database.connection.query_all_raw(Statement::from_string(
+            database.connection.get_database_backend(),
+            "SELECT m.*, b.id, b.difficulty_name, b.search_difficulty_name FROM beatmap_metadata m \
+             JOIN beatmaps b ON b.metadata_hash = m.hash ORDER BY b.id",
+        )).await.unwrap();
+        assert_eq!(rows.len(), 257);
+        for row in rows {
+            let id = row.try_get::<i32>("", "id").unwrap();
+            assert_eq!(
+                row.try_get::<String>("", "hash").unwrap(),
+                format!("legacy-{id:03}")
+            );
+            for (original, normalized) in [
+                ("title", "search_title"),
+                ("title_unicode", "search_title_unicode"),
+                ("artist", "search_artist"),
+                ("artist_unicode", "search_artist_unicode"),
+                ("difficulty_name", "search_difficulty_name"),
+            ] {
+                let original = row.try_get::<Option<String>>("", original).unwrap();
+                assert_eq!(
+                    original.as_deref(),
+                    (id % 2 == 1).then_some("İSTANBUL ЁЖ ΟΣ")
+                );
+                assert_eq!(
+                    row.try_get::<String>("", normalized).unwrap(),
+                    original.unwrap_or_default().to_lowercase()
+                );
+            }
+        }
+        assert_eq!(
+            database
+                .beatmap_sets()
+                .matching_audio_sources("i\u{0307}stan")
+                .await
+                .unwrap(),
+            [1]
+        );
+        assert!(
+            database
+                .beatmap_sets()
+                .matching_audio_sources("missing")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        Migrator::down(&database.connection, Some(1)).await.unwrap();
+        assert_schema(database, 16).await;
+    }
+    drop_application_tables(database).await;
 }
 
 async fn background_downgrade_and_native_path_guard(database: &Database) {

@@ -17,12 +17,14 @@ pub struct BeatmapMetadataRepository<'a> {
 
 impl BeatmapMetadataRepository<'_> {
     pub async fn search_metadata(&self) -> Result<Vec<crate::model::SearchMetadata>> {
-        use sea_orm::{ConnectionTrait, FromQueryResult, Statement};
-        Ok(SearchMetadataRow::find_by_statement(Statement::from_string(
-            self.connection.get_database_backend(),
-            "SELECT hash, title, title_unicode, artist, artist_unicode FROM beatmap_metadata",
-        ))
-        .all(&self.connection)
+        use sea_orm::{ConnectionTrait, Statement};
+        Ok(super::query_all::<SearchMetadataRow>(
+            &self.connection,
+            Statement::from_string(
+                self.connection.get_database_backend(),
+                "SELECT hash, title, title_unicode, artist, artist_unicode FROM beatmap_metadata",
+            ),
+        )
         .await?
         .into_iter()
         .map(|row| crate::model::SearchMetadata {
@@ -69,6 +71,22 @@ impl BeatmapMetadataRepository<'_> {
             title_unicode: imported.title_unicode.clone(),
             artist: imported.artist.clone(),
             artist_unicode: imported.artist_unicode.clone(),
+            search_title: imported.title.as_deref().unwrap_or_default().to_lowercase(),
+            search_title_unicode: imported
+                .title_unicode
+                .as_deref()
+                .unwrap_or_default()
+                .to_lowercase(),
+            search_artist: imported
+                .artist
+                .as_deref()
+                .unwrap_or_default()
+                .to_lowercase(),
+            search_artist_unicode: imported
+                .artist_unicode
+                .as_deref()
+                .unwrap_or_default()
+                .to_lowercase(),
             author: imported.author.as_ref().map(|author| {
                 serde_json::json!({
                     "online_id": author.online_id,

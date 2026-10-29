@@ -279,21 +279,8 @@ pub(super) async fn unicode_migration_contracts(database: &Database) {
         .insert(installation.id, &imported[0])
         .await
         .unwrap();
-    let mut first = metadata("First");
-    first.title_unicode = Some("最初".into());
-    first.artist_unicode = Some("作者".into());
-    let mut second = first.clone();
-    second.title_unicode = Some("第二".into());
-    let first = database
-        .beatmap_metadata()
-        .get_or_insert(&first)
-        .await
-        .unwrap();
-    let second = database
-        .beatmap_metadata()
-        .get_or_insert(&second)
-        .await
-        .unwrap();
+    sql(database, "INSERT INTO beatmap_metadata(hash,title,title_unicode,artist,artist_unicode) VALUES \
+        ('unicode-first','First','最初','Artist','作者'),('unicode-second','First','第二','Artist','作者')").await;
     let online = database
         .audio_sources()
         .get_or_insert(&SourceType::Online("https://example.test/audio".into()))
@@ -311,16 +298,16 @@ pub(super) async fn unicode_migration_contracts(database: &Database) {
         .unwrap();
     // Earlier missing/Online beatmaps cannot win over a usable Local/Copied candidate.
     for (audio, metadata) in [
-        (None, &second),
-        (Some(online.id), &second),
-        (Some(copied.id), &first),
-        (Some(local.id), &second),
+        (None, "unicode-second"),
+        (Some(online.id), "unicode-second"),
+        (Some(copied.id), "unicode-first"),
+        (Some(local.id), "unicode-second"),
     ] {
         insert_legacy_beatmap(
             database,
             set.id,
             &imported[0].beatmaps[0],
-            Some(metadata.hash.clone()),
+            Some(metadata.into()),
             audio,
             None,
         )
@@ -375,7 +362,7 @@ pub(super) async fn unicode_migration_contracts(database: &Database) {
         database.playlists().get(701).await.unwrap(),
         Some(saved.clone())
     );
-    crate::migrations::Migrator::down(&database.connection, Some(7))
+    crate::migrations::Migrator::down(&database.connection, Some(8))
         .await
         .unwrap();
     assert!(

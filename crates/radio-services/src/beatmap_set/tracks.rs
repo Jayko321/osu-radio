@@ -26,55 +26,59 @@ pub struct TrackDifficulty {
 
 pub(crate) fn from_sets(sets: Vec<BeatmapSetWithAudio>) -> Vec<LibraryTrack> {
     let mut order = Vec::new();
-    let mut groups = HashMap::<_, Vec<_>>::new();
+    let mut groups = HashMap::<_, (Option<i32>, LibraryTrack)>::new();
     for set in sets {
         for audio in set.audio_sources {
             if let std::collections::hash_map::Entry::Vacant(entry) = groups.entry(audio.id) {
                 order.push(audio.id);
-                entry.insert(Vec::new());
+                entry.insert((
+                    None,
+                    LibraryTrack {
+                        audio_source_id: audio.id,
+                        last_played_at_ms: None,
+                        volume_percent: None,
+                        mods: None,
+                        title: None,
+                        title_unicode: None,
+                        artist: None,
+                        artist_unicode: None,
+                        cover_beatmap_id: None,
+                        difficulties: Vec::new(),
+                    },
+                ));
             }
         }
         for map in set.beatmaps {
-            if let Some(maps) = map.audio_source_id.and_then(|id| groups.get_mut(&id)) {
-                maps.push((
-                    map,
-                    set.beatmap_set.id,
-                    set.beatmap_set.online_id,
-                    set.has_multiple_audio_sources,
-                ));
+            if let Some((representative, track)) =
+                map.audio_source_id.and_then(|id| groups.get_mut(&id))
+            {
+                if representative.is_none_or(|id| map.id < id) {
+                    *representative = Some(map.id);
+                    track.title = map.title;
+                    track.title_unicode = map.title_unicode;
+                    track.artist = map.artist;
+                    track.artist_unicode = map.artist_unicode;
+                }
+                if map.has_cover {
+                    track.cover_beatmap_id =
+                        Some(track.cover_beatmap_id.map_or(map.id, |id| id.min(map.id)));
+                }
+                track.difficulties.push(TrackDifficulty {
+                    beatmap_id: map.id,
+                    beatmap_set_id: set.beatmap_set.id,
+                    beatmap_set_online_id: set.beatmap_set.online_id,
+                    difficulty_name: map.difficulty_name,
+                    set_has_multiple_audio_sources: set.has_multiple_audio_sources,
+                });
             }
         }
     }
     order
         .into_iter()
-        .map(|id| {
-            let mut maps = groups.remove(&id).unwrap_or_default();
-            maps.sort_by_key(|(map, _, _, _)| map.id);
-            let representative = maps.first().map(|(map, _, _, _)| map);
-            LibraryTrack {
-                audio_source_id: id,
-                last_played_at_ms: None,
-                volume_percent: None,
-                mods: None,
-                title: representative.and_then(|map| map.title.clone()),
-                title_unicode: representative.and_then(|map| map.title_unicode.clone()),
-                artist: representative.and_then(|map| map.artist.clone()),
-                artist_unicode: representative.and_then(|map| map.artist_unicode.clone()),
-                cover_beatmap_id: maps
-                    .iter()
-                    .find(|(map, _, _, _)| map.has_cover)
-                    .map(|(map, _, _, _)| map.id),
-                difficulties: maps
-                    .into_iter()
-                    .map(|(map, set_id, online_id, split)| TrackDifficulty {
-                        beatmap_id: map.id,
-                        beatmap_set_id: set_id,
-                        beatmap_set_online_id: online_id,
-                        difficulty_name: map.difficulty_name,
-                        set_has_multiple_audio_sources: split,
-                    })
-                    .collect(),
-            }
+        .filter_map(|id| {
+            let (_, mut track) = groups.remove(&id)?;
+            track.difficulties.sort_by_key(|map| map.beatmap_id);
+            Some(track)
         })
         .collect()
 }

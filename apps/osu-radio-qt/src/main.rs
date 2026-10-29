@@ -1,3 +1,4 @@
+#![cfg_attr(all(windows, not(test)), windows_subsystem = "windows")]
 #![cfg_attr(
     test,
     allow(
