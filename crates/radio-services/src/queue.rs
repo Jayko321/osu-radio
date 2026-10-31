@@ -391,6 +391,10 @@ impl QueueService<'_> {
         Ok((state, tracks))
     }
 
+    pub async fn revision(&self) -> Result<u64> {
+        self.database.queue().revision().await
+    }
+
     pub async fn playback(&self) -> Result<PlaybackAssignment> {
         let transaction = self.database.begin_read().await?;
         let state = transaction.queue().get().await?;
@@ -405,24 +409,40 @@ impl QueueService<'_> {
 
     /// Persisted unfinished checks, with the current waiting launch first.
     pub async fn pending_checks(&self) -> Result<Vec<QueueCheck>> {
-        let state = self.get().await?;
-        let mut checks = state
-            .entries
+        self.pending_checks_excluding(&[], usize::MAX >> 1).await
+    }
+
+    /// Select only available worker slots, excluding exact stale-sensitive check identities.
+    pub async fn pending_checks_excluding(
+        &self,
+        excluded: &[QueueCheck],
+        limit: usize,
+    ) -> Result<Vec<QueueCheck>> {
+        let excluded = excluded
             .iter()
-            .filter(|e| e.availability == QueueAvailability::Checking)
-            .filter_map(|e| {
-                Some(QueueCheck {
-                    entry_id: e.id,
-                    generation: e.check_generation,
-                    audio_source_id: e.audio_source_id?,
-                    source: e.audio_source.clone()?,
-                })
+            .map(|check| {
+                (
+                    check.entry_id,
+                    QueueLaunchSource {
+                        audio_source_id: check.audio_source_id,
+                        source: check.source.clone(),
+                        check_generation: check.generation,
+                    },
+                )
             })
             .collect::<Vec<_>>();
-        if state.waiting_for_check {
-            checks.sort_by_key(|c| Some(c.entry_id) != state.current_entry_id);
-        }
-        Ok(checks)
+        let transaction = self.database.begin_read().await?;
+        let checks = transaction.queue().pending_checks(&excluded, limit).await?;
+        transaction.commit().await?;
+        Ok(checks
+            .into_iter()
+            .map(|(entry_id, source)| QueueCheck {
+                entry_id,
+                generation: source.check_generation,
+                audio_source_id: source.audio_source_id,
+                source: source.source,
+            })
+            .collect())
     }
 
     pub async fn apply_check(

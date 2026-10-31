@@ -201,7 +201,18 @@ fn decodes_both_sides_of_layout_transitions_and_tagged_star_widths() {
             star_tags: [0x0c, 0x0d, 0x0c, 0x0d],
             ..Entry::default()
         };
-        let records = decode(&database(version, sizes, &[entry.clone(), entry])).unwrap();
+        let bytes = database(version, sizes, &[entry.clone(), entry]);
+        let records = decode(&bytes).unwrap();
+        let count: usize = super::reader::decode_with(
+            &bytes,
+            Path::new("fixture/osu!.db"),
+            |count: &mut usize, _| {
+                *count += 1;
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(count, records.len());
         assert_eq!(records.len(), 2, "version {version}, sizes {sizes}");
         assert_eq!(records[1].online_id, Some(123));
         assert_eq!(records[1].beatmap.bpm, Some(120.0));
@@ -273,6 +284,17 @@ fn rejects_every_truncation_without_returning_partial_records() {
     ] {
         let bytes = database(version, sizes, &[Entry::default(), Entry::default()]);
         for end in 0..bytes.len() {
+            assert!(
+                super::reader::decode_with(
+                    &bytes[..end],
+                    Path::new("fixture/osu!.db"),
+                    |count: &mut usize, _| {
+                        *count += 1;
+                        Ok(())
+                    }
+                )
+                .is_err()
+            );
             let error = decode(&bytes[..end])
                 .err()
                 .expect("truncated snapshot must fail");
@@ -466,6 +488,12 @@ async fn dispatches_stable_and_groups_normalized_folders_in_encounter_order() {
     })
     .await
     .unwrap();
+    assert_eq!(
+        super::count_beatmaps(&temp.path().join("osu!.db"))
+            .await
+            .unwrap(),
+        sets.iter().map(|set| set.beatmaps.len()).sum::<usize>()
+    );
     assert_eq!(sets.len(), 3);
     assert_eq!(sets[0].source, OsuKind::Stable);
     assert_eq!(sets[0].online_id, Some(123));
@@ -737,6 +765,11 @@ async fn rejects_absolute_and_escaping_folder_audio_osu_and_artwork_references()
                     &format!("[Events]\n0,0,\"{value}\",0,0"),
                 );
             }
+            assert!(
+                super::count_beatmaps(&temp.path().join("osu!.db"))
+                    .await
+                    .is_err()
+            );
             let error = import_from_stable_db(&temp.path().join("osu!.db"))
                 .await
                 .unwrap_err();
@@ -783,6 +816,7 @@ async fn unreadable_collections_and_configuration_abort_without_changing_the_sou
         } else {
             fs::write(&path, [0xff]).unwrap();
         }
+        assert!(super::count_beatmaps(&database_path).await.is_err());
         let error = super::import_snapshot_from_stable_db(&database_path)
             .await
             .unwrap_err();

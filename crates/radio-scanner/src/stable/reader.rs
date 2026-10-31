@@ -15,18 +15,31 @@ pub(super) struct Record {
 }
 
 pub(super) fn decode(bytes: &[u8], path: &Path) -> Result<Vec<Record>> {
+    decode_with(bytes, path, |records: &mut Vec<Record>, record| {
+        records.push(record);
+        Ok(())
+    })
+}
+
+pub(super) fn decode_with<T: Default>(
+    bytes: &[u8],
+    path: &Path,
+    mut consume: impl FnMut(&mut T, Record) -> Result<()>,
+) -> Result<T> {
     let version = Reader::new(bytes, path).i32()?;
     if version == 2019_11_06 {
         // The wiki and stable readers disagree on this boundary. Validate the
-        // entire snapshot before accepting either layout (no filesystem work).
-        match decode_layout(bytes, path, false) {
+        // entire snapshot before accepting either layout; failed attempts discard the accumulator.
+        match decode_layout(bytes, path, false, &mut consume) {
             Ok(records) => Ok(records),
-            Err(without_size) => decode_layout(bytes, path, true).with_context(|| {
-                format!("2019_11_06 also failed without entry sizes: {without_size:#}")
-            }),
+            Err(without_size) => {
+                decode_layout(bytes, path, true, &mut consume).with_context(|| {
+                    format!("2019_11_06 also failed without entry sizes: {without_size:#}")
+                })
+            }
         }
     } else {
-        decode_layout(bytes, path, version < 2019_11_06)
+        decode_layout(bytes, path, version < 2019_11_06, &mut consume)
     }
 }
 
@@ -69,7 +82,12 @@ pub(super) fn decode_collections(bytes: &[u8], path: &Path) -> Result<Vec<Import
     Ok(collections)
 }
 
-fn decode_layout(bytes: &[u8], path: &Path, entry_sizes: bool) -> Result<Vec<Record>> {
+fn decode_layout<T: Default>(
+    bytes: &[u8],
+    path: &Path,
+    entry_sizes: bool,
+    consume: &mut impl FnMut(&mut T, Record) -> Result<()>,
+) -> Result<T> {
     let mut reader = Reader::new(bytes, path);
     let version = reader.i32()?;
     reader.check(version > 0, "invalid database version")?;
@@ -78,7 +96,7 @@ fn decode_layout(bytes: &[u8], path: &Path, entry_sizes: bool) -> Result<Vec<Rec
     reader.take(8)?; // Account unlock date (Windows ticks).
     reader.string()?; // Player name.
     let count = reader.count("beatmap count", 1)?;
-    let mut records = Vec::new();
+    let mut records = T::default();
     for index in 0..count {
         reader.record = Some(index);
         let offset = reader.position;
@@ -94,7 +112,7 @@ fn decode_layout(bytes: &[u8], path: &Path, entry_sizes: bool) -> Result<Vec<Rec
         } else {
             None
         };
-        records.push(reader.beatmap(version, index, offset)?);
+        consume(&mut records, reader.beatmap(version, index, offset)?)?;
         if let Some(end) = entry_end {
             reader.check(
                 reader.position == end,

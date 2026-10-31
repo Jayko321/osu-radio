@@ -541,6 +541,22 @@ pub(crate) async fn events(State(state): State<AppState>) -> Result<Response, Ap
                 };
                 // Heartbeats also detect commits made by a different Services handle/process,
                 // or a request cancelled after its commit but before notification.
+                let revision = match state.services().queue().revision().await {
+                    Ok(revision) => revision,
+                    Err(error) => {
+                        eprintln!("Playback stream revision read failed: {error:#}");
+                        return None;
+                    }
+                };
+                if last_revision.is_some_and(|last| revision <= last) {
+                    if heartbeat_tick {
+                        return Some((
+                            Ok("\n".to_owned()),
+                            (state, changes, heartbeat, None, last_revision),
+                        ));
+                    }
+                    continue;
+                }
                 let assignment = match state.services().queue().playback().await {
                     Ok(assignment) => assignment,
                     Err(error) => {

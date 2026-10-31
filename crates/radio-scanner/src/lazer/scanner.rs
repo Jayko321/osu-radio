@@ -78,6 +78,43 @@ pub async fn import_snapshot_from_lazer_realm_with_helper(
     realm_path: &Path,
     helper_path: impl AsRef<OsStr>,
 ) -> Result<ImportedSnapshot> {
+    let mut snapshot = ImportedSnapshot::default();
+    consume_records(realm_path, helper_path, |record| match record {
+        LazerRecord::BeatmapSet(set) => snapshot.beatmap_sets.push(set),
+        LazerRecord::Collection(collection) => snapshot.collections.push(collection),
+    })
+    .await?;
+    Ok(snapshot)
+}
+
+pub(crate) async fn count_beatmaps(realm_path: &Path) -> Result<usize> {
+    let helper_path = select_helper(
+        env::var_os(HELPER_PATH_ENV),
+        env::current_exe().ok().as_deref(),
+        BUILT_HELPER_PATH,
+    )?;
+    count_with_helper(realm_path, helper_path).await
+}
+
+pub(crate) async fn count_with_helper(
+    realm_path: &Path,
+    helper_path: impl AsRef<OsStr>,
+) -> Result<usize> {
+    let mut count = Some(0_usize);
+    consume_records(realm_path, helper_path, |record| {
+        if let LazerRecord::BeatmapSet(set) = record {
+            count = count.and_then(|count| count.checked_add(set.beatmaps.len()));
+        }
+    })
+    .await?;
+    count.context("beatmap count overflow")
+}
+
+async fn consume_records(
+    realm_path: &Path,
+    helper_path: impl AsRef<OsStr>,
+    mut consume: impl FnMut(LazerRecord),
+) -> Result<()> {
     let helper_path = helper_path.as_ref();
     let mut command = Command::new(helper_path);
     command
@@ -114,8 +151,6 @@ pub async fn import_snapshot_from_lazer_realm_with_helper(
     });
 
     let mut lines = BufReader::new(stdout).lines();
-    let mut snapshot = ImportedSnapshot::default();
-
     loop {
         let line = match lines.next_line().await {
             Ok(Some(line)) => line,
@@ -134,10 +169,7 @@ pub async fn import_snapshot_from_lazer_realm_with_helper(
             }
         };
 
-        match record {
-            LazerRecord::BeatmapSet(set) => snapshot.beatmap_sets.push(set),
-            LazerRecord::Collection(collection) => snapshot.collections.push(collection),
-        }
+        consume(record);
     }
 
     let status = match child.wait().await {
@@ -173,7 +205,7 @@ pub async fn import_snapshot_from_lazer_realm_with_helper(
             .context("failed to flush forwarded Realm helper stderr")?;
     }
 
-    Ok(snapshot)
+    Ok(())
 }
 
 async fn terminate_child(

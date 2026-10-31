@@ -41,6 +41,10 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase) {
         meta.artist = Some("Guest".into());
     }
     imported.push(another);
+    let mut empty = snapshot("Empty set", "/search/empty.mp3").remove(0);
+    empty.beatmaps.clear();
+    empty.files.clear();
+    imported.push(empty);
     database
         .osu_installations()
         .replace_snapshot(id, &imported)
@@ -48,6 +52,19 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase) {
         .unwrap();
     let service = database.beatmap_sets();
     let all = service.all_with_audio_sources().await.unwrap();
+    assert!(
+        all.iter()
+            .any(|set| set.beatmap_set.installation_id == id && set.audio_sources.is_empty())
+    );
+    for query in ["", "star", "roc HARD", "Other", "missing-last-word"] {
+        let legacy = service.search_with_audio_sources(query).await.unwrap();
+        assert_eq!(
+            service.search_tracks(query).await.unwrap(),
+            crate::beatmap_set::tracks::from_sets(legacy),
+            "{query}"
+        );
+    }
+
     for query in ["", " \t\n\u{2003}"] {
         assert_eq!(service.search_with_audio_sources(query).await.unwrap(), all);
     }
@@ -103,7 +120,10 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase) {
                 .iter()
                 .map(|set| set.beatmap_set.id)
                 .collect::<Vec<_>>(),
-            all.iter().map(|set| set.beatmap_set.id).collect::<Vec<_>>()
+            all.iter()
+                .filter(|set| !set.audio_sources.is_empty())
+                .map(|set| set.beatmap_set.id)
+                .collect::<Vec<_>>()
         );
     }
     for query in [
@@ -190,8 +210,13 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase) {
             .beatmap_sets()
             .for_audio_sources(&ids, &multiple)
             .await
-            .unwrap(),
+            .unwrap()
+            .iter()
+            .collect::<Vec<_>>(),
         before
+            .iter()
+            .filter(|set| !set.audio_sources.is_empty())
+            .collect::<Vec<_>>()
     );
     let tags = transaction.tags().all_set_links().await.unwrap();
     assert!(
@@ -261,6 +286,26 @@ async fn large_search(database: &TestDatabase) {
         .collect();
     assert_eq!(expected[0].audio_sources.len(), 1002);
     assert_eq!(
+        database.beatmap_sets().search_tracks(&words).await.unwrap(),
+        crate::beatmap_set::tracks::from_sets(
+            database
+                .beatmap_sets()
+                .search_with_audio_sources(&words)
+                .await
+                .unwrap()
+        )
+    );
+    assert_eq!(
+        database.beatmap_sets().search_tracks(" ").await.unwrap(),
+        crate::beatmap_set::tracks::from_sets(
+            database
+                .beatmap_sets()
+                .all_with_audio_sources()
+                .await
+                .unwrap()
+        )
+    );
+    assert_eq!(
         database
             .beatmap_sets()
             .search_with_audio_sources(&words)
@@ -284,5 +329,39 @@ async fn large_search(database: &TestDatabase) {
             .unwrap()
             .is_empty()
     );
+    cross_chunk_set_order(database, id, &words).await;
     database.osu_installations().delete(id).await.unwrap();
+}
+
+async fn cross_chunk_set_order(database: &TestDatabase, id: i32, words: &str) {
+    // Reuse the existing low audio IDs in a later set after a new high-ID set.
+    let mut later = snapshot(words, "/batch/first.mp3").remove(0);
+    for n in 0..1001 {
+        let mut part = snapshot(words, &format!("/batch/{n}.mp3")).remove(0);
+        let filename = format!("{n}.mp3");
+        part.files[0].filename = Some(filename.clone());
+        for map in &mut part.beatmaps {
+            map.metadata.as_mut().unwrap().audio_file = Some(filename.clone());
+        }
+        later.files.extend(part.files);
+        later.beatmaps.extend(part.beatmaps);
+    }
+    let early = snapshot(words, "/batch/new-high.mp3").remove(0);
+    database
+        .osu_installations()
+        .replace_snapshot(id, &[early, later])
+        .await
+        .unwrap();
+    let legacy = database
+        .beatmap_sets()
+        .search_with_audio_sources(words)
+        .await
+        .unwrap();
+    let expected_tracks = crate::beatmap_set::tracks::from_sets(legacy);
+    assert_eq!(expected_tracks.len(), 1003);
+    assert!(expected_tracks[0].audio_source_id > expected_tracks[1].audio_source_id);
+    assert_eq!(
+        database.beatmap_sets().search_tracks(words).await.unwrap(),
+        expected_tracks
+    );
 }

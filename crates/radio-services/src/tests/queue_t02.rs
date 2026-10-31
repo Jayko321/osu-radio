@@ -7,6 +7,7 @@ use crate::{
 pub(super) async fn contracts(db: &TestDatabase, other: &TestDatabase, ids: [i32; 4]) {
     insertions(db, ids).await;
     identity_and_edits(db, ids).await;
+    bounded_checks(db, ids[0]).await;
     waiting_and_results(db, other, ids).await;
     playlist_refs(db, ids[0]).await;
     detached_projection(db).await;
@@ -794,5 +795,65 @@ async fn detached_projection(db: &TestDatabase) {
     assert_eq!(
         after.entries[0].last_played_at_ms,
         after.entries[1].last_played_at_ms
+    );
+}
+
+async fn bounded_checks(db: &TestDatabase, audio: i32) {
+    db.queue().clear().await.unwrap();
+    db.queue().append(vec![audio; 7]).await.unwrap();
+    let state = db.queue().get().await.unwrap();
+    db.queue().play_entry(state.entries[6].id).await.unwrap();
+    let checks = db.queue().pending_checks().await.unwrap();
+    assert_eq!(checks[0].entry_id, state.entries[6].id);
+    assert_eq!(
+        db.queue().pending_checks_excluding(&[], 1).await.unwrap(),
+        checks[..1]
+    );
+    // Active/failed work must not consume the bounded result slots.
+    assert_eq!(
+        db.queue()
+            .pending_checks_excluding(&checks[..4], 2)
+            .await
+            .unwrap(),
+        checks[4..6]
+    );
+    assert!(
+        db.queue()
+            .pending_checks_excluding(&[], 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let mut outdated = checks[0].clone();
+    outdated.generation = outdated.generation.checked_add(1).unwrap();
+    assert_eq!(
+        db.queue()
+            .pending_checks_excluding(&[outdated], 1)
+            .await
+            .unwrap(),
+        checks[..1]
+    );
+    let mut outdated = checks[0].clone();
+    outdated.audio_source_id = outdated.audio_source_id.checked_add(1).unwrap();
+    assert_eq!(
+        db.queue()
+            .pending_checks_excluding(&[outdated], 1)
+            .await
+            .unwrap(),
+        checks[..1]
+    );
+    db.queue().clear().await.unwrap();
+    db.queue().append(vec![audio; 1_003]).await.unwrap();
+    let checks = db.queue().pending_checks().await.unwrap();
+    assert_eq!(
+        db.queue()
+            .pending_checks_excluding(&checks[..1_001], 1)
+            .await
+            .unwrap(),
+        checks[1_001..1_002]
+    );
+    assert_eq!(
+        db.queue().revision().await.unwrap(),
+        db.queue().get().await.unwrap().revision
     );
 }

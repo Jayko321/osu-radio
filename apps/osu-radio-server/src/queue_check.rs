@@ -99,12 +99,22 @@ async fn run(
             break;
         }
         // Also recover post-commit notifications lost during library changes/cancellation.
-        match state.services().queue().get().await {
-            Ok(queue) => state.publish_playback(queue.revision),
+        match state.services().queue().revision().await {
+            Ok(revision) => state.publish_playback(revision),
             Err(error) => eprintln!("Queue check revision read failed: {error:#}"),
         }
         if tasks.len() < MAX_CHECKS {
-            match state.services().queue().pending_checks().await {
+            let excluded = failed
+                .iter()
+                .chain(active.iter().map(|(_, check)| check))
+                .cloned()
+                .collect::<Vec<_>>();
+            match state
+                .services()
+                .queue()
+                .pending_checks_excluding(&excluded, MAX_CHECKS.saturating_sub(tasks.len()))
+                .await
+            {
                 Ok(checks) => {
                     for check in checks {
                         if *stopped.borrow() || tasks.len() >= MAX_CHECKS {

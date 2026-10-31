@@ -48,6 +48,20 @@ impl BeatmapSetRepository<'_> {
         Ok(ids)
     }
 
+    pub async fn audio_source_ids(&self) -> Result<Vec<i32>> {
+        let statement = sea_orm::Statement::from_string(
+            self.connection.get_database_backend(),
+            "SELECT DISTINCT audio_source_id AS id FROM beatmaps WHERE audio_source_id IS NOT NULL ORDER BY audio_source_id",
+        );
+        let mut ids = Vec::new();
+        super::query_each::<IdRow>(&self.connection, statement, |row| {
+            ids.push(row.id);
+            Ok(())
+        })
+        .await?;
+        Ok(ids)
+    }
+
     pub async fn multiple_audio_set_ids(&self) -> Result<HashSet<i32>> {
         let statement = sea_orm::Statement::from_string(
             self.connection.get_database_backend(),

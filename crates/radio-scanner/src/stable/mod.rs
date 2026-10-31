@@ -29,6 +29,58 @@ pub async fn import_snapshot_from_stable_db(db_path: &Path) -> Result<ImportedSn
         .context("stable database import task failed")?
 }
 
+pub(crate) async fn count_beatmaps(db_path: &Path) -> Result<usize> {
+    let db_path = db_path.to_path_buf();
+    tokio::task::spawn_blocking(move || count(&db_path))
+        .await
+        .context("stable database count task failed")?
+}
+
+fn count(db_path: &Path) -> Result<usize> {
+    let db_path = std::path::absolute(db_path)?;
+    let bytes = fs::read(&db_path)
+        .with_context(|| format!("failed to read stable database `{}`", db_path.display()))?;
+    let installation = db_path.parent().context("database path has no parent")?;
+    let songs = media::songs_directory(installation)?;
+    let count = reader::decode_with(&bytes, &db_path, |count: &mut usize, record| {
+        let context = || {
+            format!(
+                "{}: record {}, byte offset {}",
+                db_path.display(),
+                record.index,
+                record.offset
+            )
+        };
+        let folder = media::relative_path(&record.folder).with_context(context)?;
+        let osu_file = media::relative_path(&record.osu_file).with_context(context)?;
+        if let Some(audio) = record
+            .beatmap
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.audio_file.as_ref())
+        {
+            media::relative_path(audio).with_context(context)?;
+        }
+        if let Ok(Some(background)) = media::background(&songs.join(folder).join(osu_file)) {
+            media::relative_path(&background).with_context(context)?;
+        }
+        *count = count.checked_add(1).context("beatmap count overflow")?;
+        Ok(())
+    })?;
+    let collection_path = installation.join("collection.db");
+    match fs::read(&collection_path) {
+        Ok(bytes) => {
+            reader::decode_collections(&bytes, &collection_path)?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read `{}`", collection_path.display()));
+        }
+    }
+    Ok(count)
+}
+
 struct Group {
     set: ImportedBeatmapSet,
     filenames: HashSet<String>,

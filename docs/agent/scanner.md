@@ -90,6 +90,17 @@ Dropping `Discovery` sets the shared worker stop flag and closes the receiver, r
 
 ## Supported imports and CLI behavior
 
+`count_beatmaps(OsuMarker)` validates the complete source for folder metadata preview
+without retaining an `ImportedSnapshot`. Lazer uses the import parser/process
+lifecycle, discarding each validated set/collection after counting; suffix errors,
+nonzero exit and cancellation retain import failure/cleanup behavior. Stable uses
+the same decoder with a per-record consumer, including both 2019 layout probes,
+footer, relative paths, configuration and collections validation. It still buffers
+raw database bytes and decoded collections; neither path promises constant total
+memory. Import APIs continue returning complete snapshots. Existing scanner tests
+cover count/import parity, malformed sources and helper cancellation; real helper
+and platform acceptance remain separate.
+
 `import_snapshot(OsuMarker)` imports both stable and lazer into the complete `ImportedSnapshot`; `import_snapshot_with_helper` supplies an explicit lazer helper executable. Stable exposes `import_snapshot_from_stable_db(&Path)` and lazer exposes `import_snapshot_from_lazer_realm` / `import_snapshot_from_lazer_realm_with_helper`. `get_beatmap_sets`, `import_from_stable_db`, and the existing lazer wrappers fully read and validate the snapshot before returning only its sets. Failed decoding never returns partial imports. CLI `import` previews sets while `store` persists the complete snapshot.
 
 `import_from_lazer_realm` and `import_snapshot_from_lazer_realm` select the helper in the order: non-empty runtime `OSU_LAZER_REALM_PARSER_PATH` (empty is an error; a missing/invalid path fails at spawn and is never replaced), then the installed helper relative to `std::env::current_exe()`'s directory, then the build-time `OSU_LAZER_REALM_PARSER_BUILT_PATH`. The installed layout is the compiled-in constant `INSTALLED_HELPER_PATH` in [`lazer/scanner.rs`](../../crates/radio-scanner/src/lazer/scanner.rs): `../lib/osu-radio/osu-lazer-realm-parser` (Linux, covers `usr/bin` + `usr/lib/osu-radio` for archive, Arch and AppImage) or `helper/osu-lazer-realm-parser.exe` (Windows). `build.rs` is unchanged by this: it only supplies the absolute development fallback, so packaging (T05/T07/T08) places the helper at that layout and needs no build-time flag. The `*_with_helper` functions use exactly the path they are given. Windows children are started with `CREATE_NO_WINDOW` (pipes unchanged). `import_from_lazer_realm` `import_from_lazer_realm_with_helper` accepts an executable explicitly and is the process-test seam. These compatibility wrappers return a fully materialized `Vec<ImportedBeatmapSet>` after validating collections too. Line-by-line decoding does not make the public import result streaming, and a CLI output limit does not reduce helper extraction or memory use.

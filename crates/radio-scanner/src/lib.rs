@@ -39,6 +39,14 @@ pub async fn get_beatmap_sets(marker: OsuMarker) -> anyhow::Result<Vec<ImportedB
     Ok(import_snapshot(marker).await?.beatmap_sets)
 }
 
+/// Validate the complete source while counting preview beatmaps.
+pub async fn count_beatmaps(marker: OsuMarker) -> anyhow::Result<usize> {
+    match marker.kind {
+        OsuKind::Lazer => lazer::scanner::count_beatmaps(&marker.marker_path).await,
+        OsuKind::Stable => stable::count_beatmaps(&marker.marker_path).await,
+    }
+}
+
 pub async fn import_snapshot(marker: OsuMarker) -> anyhow::Result<ImportedSnapshot> {
     match marker.kind {
         OsuKind::Stable => stable::import_snapshot_from_stable_db(&marker.marker_path).await,

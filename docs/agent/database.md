@@ -127,7 +127,7 @@ there are no new standalone beatmap or set creation workflows.
 | `audio_sources()` | `get`, `find`, `get_or_insert`. |
 | `audio_settings()` | `get`, `update`, `set_volume`; settings and durable per-audio overrides. |
 | `audio_mods()` | `get`, `update(AudioModsPatch)`, `set_profile(id, Option<AudioModsProfile>)`; independent global settings and durable individual profiles. |
-| `queue()` | `get`, `snapshot`, `upcoming`, `playback`, `insert`, `append`, `play_entry`, `move_entry`, `remove_entry`, `clear_upcoming`, `clear`, `pending_checks`, `apply_check`, `command`, `recover`; one persistent server queue. |
+| `queue()` | `get`, `snapshot`, `upcoming`, `playback`, `revision`, `insert`, `append`, `play_entry`, `move_entry`, `remove_entry`, `clear_upcoming`, `clear`, `pending_checks`, `pending_checks_excluding`, `apply_check`, `command`, `recover`; one persistent server queue. |
 | `playlists()` | `all`, `get`, `create`, `rename`, `delete`, `add_items`, `remove_item`, `play`, `cover`, `set_cover`, `clear_cover`, `append_to_queue`; concrete difficulties with source-stable membership. |
 
 [Installation services](../../crates/radio-services/src/osu_installation.rs) own
@@ -173,9 +173,13 @@ Direct SQL test fixtures must supply corresponding normalized text themselves.
 After matching, the same transaction loads full data only for matching audio IDs
 in disjoint, sorted chunks of at most 500 parameters. Multiplicity is computed
 from unfiltered database relationships with `COUNT(DISTINCT audio_source_id)`.
-No matches skip full loading. Blank queries use one aggregate SELECT, including
-empty sets on the legacy API. `search_tracks` groups the result for Songs;
-formatting remains in the client.
+No matches skip full loading. Blank legacy queries use one aggregate SELECT,
+including empty sets. `search_tracks` obtains distinct audio IDs for blank queries
+and converts each 500-ID batch to compact tracks before loading the next batch.
+It restores first-seen order by minimum set ID then audio ID; matching, full-library
+multiplicity and history/volume/mods enrichment share one read transaction.
+Formatting remains in the client. The batch limit bounds IDs, not difficulty
+count or final response bytes.
 
 The aggregate loader consumes rows through
 [`query_each`](../../crates/radio-db/src/repositories/mod.rs) directly into ordered
@@ -233,10 +237,15 @@ Downgrade to v12 rejects waiting intent that cannot be reconstructed, including 
 already assigned launch that is checking again without waiting. Migrations 1–12 stay frozen.
 
 The [repository](../../crates/radio-db/src/repositories/queue.rs) reads list and singleton
-in one LEFT JOIN statement, including pool callers under PostgreSQL READ COMMITTED.
+in one streamed LEFT JOIN statement, including pool callers under PostgreSQL READ COMMITTED.
+It decodes the singleton once and validates the completed state. `revision` reads
+only the persisted scalar. Pending checks use 100-row keyset pages under one read
+transaction, prioritizing a waiting current entry and filtering exact active/failed
+identities before filling the requested slots. Exclusions do not grow SQL parameters.
 `save` requires a transaction-bound repository and caller-held singleton writer lock;
 it validates before writing, rejects counter regression/reused IDs, replaces the rows
-and updates the singleton with one outer commit. Advisory IDs can outlive their library
+and updates the singleton with one outer commit. Insert models are built in batches
+of 100; the full queue rewrite and change-detection snapshot remain. Advisory IDs can outlive their library
 or playlist rows; saved keys/captions never depend on those rows continuing to exist.
 Reset includes queue entries and the singleton launch binding.
 

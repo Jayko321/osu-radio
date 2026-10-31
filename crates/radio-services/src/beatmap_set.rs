@@ -35,6 +35,21 @@ impl BeatmapSetService<'_> {
     }
 
     async fn search_in(transaction: &Transaction, query: &str) -> Result<Vec<BeatmapSetWithAudio>> {
+        if query.split_whitespace().next().is_none() {
+            return transaction.beatmap_sets().all_with_audio_sources().await;
+        }
+        let ids = Self::matching_audio_ids(transaction, query).await?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let multiple_audio_sets = transaction.beatmap_sets().multiple_audio_set_ids().await?;
+        transaction
+            .beatmap_sets()
+            .for_audio_sources(&ids, &multiple_audio_sets)
+            .await
+    }
+
+    async fn matching_audio_ids(transaction: &Transaction, query: &str) -> Result<Vec<i32>> {
         let mut seen = HashSet::new();
         let words: Vec<_> = query
             .split_whitespace()
@@ -42,7 +57,7 @@ impl BeatmapSetService<'_> {
             .filter(|word| seen.insert(word.clone()))
             .collect();
         if words.is_empty() {
-            return transaction.beatmap_sets().all_with_audio_sources().await;
+            return transaction.beatmap_sets().audio_source_ids().await;
         }
         let mut ids: Option<HashSet<i32>> = None;
         for word in &words {
@@ -61,18 +76,33 @@ impl BeatmapSetService<'_> {
                 return Ok(Vec::new());
             }
         }
-        let ids: Vec<_> = ids.unwrap_or_default().into_iter().collect();
-        let multiple_audio_sets = transaction.beatmap_sets().multiple_audio_set_ids().await?;
-        let sets = transaction
-            .beatmap_sets()
-            .for_audio_sources(&ids, &multiple_audio_sets)
-            .await?;
-        Ok(sets)
+        let mut ids: Vec<_> = ids.unwrap_or_default().into_iter().collect();
+        ids.sort_unstable();
+        Ok(ids)
     }
 
     pub async fn search_tracks(&self, query: &str) -> Result<Vec<LibraryTrack>> {
         let transaction = self.database.begin_read().await?;
-        let mut tracks = tracks::from_sets(Self::search_in(&transaction, query).await?);
+        let ids = Self::matching_audio_ids(&transaction, query).await?;
+        let multiple_audio_sets = transaction.beatmap_sets().multiple_audio_set_ids().await?;
+        let mut tracks = Vec::new();
+        for chunk in ids.chunks(500) {
+            let sets = transaction
+                .beatmap_sets()
+                .for_audio_sources(chunk, &multiple_audio_sets)
+                .await?;
+            tracks.extend(tracks::from_sets(sets));
+        }
+        tracks.sort_by_key(|track| {
+            (
+                track
+                    .difficulties
+                    .iter()
+                    .map(|map| map.beatmap_set_id)
+                    .min(),
+                track.audio_source_id,
+            )
+        });
         crate::ListeningHistoryService::fill_tracks(&transaction, &mut tracks).await?;
         crate::AudioSettingsService::fill_tracks(&transaction, &mut tracks).await?;
         crate::AudioModsService::fill_tracks(&transaction, &mut tracks).await?;

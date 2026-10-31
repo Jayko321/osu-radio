@@ -334,6 +334,25 @@ mod helper_process {
     }
 
     #[tokio::test]
+    async fn preview_count_validates_the_entire_helper_stream() {
+        let prefix = "printf '%s\\n' '{\"source\":\"Lazer\",\"beatmaps\":[{}]}'\n";
+        for (suffix, succeeds) in [
+            ("", true),
+            ("echo invalid", false),
+            ("echo failure >&2\nexit 7", false),
+        ] {
+            let (_directory, helper) = fake_helper(&format!("{prefix}{suffix}"));
+            let count =
+                super::super::scanner::count_with_helper(Path::new("unused.realm"), &helper).await;
+            if succeeds {
+                assert_eq!(count.unwrap(), 1);
+            } else {
+                assert!(count.is_err());
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn includes_helper_stderr_in_failure() {
         let (_directory, helper) = fake_helper("echo 'realm exploded' >&2\nexit 7");
         let error = import_from_lazer_realm_with_helper(Path::new("unused.realm"), &helper)
@@ -499,34 +518,44 @@ mod helper_process {
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn cancelling_an_import_terminates_its_live_helper() {
-        let (directory, helper) = fake_helper("printf '%s' \"$$\" > \"$1.pid\"\nexec sleep 30");
-        let realm = directory.path().join("client.realm");
-        let pid_path = realm.with_extension("realm.pid");
-        let task = tokio::spawn(async move {
-            import_snapshot_from_lazer_realm_with_helper(&realm, helper).await
-        });
-        let pid = timeout(Duration::from_secs(5), async {
-            loop {
-                if let Ok(pid) = fs::read_to_string(&pid_path)
-                    && !pid.is_empty()
-                {
-                    break pid;
+        for count_only in [false, true] {
+            let (directory, helper) = fake_helper("printf '%s' \"$$\" > \"$1.pid\"\nexec sleep 30");
+            let realm = directory.path().join("client.realm");
+            let pid_path = realm.with_extension("realm.pid");
+            let task = tokio::spawn(async move {
+                if count_only {
+                    super::super::scanner::count_with_helper(&realm, helper)
+                        .await
+                        .map(|_| ())
+                } else {
+                    import_snapshot_from_lazer_realm_with_helper(&realm, helper)
+                        .await
+                        .map(|_| ())
                 }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await;
-        // Abort even if the readiness deadline fails, so a failed test cannot detach the import.
-        task.abort();
-        assert!(task.await.unwrap_err().is_cancelled());
-        let pid = pid.unwrap();
-        timeout(Duration::from_secs(5), async {
-            while Path::new(&format!("/proc/{pid}")).exists() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("cancelled helper must be killed and reaped");
+            });
+            let pid = timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Ok(pid) = fs::read_to_string(&pid_path)
+                        && !pid.is_empty()
+                    {
+                        break pid;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await;
+            // Abort even if the readiness deadline fails, so a failed test cannot detach the import.
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            let pid = pid.unwrap();
+            timeout(Duration::from_secs(5), async {
+                while Path::new(&format!("/proc/{pid}")).exists() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("cancelled helper must be killed and reaped");
+        }
     }
 
     fn fake_helper(body: &str) -> (TempDir, PathBuf) {

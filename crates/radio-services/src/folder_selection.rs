@@ -58,10 +58,10 @@ impl OsuInstallationService<'_> {
         marker_path: PathBuf,
     ) -> Result<usize, RegisterFolderError> {
         let marker = resolve_marker(&marker_path)?;
-        let sets = radio_scanner::get_beatmap_sets(marker)
+        let count = radio_scanner::count_beatmaps(marker)
             .await
             .map_err(RegisterFolderError::Failed)?;
-        Ok(sets.iter().map(|set| set.beatmaps.len()).sum())
+        Ok(count)
     }
 
     pub async fn import_folder(

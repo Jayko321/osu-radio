@@ -362,7 +362,9 @@ There is no forced file-I/O cancellation or new OS-signal protocol: abrupt child
 termination still uses the existing embedded-server lifecycle above.
 
 Startup, wakeup, slot completion and a one-second interval select saved `checking`
-entries through `pending_checks()`. Each refill reads current priorities; only a
+entries through `pending_checks_excluding()`, selecting only free worker slots
+and skipping exact active/failed identities across bounded repository pages.
+Each refill reads current priorities; only a
 current launch with `waiting_for_check` receives priority. At most four blocking
 operations run, with no duplicate `QueueCheck` in flight. Already available or
 unavailable entries are not reopened on restart. A task panic or apply failure
@@ -378,7 +380,7 @@ reports Started or records a listening date. Checked waiting launches preserve
 playing/paused intent; append and restored unavailable playlists stay stopped.
 
 Committed revisions use the existing monotone watch/NDJSON path. Every scan reads
-and publishes the stored revision even if no checks remain, recovering lost
+and publishes the stored scalar revision without loading queue entries, even if no checks remain, recovering lost
 post-commit library notifications. Queue changes and playlist Play use
 `committed_response`; imports and folder deletion call `AppState::wake_queue_checks`
 after successful commit. T06 routes reuse that hook through `committed_response`, with
@@ -418,8 +420,10 @@ Every mutation publishes its committed revision before asynchronous duration
 probing. `AppState` uses a watch channel that only accepts increasing revisions,
 so a delayed response cannot replace a newer notification. The events handler
 subscribes before reading its initial snapshot and emits only increasing
-revisions afterward. Heartbeats also reread the persisted assignment to detect
-independent writers or cancellation between commit and notification. Watch
+revisions afterward. Heartbeats also read the persisted scalar revision to detect
+independent writers or cancellation between commit and notification; a newer
+revision triggers a complete assignment read. Unchanged heartbeats avoid loading
+the queue. Watch
 notifications may coalesce intermediate revisions; every emitted assignment
 reflects a committed snapshot. The body directly owns its receiver and read
 stream, so dropping it releases the subscription without a detached task or an
