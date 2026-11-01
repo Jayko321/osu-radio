@@ -116,6 +116,8 @@ jobs:
           ref: ${{ inputs.source_sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Trust checked out workspace in the container
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Build Arch archive with T05
         run: bash packaging/release/ci-arch.sh "$SOURCE_SHA" 2>&1 | tee "$RUNNER_TEMP/arch-build.log"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
