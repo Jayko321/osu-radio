@@ -21,11 +21,21 @@ Item {
     readonly property bool licenseMatches: matches(aboutSettingsHeader.text, aboutLicense.settingName)
     readonly property bool projectMatches: matches(aboutSettingsHeader.text, aboutProjectLabel.text)
     readonly property bool hasMatches: foldersMatch || individualVolumeMatches || globalVolumeMatches || individualModsMatches || trayMatches || discordMatches || versionMatches || licenseMatches || projectMatches
+    property bool restoring: false
+    function saveView(): var { return { query: settingsSearch.text, scroll: settingsScroll.contentItem.contentY, focus: settingsSearch.activeFocus, cursor: settingsSearch.cursorPosition }; }
+    function restoreView(state: var): void {
+        restoring = true;
+        settingsSearch.text = state.query;
+        const flickable = settingsScroll.contentItem as Flickable;
+        if (flickable) flickable.contentY = Math.max(flickable.originY, Math.min(state.scroll, flickable.originY + Math.max(0, flickable.contentHeight - flickable.height)));
+        if (state.focus) { settingsSearch.forceActiveFocus(); settingsSearch.cursorPosition = state.cursor; }
+        Qt.callLater(() => { restoring = false; });
+    }
     function matches(section: string, setting: string): bool {
         return query.length === 0 || section.toLowerCase().includes(query) || setting.toLowerCase().includes(query);
     }
     // A narrower result must remain reachable after scrolling a long status.
-    onQueryChanged: Qt.callLater(() => {
+    onQueryChanged: if (!restoring) Qt.callLater(() => {
         const flickable = settingsScroll.contentItem as Flickable;
         if (flickable) flickable.contentY = 0;
     })

@@ -21,7 +21,9 @@ pub use playlists::{
 pub use queue::{QueueAction, QueueRow, QueueView, QueueViewModel};
 pub use settings::{SettingsGroup, SettingsPreferences, SettingsViewModel};
 pub use sorting::TrackSort;
-pub use track::{Track, TrackNamePreferences, library_tracks, selection_after_refresh};
+pub use track::{
+    Track, TrackMetadata, TrackNamePreferences, library_tracks, selection_after_refresh,
+};
 pub use volume::AudioSettingsState;
 
 pub use mods::{AudioModsState, ModsAction, ModsEdit, ModsEditTarget};

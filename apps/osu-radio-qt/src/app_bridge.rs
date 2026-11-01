@@ -86,6 +86,15 @@ pub mod ffi {
         #[qinvokable]
         #[cxx_name = "setVisibleMedia"]
         fn set_visible_media(self: Pin<&mut AppBridge>, ids: &QVariantList);
+        #[qinvokable]
+        #[cxx_name = "setUiVisible"]
+        fn set_ui_visible(self: Pin<&mut AppBridge>, visible: bool);
+        #[qinvokable]
+        #[cxx_name = "releaseVisualResources"]
+        fn release_visual_resources(self: Pin<&mut AppBridge>);
+        #[qsignal]
+        #[cxx_name = "presentationReady"]
+        fn presentation_ready(self: Pin<&mut AppBridge>);
         #[qsignal]
         #[cxx_name = "mediaViewChanged"]
         fn media_view_changed(self: Pin<&mut AppBridge>);
@@ -102,6 +111,8 @@ pub struct AppBridgeRust {
     controller: Option<AppController>,
     generation: u64,
     cache_epoch: u64,
+    ui_hidden: bool,
+    ui_revision: u64,
     library_object: cxx::UniquePtr<crate::qt_view_models::ffi::LibraryViewModel>,
     playlists_object: cxx::UniquePtr<crate::qt_view_models::ffi::PlaylistsViewModel>,
     settings_object: cxx::UniquePtr<crate::qt_view_models::ffi::SettingsViewModel>,
@@ -117,6 +128,8 @@ impl Default for AppBridgeRust {
             controller: None,
             generation: 0,
             cache_epoch: 0,
+            ui_hidden: false,
+            ui_revision: 0,
             library_object: native::new_library_view_model(),
             playlists_object: native::new_playlists_view_model(),
             settings_object: native::new_settings_view_model(),
@@ -210,6 +223,7 @@ impl ffi::AppBridge {
                             controller,
                             ticket,
                             available: false,
+                            discarded: false,
                         };
                         // Undelivered closures release the media slot after QObject destruction.
                         let _ = thread.queue(move |object| object.decode(ack, cover_id, bytes));
@@ -298,7 +312,7 @@ impl ffi::AppBridge {
             .is_some_and(|cover| affected.contains(&cover))
         {
             let cover = self.player_ref().selected_cover_id.unwrap_or(-1);
-            let url = native::artwork_url(epoch, cover);
+            let url = native::selected_artwork_url(epoch, cover);
             if !url.is_empty() {
                 self.as_mut().player_mut().set_selected_artwork_url(url);
             }
@@ -346,13 +360,45 @@ impl ffi::AppBridge {
                     .map(|row| &row.track)
             })
     }
+    pub fn set_ui_visible(mut self: Pin<&mut Self>, visible: bool) {
+        self.as_mut().rust_mut().ui_hidden = !visible;
+        self.as_mut().rust_mut().ui_revision = self.ui_revision.wrapping_add(1);
+        native::suspend_artwork(!visible);
+        self.command(AppCommand::SetUiVisible(visible));
+    }
+    pub fn release_visual_resources(mut self: Pin<&mut Self>) {
+        if !self.ui_hidden {
+            return;
+        }
+        let generation = self.generation;
+        self.as_mut().media_generation(generation, true);
+        self.as_mut()
+            .library_mut()
+            .rust_mut()
+            .model
+            .pin_mut()
+            .clear_artwork();
+        self.as_mut()
+            .playlists_mut()
+            .rust_mut()
+            .model
+            .pin_mut()
+            .clear_artwork();
+        self.as_mut()
+            .playlists_mut()
+            .set_playlist_editor_artwork_url(QString::default());
+        native::release_window_resources();
+    }
     pub fn request_media(self: Pin<&mut Self>, id: i32) {
+        if self.ui_hidden {
+            return;
+        }
         let Some(track) = self.media_track(id) else {
             return;
         };
         let missing = track
             .cover_beatmap_id
-            .is_some_and(|cover| native::artwork_url(self.cache_epoch, cover).is_empty());
+            .is_some_and(|cover| native::selected_artwork_url(self.cache_epoch, cover).is_empty());
         self.command(AppCommand::RequestMedia {
             audio_id: id,
             artwork_missing: missing,
@@ -396,8 +442,25 @@ impl ffi::AppBridge {
             self.connection_status_changed();
         }
     }
+    #[allow(clippy::too_many_lines)] // Keep the exhaustive, ordered update routing together.
     fn apply(mut self: Pin<&mut Self>, update: AppUpdate) {
         match update {
+            AppUpdate::UiResumed => {
+                // A decode may have reached the retained cache while its UI delivery was hidden.
+                let affected: Vec<_> = self
+                    .library_ref()
+                    .model
+                    .cover_rows
+                    .keys()
+                    .chain(self.playlists_ref().model.cover_rows.keys())
+                    .chain(self.queue_ref().model.cover_rows.keys())
+                    .copied()
+                    .filter(|id| !native::artwork_url(self.cache_epoch, *id).is_empty())
+                    .chain(self.player_ref().selected_cover_id)
+                    .collect();
+                self.as_mut().update_artwork(&affected);
+                self.presentation_ready();
+            }
             AppUpdate::MediaGeneration {
                 generation,
                 invalidate_artwork,
@@ -547,10 +610,15 @@ impl ffi::AppBridge {
         }
     }
     fn decode(self: Pin<&mut Self>, mut ack: ArtworkAck, cover_id: i32, bytes: Vec<u8>) {
+        if self.ui_hidden {
+            ack.discarded = true;
+            return;
+        }
         let Some(context) = RuntimeContext::current() else {
             return;
         };
         let generation = self.generation;
+        let ui_revision = self.ui_revision;
         let epoch = self.cache_epoch;
         let thread = self.qt_thread();
         let task = context.handle.spawn_blocking(move || {
@@ -563,12 +631,23 @@ impl ffi::AppBridge {
                 Vec::new()
             };
             ack.available = !affected.is_empty();
-            let _ = thread.queue(move |object| {
-                if object.cache_epoch == epoch {
-                    object.update_artwork(&affected);
+            let _ = thread.queue(move |mut object| {
+                let current_cache = !object.ui_hidden && object.cache_epoch == epoch;
+                ack.discarded =
+                    !current_cache || (object.ui_revision != ui_revision && affected.is_empty());
+                if current_cache {
+                    object.as_mut().update_artwork(&affected);
+                }
+                drop(ack);
+                if !object.ui_hidden
+                    && object.player_ref().selected_cover_id == Some(cover_id)
+                    && object.player_ref().selected_artwork_url.is_empty()
+                    && !affected.is_empty()
+                {
+                    let id = object.player_ref().selected_audio_id;
+                    object.request_media(id);
                 }
             });
-            drop(ack);
         });
         context.track(task);
     }
@@ -592,9 +671,15 @@ struct ArtworkAck {
     controller: AppController,
     ticket: MediaTicket,
     available: bool,
+    discarded: bool,
 }
 impl Drop for ArtworkAck {
     fn drop(&mut self) {
+        if self.discarded {
+            self.controller
+                .send(AppCommand::MediaDiscarded(self.ticket));
+            return;
+        }
         self.controller.send(AppCommand::MediaInstalled {
             ticket: self.ticket,
             available: self.available,
@@ -603,6 +688,7 @@ impl Drop for ArtworkAck {
 }
 impl Drop for AppBridgeRust {
     fn drop(&mut self) {
+        native::suspend_artwork(false);
         native::reset_artwork();
         if let Some(controller) = &self.controller {
             controller.send(AppCommand::Shutdown);
@@ -825,7 +911,7 @@ mod tests {
         let maximum = QueueEntryId::new(i64::MAX).unwrap();
         let large = QueueEntryId::new(9_007_199_254_740_993).unwrap();
         let mut view = osu_radio_client::mock::MockState::default().queue.view;
-        view.entries.truncate(2);
+        Arc::make_mut(&mut view.entries).truncate(2);
         let mut first = view.entries[0].clone();
         first.id = large;
         first.playlist_item_id = Some(88);
@@ -833,7 +919,7 @@ mod tests {
         let mut second = first.clone();
         second.id = maximum;
         second.position = 1;
-        view.entries = vec![first, second];
+        view.entries = vec![first, second].into();
         view.current_entry_id = None;
         view.history_len = 1;
         assert_eq!(
@@ -869,11 +955,11 @@ mod tests {
             model.rows[1].playlist_item_id
         );
         model.pin_mut().rust_mut().rows[0].artwork = QString::from("resident-cover");
-        view.entries[0].track.title = "Unicode 日本語".into();
-        view.entries[0].availability = QueueAvailability::Checking;
+        Arc::make_mut(&mut view.entries)[0].track.title = "Unicode 日本語".into();
+        Arc::make_mut(&mut view.entries)[0].availability = QueueAvailability::Checking;
         model.pin_mut().replace_queue_rows(&view, 0);
         assert_eq!(model.rows[0].artwork, QString::from("resident-cover"));
-        view.entries.swap(0, 1);
+        Arc::make_mut(&mut view.entries).swap(0, 1);
         view.history_len = 0;
         model.pin_mut().replace_queue_rows(&view, 0);
         assert_eq!(model.entry_id_at(0), QString::from(i64::MAX.to_string()));
@@ -887,17 +973,17 @@ mod tests {
             model.data(&moved, 257).value::<QString>().unwrap(),
             QString::from("Unicode 日本語")
         );
-        view.entries[1].track.cover_beatmap_id = None;
+        Arc::make_mut(&mut view.entries)[1].track.cover_beatmap_id = None;
         model.pin_mut().replace_queue_rows(&view, 0);
         assert!(
             model.rows[1].artwork.is_empty(),
             "changed cover source drops old image"
         );
-        view.entries.remove(0);
+        Arc::make_mut(&mut view.entries).remove(0);
         model.pin_mut().replace_queue_rows(&view, 0);
         assert_eq!(model.entry_id_at(0), QString::from(large.to_string()));
         assert_eq!(model.track_count, 1);
-        view.entries.clear();
+        Arc::make_mut(&mut view.entries).clear();
         model.pin_mut().replace_queue_rows(&view, 0);
         assert_eq!(model.track_count, 0);
         assert!(model.entry_id_at(-1).is_empty());
@@ -911,6 +997,7 @@ mod tests {
             matches!(queue_move(&id, &QVariant::default()), Some(osu_radio_client::view_models::QueueAction::Move { id, before_entry_id: None }) if id == maximum)
         );
     }
+    #[allow(clippy::too_many_lines)] // One cache lifecycle scenario, including a quick hide/show.
     fn warmed_rows_and_queue_keep_artwork_after_eviction() {
         let mut object = native::new_app_bridge();
         let mut bridge = object.pin_mut();
@@ -931,7 +1018,11 @@ mod tests {
         let large = QByteArray::from(pixels.as_slice());
         assert!(!native::install_artwork(epoch, 17, &large).is_empty());
         assert!(!native::install_artwork(epoch, 52, &large).is_empty());
-        bridge.as_mut().update_artwork(&[17, 52]);
+        bridge.as_mut().set_ui_visible(false);
+        bridge.as_mut().set_ui_visible(true);
+        bridge.as_mut().apply(AppUpdate::UiResumed);
+        assert!(!bridge.player_ref().selected_artwork_url.is_empty());
+        assert!(!bridge.library_ref().model.rows[1].artwork.is_empty());
         let pinned = bridge.player_ref().selected_artwork_url.clone();
         let displayed = bridge.library_ref().model.rows[1].artwork.clone();
         bridge.as_mut().queue_mut().rust_mut().queue_state.entries = (1..=4)
@@ -953,7 +1044,8 @@ mod tests {
                     track,
                 }
             })
-            .collect();
+            .collect::<Vec<_>>()
+            .into();
         bridge.as_mut().queue_mut().project_queue();
         let queue = bridge.queue_ref().model.rows.clone();
         assert_eq!(queue.len(), 4);
@@ -972,11 +1064,11 @@ mod tests {
         });
         assert_eq!(bridge.player_ref().selected_artwork_url, pinned);
         assert_eq!(bridge.library_ref().model.rows[1].artwork, displayed);
-        for id in 100..115 {
+        for id in 100..180 {
             assert_eq!(native::install_artwork(epoch, id, &large).len(), 1);
         }
         assert!(native::artwork_url(epoch, 52).is_empty());
-        assert_eq!(native::artwork_url(epoch, 17), pinned);
+        assert_eq!(native::selected_artwork_url(epoch, 17), pinned);
         bridge.as_mut().update_artwork(&[52]);
         assert_eq!(bridge.library_ref().model.rows[1].artwork, displayed);
         assert!(bridge.queue_ref().model.rows == queue);

@@ -71,7 +71,8 @@ fn rapid_changes_reorder_library_keep_queue_order_and_use_current_values_for_lat
     state.upcoming.view.entries = vec![
         crate::controller::tests::queue_row(track(2, "Alpha", "Zulu"), 1),
         crate::controller::tests::queue_row(track(1, "Zulu", "Alpha"), 2),
-    ];
+    ]
+    .into();
     let generation = state.media.generation;
     for preferences in [
         TrackNamePreferences {

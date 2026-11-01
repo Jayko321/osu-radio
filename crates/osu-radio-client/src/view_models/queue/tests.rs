@@ -77,10 +77,7 @@ pub(super) fn queue_entry(track: LibraryTrack, position: usize) -> crate::models
 #[tokio::test]
 async fn offline_queue_open_reports_connection_requirement_and_close_aborts_pending_work() {
     let (mut state, updates) = crate::controller::tests::controller();
-    state
-        .upcoming
-        .view
-        .entries
+    std::sync::Arc::make_mut(&mut state.upcoming.view.entries)
         .push(queue_row(crate::controller::tests::track(42), 1));
     state.upcoming.view.message = "old error".into();
     state.upcoming.request = u64::MAX;
@@ -129,7 +126,7 @@ async fn queue_snapshot_older_than_assignment_is_refetched_before_replacing_rows
     state.session = Some(session);
     state.player.assignment = Some(assignment(5, 9, 7, PlaybackMode::Paused));
     state.upcoming.open = true;
-    state.upcoming.view.entries = vec![queue_row(crate::controller::tests::track(42), 1)];
+    state.upcoming.view.entries = vec![queue_row(crate::controller::tests::track(42), 1)].into();
     let old_queue = crate::models::QueueState {
         entries: vec![queue_entry(
             assignment(4, 8, 99, PlaybackMode::Paused).track.unwrap(),
@@ -962,7 +959,8 @@ fn queue_media_demand_survives_empty_main_view_and_is_removed_on_close_or_new_qu
     state.upcoming.view.entries = vec![
         queue_row(crate::controller::tests::track(42), 1),
         queue_row(crate::controller::tests::track(103), 2),
-    ];
+    ]
+    .into();
     state.set_visible_queue_media(vec![(crate::models::QueueEntryId::new(1).unwrap(), true)]);
     state.set_visible_media(Vec::new());
     assert_eq!(

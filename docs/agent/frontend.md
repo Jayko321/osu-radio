@@ -146,7 +146,7 @@ Play of an existing unavailable entry is 400. New operations return assignments.
 methods, paths and bodies, including maximum string IDs and explicit null anchors.
 
 The [Queue VM](../../crates/osu-radio-client/src/view_models/queue.rs) now owns
-`QueueView.entries: Vec<QueueRow>`, including history, duplicates and nullable
+`QueueView.entries: Arc<Vec<QueueRow>>`, including history, duplicates and nullable
 sources. Rows retain entry ID, position, optional audio/item ID, availability and
 `Track` presentation with saved ordinary/Unicode captions and difficulty suffix.
 The view carries current ID, history boundary, mode, waiting, revision/token,
@@ -868,11 +868,33 @@ Duplicate playlist-cover deliveries reuse a resident immutable key. The adapter
 stores new playlist state before exposing properties that can request artwork.
 Playlist-summary delegates bind to collection indices with empty fallback rows
 while shrinking. Queue delegates bind to TrackListModel roles; entry-ID reconciliation
-updates media and order without resetting the list.
+updates media and order without resetting the list. Status-only queue snapshots
+share their entries and skip row reconciliation; changed rows compare borrowed
+metadata before cloning. `TrackMetadata` is shared between VM, update and Qt rows,
+while duration and other small state remain local. Playlist detail and editor PNG
+also share allocations across status updates.
+
+The decoded cache stores thumbnails separately from the selected 1280px image;
+thumbnail bounds are 512/1024/1280 based on attached-screen DPR. `Artwork.sourceSize`
+uses bounded size steps and the provider honors smaller requests. Quality, content
+revision and cache epoch cannot alias. The common 64 MiB budget includes both
+variants; system artwork is owned separately and remains available while hidden.
 
 [`Main.qml`](../../apps/osu-radio-qt/qml/Main.qml) composes separate Songs, Playlists,
 Settings and Player panels. Each panel uses its corresponding Qt VM; the shell
-owns tabs and the persistent window composition.
+owns tabs and the persistent window shell. Its visual scene is a Loader: hiding
+stops GUI media/list delivery, and after 15 seconds unloads the panels and clears
+Qt images/resources, synchronizes the empty software scene, collects QML garbage,
+and on glibc trims freed allocator pages. The Qt executable pins glibc's mmap
+threshold to 128 KiB before starting threads; measured tray-cycle retention
+motivated this policy for large image/JSON buffers. It does not configure the
+separate server allocator.
+Returning requests VM snapshots before recreating panels;
+queries, scroll, tab and playlist editor draft survive. Quick return cancels the
+timer; minimization does not unload. Window, AppBridge, playback and system controls
+retain their existing lifetimes. The `tray_unloads_visuals` integration probe in
+[launch_smoke](../../apps/osu-radio-qt/tests/launch_smoke.rs) exercises repeated
+hide/return and draft/query retention without server restart.
 It retains the 1024×640 minimum, 50px title bar, 480px sidebar, 90px cards and
 adaptive player geometry. Artwork uses centered cropping. Library refresh remains
 outside the scrolling list. Settings use folder IDs, wrapped options and a full

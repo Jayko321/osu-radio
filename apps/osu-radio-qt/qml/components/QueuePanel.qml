@@ -85,6 +85,13 @@ Basic.Popup {
     onStartIndexChanged: Qt.callLater(positionOnce)
     parent: host
     // Offset from the right edge, animated by the enter/exit transitions.
+    readonly property real scrollPosition: list.contentY
+    function restoreScroll(position: real): void {
+        positionPending = false;
+        list.forceLayout();
+        list.contentY = Math.max(list.originY, Math.min(position, list.originY + Math.max(0, list.contentHeight - list.height)));
+        scheduleMedia();
+    }
     property real slide: 0
     x: host.width - width + slide
     width: Math.min(430, host.width)

@@ -1272,6 +1272,16 @@ impl ffi::PlaylistsViewModel {
             .iter()
             .find(|row| row.id == id)
         {
+            if !native::playlist_artwork_url(
+                self.cache_epoch,
+                id,
+                row.custom_cover_revision.unwrap_or(-1),
+                row.cover_beatmap_id.unwrap_or(-1),
+            )
+            .is_empty()
+            {
+                return;
+            }
             if let Some(revision) = row.custom_cover_revision {
                 self.playlist_command(PlaylistAction::RequestCover { id, revision });
             } else if let Some(beatmap_id) = row.cover_beatmap_id {
@@ -2061,7 +2071,7 @@ impl ffi::PlayerViewModel {
             let track = state.selected_track.as_ref();
             let cover = track.and_then(|track| track.cover_beatmap_id);
             let artwork = cover
-                .map(|id| native::artwork_url(self.cache_epoch, id))
+                .map(|id| native::selected_artwork_url(self.cache_epoch, id))
                 .unwrap_or_default();
             native::protect_artwork(self.cache_epoch, cover.unwrap_or(-1));
             self.as_mut().rust_mut().selected_cover_id = cover;
@@ -2332,17 +2342,30 @@ impl ffi::QueueViewModel {
         std::ptr::from_ref(&*self.model).cast_mut()
     }
     pub(crate) fn replace_queue(mut self: Pin<&mut Self>, state: QueueView) {
+        let unchanged = std::sync::Arc::ptr_eq(&self.queue_state.entries, &state.entries)
+            && self.queue_state.current_entry_id == state.current_entry_id
+            && self.queue_state.history_len == state.history_len;
         self.as_mut().rust_mut().queue_state = state;
-        self.project_queue();
+        if unchanged {
+            self.project_queue_status();
+        } else {
+            self.project_queue();
+        }
     }
     pub(crate) fn project_queue(mut self: Pin<&mut Self>) {
-        let (start, loading, busy, message) = {
+        {
             let mut pinned = self.as_mut().rust_mut();
             let state = &mut *pinned;
             state
                 .model
                 .pin_mut()
                 .replace_queue_rows(&state.queue_state, state.cache_epoch);
+        }
+        self.project_queue_status();
+    }
+    fn project_queue_status(mut self: Pin<&mut Self>) {
+        let (start, loading, busy, message) = {
+            let state = self.rust();
             (
                 queue_start_index(&state.queue_state),
                 state.queue_state.loading,
@@ -2461,6 +2484,7 @@ pub struct TrackListModelRust {
     pub(crate) track_count: i32,
 }
 impl ffi::TrackListModel {
+    #[allow(clippy::too_many_lines)] // Keep moves and role changes in one Qt notification sequence.
     pub(crate) fn replace_queue_rows(mut self: Pin<&mut Self>, view: &QueueView, epoch: u64) {
         let ids: std::collections::HashSet<_> = view.entries.iter().map(|row| row.id).collect();
         self.as_mut().retain_queue_rows(&ids);
@@ -2521,13 +2545,24 @@ impl ffi::TrackListModel {
                         .map(|row| row.artwork.clone())
                 })
                 .unwrap_or_default();
+            let queue = Some(QueueRoles {
+                id: entry.id,
+                current: Some(entry.id) == view.current_entry_id,
+                past: i < view.history_len,
+                availability: entry.availability,
+            });
+            if found.is_some()
+                && self.rows.get(i).is_some_and(|row| {
+                    row.queue == queue
+                        && row.playlist_item_id == entry.playlist_item_id
+                        && row.track == entry.track
+                        && row.artwork == artwork
+                })
+            {
+                continue;
+            }
             let row = Row {
-                queue: Some(QueueRoles {
-                    id: entry.id,
-                    current: Some(entry.id) == view.current_entry_id,
-                    past: i < view.history_len,
-                    availability: entry.availability,
-                }),
+                queue,
                 playlist_item_id: entry.playlist_item_id,
                 track: entry.track.clone(),
                 artwork,
@@ -2541,7 +2576,7 @@ impl ffi::TrackListModel {
                 unsafe {
                     self.as_mut().end_insert_rows();
                 }
-            } else if self.rows.get(i) != Some(&row) {
+            } else {
                 if let Some(existing) = self.as_mut().rust_mut().rows.get_mut(i) {
                     *existing = row;
                 }

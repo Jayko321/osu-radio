@@ -1514,6 +1514,7 @@ QtObject {
         case 1:
             check(search.text.toLowerCase() === "audio" && !general.visible && audio.visible && individual.visible && !empty.visible,
                 "real keyboard edits filter by the case-insensitive section title: " + search.text);
+            if (audio.y !== 0) return; // Column polish follows visibility changes.
             check(audio.y === 0, "hidden General leaves no gap before Audio");
             search.text = settingsQueries[0].query;
             stage = 2;
@@ -2291,6 +2292,7 @@ QtObject {
             bridge.player.nextTrack(); stage = 1; break;
         case 1:
             if (bridge.player.currentAudioId !== 42 || bridge.queue.queueLoading) return;
+            if (queueSections(panel).join() !== "HISTORY,NOW PLAYING,UP NEXT") return;
             check(list.count === 3 && list.itemAtIndex(0).model.isPast, "Next preserves history");
             check(queueSections(panel).join() === "HISTORY,NOW PLAYING,UP NEXT" && findChild(panel.contentItem, "queueLeft").text === "· 1 left", "live queue shows three sections and the upcoming count");
             input.keyClick(Qt.Key_Escape, Qt.NoModifier, 0); stage = 12; break;
@@ -2820,7 +2822,7 @@ QtObject {
                 "sorting retains media by audio ID");
         }
         check(bridge.player.selectedAudioId === 42 && bridge.player.selectedTitle === "Track 42", "sorting retains selection");
-        check(bridge.player.selectedDurationLabel === "02:05" && bridge.player.selectedArtworkUrl === sortMedia[42].artwork,
+        check(bridge.player.selectedDurationLabel === "02:05" && bridge.player.selectedArtworkUrl === sortMedia.playerArtwork,
             "sorting retains player media");
         check(resets === retainedResets, "sorting uses row notifications without model reset");
         return true;
@@ -2846,6 +2848,7 @@ QtObject {
                 const row = list.itemAtIndex(i);
                 sortMedia[row.audioId] = {artwork: row.artworkUrl, duration: row.durationLabel};
             }
+            sortMedia.playerArtwork = bridge.player.selectedArtworkUrl;
             retainedResets = resets;
             menu.forceActiveFocus();
             menu.popup.open();
@@ -3467,8 +3470,57 @@ QtObject {
             finish(); break;
         }
     }
+    property int trayCycles: 0
+    property var retainedScene: null
+    function trayMemoryProbe(): void {
+        switch (stage) {
+        case 0:
+            if (!bridge.connected || bridge.library.libraryLoading || bridge.library.tracks.trackCount !== 60) return;
+            retainedScene = window.applicationScene;
+            window.showMinimized();
+            check(window.applicationScene === retainedScene, "minimize retains scene");
+            window.showFromTray();
+            window.hide(); window.showFromTray();
+            check(window.applicationScene === retainedScene, "quick return retains scene");
+            findChild(window.contentItem, "songSearch").text = "retained search";
+            window.selectedTab = 2;
+            findChild(window.contentItem, "settingsSearch").text = "audio";
+            window.selectedTab = 1;
+            bridge.playlists.beginPlaylistCreate();
+            bridge.playlists.setPlaylistEditorName("Unsaved draft");
+            stage = 1; break;
+        case 1:
+            if (bridge.library.libraryLoading || !bridge.playlists.playlistEditorOpen) return;
+            findChild(window.contentItem, "songList").contentY = 420;
+            findChild(window, "trayUnloadTimer").interval = 20;
+            window.trayOnline();
+            window.close(); stage = 2; break;
+        case 2:
+            if (window.applicationScene) return;
+            check(!window.visualActive && bridge.connected, "hidden scene released with session alive");
+            window.showFromTray(); stage = 3; break;
+        case 3:
+            if (!window.applicationScene || window.savedView) return;
+            check(window.selectedTab === 1, "tab restored");
+            check(Math.abs(findChild(window.contentItem, "songList").contentY - 420) < 1, "song scroll restored");
+            check(findChild(window.contentItem, "songSearch").text === "retained search", "song query restored");
+            check(findChild(window.contentItem, "settingsSearch").text === "audio", "settings query restored");
+            check(bridge.playlists.playlistEditorOpen && bridge.playlists.playlistEditorName === "Unsaved draft", "unsaved editor retained");
+            check(bridge.library.tracks.trackCount === 60 && bridge.connected, "latest model restored without reconnect");
+            if (++trayCycles < 3) { window.hide(); stage = 2; } else {
+                const saved = window.applicationScene.saveView();
+                saved.songs.scroll = 1000000;
+                window.applicationScene.restoreView(saved);
+                const list = findChild(window.contentItem, "songList");
+                check(list.contentY <= list.originY + Math.max(0, list.contentHeight - list.height), "restored scroll clamps after a shorter result");
+                window.quitting = true; finish();
+            }
+            break;
+        }
+    }
     function step(): void {
         if (passed) return;
+        if (testCase === "tray-memory") { trayMemoryProbe(); return; }
         if (testCase === "controls") { controlsProbe(); return; }
         if (testCase === "controls-popups") { menuModalProbe(); return; }
         if (testCase === "controls-mods") { modsProbe(); return; }

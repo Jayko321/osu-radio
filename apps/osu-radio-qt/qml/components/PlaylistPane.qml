@@ -26,6 +26,13 @@ Item {
     readonly property var activePlaylist: playlists.find(playlist => playlist.id === activeId)
     readonly property alias tracksList: tracks
     readonly property alias searchField: search
+    function saveView(): var { return { list: lists.contentY, tracks: tracks.contentY, focus: search.activeFocus, cursor: search.cursorPosition }; }
+    function restoreView(state: var): void {
+        lists.forceLayout(); tracks.forceLayout();
+        lists.contentY = Math.max(lists.originY, Math.min(state.list, lists.originY + Math.max(0, lists.contentHeight - lists.height)));
+        tracks.contentY = Math.max(tracks.originY, Math.min(state.tracks, tracks.originY + Math.max(0, tracks.contentHeight - tracks.height)));
+        if (state.focus) { search.forceActiveFocus(); search.cursorPosition = state.cursor; }
+    }
     signal searchEdited(string query)
     signal createRequested()
     signal editRequested(int id)

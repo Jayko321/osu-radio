@@ -10,12 +10,16 @@
 #include <QtGui/QScreen>
 #include <QtGui/QStyleHints>
 #include <QtQuick/QQuickWindow>
+#include <QtQuick/QSGRendererInterface>
 #include <QtQuickControls2/QQuickStyle>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
 #include "artwork.h"
 #include <cstdint>
 #include <memory>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
 #ifdef Q_OS_WIN
 #include <winrt/Windows.Media.h>
 #include <systemmediatransportcontrolsinterop.h>
@@ -158,6 +162,21 @@ public:
 };
 
 inline QPointer<QQuickWindow> trayWindow;
+inline void releaseWindowResources() {
+    if (trayWindow && !trayWindow->isVisible()) {
+        trayWindow->setPersistentSceneGraph(false);
+        trayWindow->setPersistentGraphics(false);
+        trayWindow->releaseResources();
+        // The software loop only deletes obsolete scene nodes when it synchronizes a frame.
+        if (trayWindow->rendererInterface()->graphicsApi() == QSGRendererInterface::Software)
+            trayWindow->grabWindow();
+        if (auto *engine = qjsEngine(trayWindow)) engine->collectGarbage();
+#ifdef __GLIBC__
+        // Decoder arenas otherwise retain freed pages across repeated tray cycles.
+        malloc_trim(0);
+#endif
+    }
+}
 // Tray callbacks arrive on the Rust runtime; the window's own QML functions run on the Qt thread.
 inline void trayCall(const QString &method) {
     if (auto *window = trayWindow.data())
@@ -174,6 +193,13 @@ inline std::unique_ptr<LiveWindowMedia> connectLiveWindow(QQmlApplicationEngine 
     auto *window = engine.rootObjects().isEmpty() ? nullptr : qobject_cast<QQuickWindow *>(engine.rootObjects().first());
     if (!window) return {};
     trayWindow = window;
+    {
+        auto cache = artworkCache();
+        QMutexLocker lock(&cache->mutex);
+        qreal dpr = 1;
+        for (auto *screen : QGuiApplication::screens()) dpr = std::max(dpr, screen->devicePixelRatio());
+        cache->thumbnailEdge = dpr <= 1 ? 512 : dpr <= 2 ? 1024 : 1280;
+    }
     return std::make_unique<LiveWindowMedia>(window);
 }
 #if QT_VERSION < QT_VERSION_CHECK(6, 8, 0)
@@ -220,6 +246,12 @@ inline QString saveCloseToTray(bool enabled) {
     settings.sync();
     return settings.status() == QSettings::NoError ? QString()
         : QStringLiteral("Could not save the tray preference. Your choice applies for this session.");
+}
+inline void configureMemory() {
+#ifdef __GLIBC__
+    // Keep large image/JSON buffers out of arenas after glibc's adaptive threshold rises.
+    mallopt(M_MMAP_THRESHOLD, 128 * 1024);
+#endif
 }
 inline void configureEngine(QQmlApplicationEngine &engine, bool smoke) {
     // Dialog internals import unqualified Controls; match the app's Basic controls.

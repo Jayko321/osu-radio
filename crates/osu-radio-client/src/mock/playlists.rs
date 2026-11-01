@@ -159,7 +159,8 @@ impl MockPlaylists {
         };
         if let Some(png) = self.view.editor_cover_png.take() {
             self.cover_revision = self.cover_revision.saturating_add(1);
-            self.covers.insert(id, (self.cover_revision, png));
+            self.covers
+                .insert(id, (self.cover_revision, (*png).clone()));
         } else if self.view.editor_cover_reset {
             self.covers.remove(&id);
         }
@@ -180,7 +181,8 @@ impl MockPlaylists {
                     track: item.track(),
                 })
                 .collect();
-            self.track_sort.sort_playlist(playlist, &mut tracks);
+            self.track_sort
+                .sort_playlist(std::sync::Arc::make_mut(playlist), &mut tracks);
         }
     }
     #[allow(clippy::too_many_lines)] // One offline reducer mirrors the public playlist actions.
@@ -214,7 +216,7 @@ impl MockPlaylists {
                     match png {
                         Ok(Some(bytes)) if bytes.len() <= 2 * 1024 * 1024 => {
                             self.view.editor_epoch = self.view.editor_epoch.wrapping_add(1);
-                            self.view.editor_cover_png = Some(bytes);
+                            self.view.editor_cover_png = Some(bytes.into());
                             self.view.editor_cover_reset = false;
                             self.view.message.clear();
                         }
@@ -371,7 +373,8 @@ impl MockPlaylists {
             .storage
             .iter()
             .find(|playlist| Some(playlist.id) == self.view.active_id)
-            .cloned();
+            .cloned()
+            .map(std::sync::Arc::new);
         self.sort_active();
         self.view.selected_item_id = self
             .view

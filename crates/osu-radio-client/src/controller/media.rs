@@ -21,6 +21,7 @@ struct SystemArtwork {
 #[derive(Default)]
 pub(crate) struct MediaScheduler {
     system: Option<SystemArtwork>,
+    pub(crate) gui_hidden: bool,
     pub(crate) generation: u64,
     pub(crate) serial: u64,
     pub(crate) queue: VecDeque<(i32, bool)>,
@@ -171,6 +172,9 @@ impl MediaScheduler {
     }
 
     fn gui_media_wanted(&self, id: i32, input: &MediaInput<'_>) -> bool {
+        if self.gui_hidden {
+            return false;
+        }
         input
             .player
             .selected_track
@@ -285,7 +289,7 @@ impl MediaScheduler {
         input: &MediaInput<'_>,
         work: &mut Workflow<'_>,
     ) {
-        if id < 0 || input.track(id).is_none() {
+        if self.gui_hidden || id < 0 || input.track(id).is_none() {
             return;
         }
         if input
@@ -307,7 +311,7 @@ impl MediaScheduler {
         input: &MediaInput<'_>,
         work: &mut Workflow<'_>,
     ) {
-        if id < 0 || input.track(id).is_none() {
+        if (self.gui_hidden && !self.system_missing(id)) || id < 0 || input.track(id).is_none() {
             return;
         }
         let requested_cover = self.requested_cover(id, missing, input);
@@ -572,6 +576,16 @@ impl MediaInput<'_> {
 }
 
 impl MediaScheduler {
+    pub(crate) fn discarded(&mut self, ticket: MediaTicket) {
+        if let Some(job) = self
+            .jobs
+            .get_mut(&ticket.serial)
+            .filter(|job| job.ticket == ticket)
+        {
+            job.decoding = false;
+        }
+        self.finish(ticket);
+    }
     pub(crate) fn installed(
         &mut self,
         ticket: MediaTicket,

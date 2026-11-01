@@ -19,12 +19,19 @@ public:
     QMutex mutex;
     std::uint64_t generation = 0, clock = 0;
     qsizetype bytes = 0;
+    int thumbnailEdge = 512;
+    bool suspended = false;
     std::map<QString, Entry> entries;
     QString protectedKey;
 };
 inline std::shared_ptr<ArtworkCache> artworkCache() {
     static auto cache = std::make_shared<ArtworkCache>();
     return cache;
+}
+inline void suspendArtwork(bool suspended) {
+    auto cache = artworkCache();
+    QMutexLocker lock(&cache->mutex);
+    cache->suspended = suspended;
 }
 inline std::uint64_t resetArtwork() {
     auto cache = artworkCache();
@@ -52,6 +59,9 @@ inline void protectArtwork(std::uint64_t generation, int id) {
 inline QString artworkUrl(std::uint64_t generation, int id) {
     return cachedArtworkUrl(generation, QString::number(id));
 }
+inline QString selectedArtworkUrl(std::uint64_t generation, int id) {
+    return cachedArtworkUrl(generation, QString::number(id) + "/large");
+}
 inline QString playlistArtworkKey(int id, std::int64_t revision, int beatmap) {
     return QStringLiteral("playlist/%1/%2").arg(id).arg(
         revision >= 0 ? QString::number(revision) : QStringLiteral("auto-%1").arg(beatmap));
@@ -60,35 +70,41 @@ inline QString playlistArtworkUrl(std::uint64_t generation, int id, std::int64_t
     return cachedArtworkUrl(generation, playlistArtworkKey(id, revision, beatmap));
 }
 inline QVector<int> installCachedArtwork(std::uint64_t generation, const QString &key, const QByteArray &bytes) {
+    auto cache = artworkCache();
+    int edge;
+    {
+        QMutexLocker lock(&cache->mutex);
+        if (cache->generation != generation || cache->suspended) return {};
+        edge = key.endsWith("/large") || key.startsWith("draft/") ? 1280 : cache->thumbnailEdge;
+    }
     QBuffer buffer;
     buffer.setData(bytes);
     buffer.open(QIODevice::ReadOnly);
     QImageReader reader(&buffer);
     const auto size = reader.size();
     if (!size.isValid()) return {};
-    const auto scaled = size.scaled(QSize(1280, 1280), Qt::KeepAspectRatio);
-    if (size.width() > 1280 || size.height() > 1280) reader.setScaledSize(scaled);
+    const auto scaled = size.scaled(QSize(edge, edge), Qt::KeepAspectRatio);
+    if (size.width() > edge || size.height() > edge) reader.setScaledSize(scaled);
     auto image = reader.read();
     if (image.isNull()) return {};
-    if (image.width() > 1280 || image.height() > 1280)
-        image = image.scaled(1280, 1280, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    auto cache = artworkCache();
+    if (image.width() > edge || image.height() > edge)
+        image = image.scaled(edge, edge, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     QMutexLocker lock(&cache->mutex);
-    if (cache->generation != generation) return {};
+    if (cache->generation != generation || cache->suspended) return {};
     if (auto old = cache->entries.find(key); old != cache->entries.end()) {
         cache->bytes -= old->second.image.sizeInBytes();
         cache->entries.erase(old);
     }
     QVector<int> affected;
     bool track = false;
-    const auto trackId = key.toInt(&track);
+    const auto trackId = key.section('/', 0, 0).toInt(&track);
     if (track) affected.append(trackId);
     constexpr qsizetype budget = 64 * 1024 * 1024;
     if (image.sizeInBytes() > budget) return {};
     while (!cache->entries.empty() && cache->bytes + image.sizeInBytes() > budget) {
         auto victim = cache->entries.end();
         for (auto entry = cache->entries.begin(); entry != cache->entries.end(); ++entry)
-            if (entry->first != cache->protectedKey &&
+            if (entry->first != cache->protectedKey && entry->first != cache->protectedKey + "/large" &&
                 (victim == cache->entries.end() || entry->second.touched < victim->second.touched))
                 victim = entry;
         if (victim == cache->entries.end()) return {};
@@ -101,7 +117,18 @@ inline QVector<int> installCachedArtwork(std::uint64_t generation, const QString
     return affected;
 }
 inline QVector<int> installArtwork(std::uint64_t generation, int id, const QByteArray &bytes) {
-    return installCachedArtwork(generation, QString::number(id), bytes);
+    const auto key = QString::number(id);
+    auto affected = cachedArtworkUrl(generation, key).isEmpty()
+        ? installCachedArtwork(generation, key, bytes) : QVector<int>{id};
+    bool selected;
+    {
+        auto cache = artworkCache();
+        QMutexLocker lock(&cache->mutex);
+        selected = cache->generation == generation && cache->protectedKey == key;
+    }
+    if (selected && selectedArtworkUrl(generation, id).isEmpty())
+        installCachedArtwork(generation, key + "/large", bytes);
+    return affected;
 }
 inline QVector<int> installPlaylistArtwork(std::uint64_t generation, int id, std::int64_t revision, int beatmap, const QByteArray &bytes) {
     return installCachedArtwork(generation, playlistArtworkKey(id, revision, beatmap), bytes);
@@ -151,7 +178,7 @@ inline QByteArray preparePlaylistCover(const QString &url, QString &error) {
 class ArtworkProvider final : public QQuickImageProvider {
 public:
     ArtworkProvider() : QQuickImageProvider(QQuickImageProvider::Image), cache(artworkCache()) {}
-    QImage requestImage(const QString &id, QSize *size, const QSize &) override {
+    QImage requestImage(const QString &id, QSize *size, const QSize &requestedSize) override {
         const auto parts = id.split('/');
         QMutexLocker lock(&cache->mutex);
         if (parts.size() < 3 || parts[0].toULongLong() != cache->generation) return {};
@@ -160,7 +187,11 @@ public:
         if (found == cache->entries.end()) return {};
         found->second.touched = ++cache->clock;
         if (size) *size = found->second.image.size();
-        return found->second.image;
+        auto image = found->second.image;
+        lock.unlock();
+        if (requestedSize.isValid() && (requestedSize.width() < image.width() || requestedSize.height() < image.height()))
+            return image.scaled(requestedSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        return image;
     }
 private:
     std::shared_ptr<ArtworkCache> cache;

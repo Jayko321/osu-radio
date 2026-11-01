@@ -40,10 +40,10 @@ fn media_and_controller_resolve_duplicate_audio_from_the_same_state_owner() {
     assert_title(&state, Some("Library"));
     let mut queued = track(1);
     queued.title = "Queued".into();
-    state.upcoming.view.entries = vec![queue_row(queued, 1)];
+    state.upcoming.view.entries = vec![queue_row(queued, 1)].into();
     state.library.indices.insert(1, usize::MAX);
     assert_title(&state, Some("Queued"));
-    state.upcoming.view.entries.clear();
+    std::sync::Arc::make_mut(&mut state.upcoming.view.entries).clear();
     let mut selected = track(1);
     selected.title = "Selected".into();
     state.player.selected_track = Some(selected);
@@ -68,7 +68,8 @@ fn duration_effect_updates_duplicate_rows_without_changing_selection_or_playback
             queue_row(track(1), 1),
             queue_row(track(2), 2),
             queue_row(track(1), 3),
-        ];
+        ]
+        .into();
         let playback = state.player.playback.clone();
         for duration in [Some(Duration::from_secs(42)), None] {
             updates.lock().unwrap().clear();
@@ -1150,4 +1151,85 @@ fn mute_is_session_player_state_apart_from_every_volume_setting() {
     assert_eq!(state.assignment_volume().to_bits(), 0.7_f32.to_bits());
     state.command(AppCommand::SetMuted(false));
     assert_eq!(muted(&updates), Some(false));
+}
+
+#[test]
+fn hidden_ui_keeps_owners_and_resumes_latest_snapshots() {
+    let (mut state, updates) = controller();
+    state.replace_tracks(vec![track(1)], true);
+    state.upcoming.view.entries = vec![queue_row(track(1), 1)].into();
+    let snapshot = state.upcoming.view.clone();
+    state.upcoming.view.busy = true;
+    assert!(Arc::ptr_eq(&snapshot.entries, &state.upcoming.view.entries));
+    state.set_ui_visible(false);
+    updates.lock().unwrap().clear();
+    state.replace_tracks(vec![track(2)], false);
+    state.emit_queue();
+    assert!(!updates.lock().unwrap().iter().any(|u| matches!(
+        u,
+        AppUpdate::LibraryTracksReplaced { .. } | AppUpdate::Queue(_)
+    )));
+    assert!(state.media.gui_hidden);
+    state.set_ui_visible(true);
+    let updates = updates.lock().unwrap();
+    assert!(updates.iter().any(|u| matches!(u, AppUpdate::LibraryTracksReplaced { tracks, .. } if tracks.first().is_some_and(|track| track.audio_source_id == 2))));
+    assert!(matches!(updates.last(), Some(AppUpdate::UiResumed)));
+    drop(updates);
+    assert!(!state.media.gui_hidden);
+}
+
+#[test]
+fn hiding_keeps_system_demand_and_discard_releases_decoder_without_poisoning_cover() {
+    use osu_radio_media_controls::{ArtworkKey, LaunchKey};
+    let (mut state, _) = controller();
+    state.replace_tracks(vec![track(1), track(2)], true);
+    let key = ArtworkKey {
+        launch: LaunchKey {
+            entry_id: 7,
+            playback_token: 9,
+        },
+        cover_id: 101,
+        generation: state.media.generation,
+    };
+    let ticket = MediaTicket {
+        generation: state.media.generation,
+        audio_id: 2,
+        serial: 42,
+    };
+    state.media.jobs.insert(
+        ticket.serial,
+        media::MediaJob {
+            ticket,
+            cover: Some(102),
+            decoding: true,
+            artwork_pending: false,
+            duration_pending: false,
+            tasks: Vec::new(),
+        },
+    );
+    let playback = state.player.playback.clone();
+    state.set_ui_visible(false);
+    // No native adapter in this fixture; supply its current artwork demand explicitly.
+    state.media.sync_system_artwork(Some((1, key)));
+    assert!(state.media.jobs.contains_key(&ticket.serial));
+    let input = media::MediaInput {
+        library: &state.library,
+        playlists: &state.playlists,
+        player: &state.player,
+        upcoming: Some(&state.upcoming),
+    };
+    let mut work = workflow::Workflow {
+        api: None,
+        tasks: &mut state.tasks,
+        cancel: &state.cancel,
+        effects: Vec::new(),
+    };
+    assert!(state.media.media_wanted(1, &input, &mut work));
+    assert!(!state.media.media_wanted(2, &input, &mut work));
+    assert!(state.media.system_artwork(Some((1, key))).is_some());
+    state.command(AppCommand::MediaDiscarded(ticket));
+    assert!(state.media.jobs.is_empty());
+    assert!(!state.media.unavailable.contains(&102));
+    assert_eq!(state.player.playback, playback);
+    assert!(state.player.commands.is_empty());
 }

@@ -15,7 +15,7 @@ fn selecting_a_search_result_is_presentation_only_and_explicit_play_targets_that
     let mut current = assignment(1, 10, 1, PlaybackMode::Playing);
     current.current_entry_id = Some(QueueEntryId::new(1).unwrap());
     state.player.assignment = Some(current.clone());
-    state.upcoming.view.entries = vec![queue_row(track(1), 1), queue_row(track(3), 2)];
+    state.upcoming.view.entries = vec![queue_row(track(1), 1), queue_row(track(3), 2)].into();
     state.library.query = "B".into();
     state.command(AppCommand::SelectTrack(Some(2)));
     assert!(state.player.commands.is_empty() && !state.player.command_busy);
@@ -72,7 +72,8 @@ async fn insert_and_check_responses_keep_empty_exhausted_playing_and_paused_laun
         state.replace_tracks(vec![track(42)], true);
         state.command(AppCommand::SelectTrack(Some(42)));
         if exhausted {
-            state.upcoming.view.entries = vec![queue_row(track(7), 1), queue_row(track(8), 2)];
+            state.upcoming.view.entries =
+                vec![queue_row(track(7), 1), queue_row(track(8), 2)].into();
             state.upcoming.view.history_len = 2;
         }
         let confirmed = state.upcoming.view.entries.clone();

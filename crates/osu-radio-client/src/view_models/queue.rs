@@ -7,6 +7,7 @@ use crate::models::{PlaybackAssignment, PlaybackMode};
 use crate::models::{
     PlaybackCommand, QueueAvailability, QueueEntry, QueueEntryId, QueueItemRef, QueuePlacement,
 };
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,7 +79,7 @@ pub enum QueueAction {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct QueueView {
-    pub entries: Vec<QueueRow>,
+    pub entries: Arc<Vec<QueueRow>>,
     pub current_entry_id: Option<QueueEntryId>,
     pub history_len: usize,
     pub mode: crate::models::PlaybackMode,
@@ -93,7 +94,7 @@ pub struct QueueView {
 impl Default for QueueView {
     fn default() -> Self {
         Self {
-            entries: Vec::new(),
+            entries: Arc::default(),
             current_entry_id: None,
             history_len: 0,
             mode: crate::models::PlaybackMode::Stopped,
@@ -234,7 +235,8 @@ impl QueueViewModel {
                             });
                         row
                     })
-                    .collect();
+                    .collect::<Vec<_>>()
+                    .into();
                 self.view.message.clear();
             }
             Err(error) => {
@@ -258,7 +260,10 @@ pub(crate) struct QueueInput<'a> {
 
 impl QueueViewModel {
     pub(crate) fn apply_preferences(&mut self, preferences: crate::TrackNamePreferences) {
-        for track in self.view.entries.iter_mut().map(|row| &mut row.track) {
+        for track in Arc::make_mut(&mut self.view.entries)
+            .iter_mut()
+            .map(|row| &mut row.track)
+        {
             track.apply_name_preferences(preferences);
         }
     }
@@ -266,7 +271,10 @@ impl QueueViewModel {
 
 impl QueueViewModel {
     pub(crate) fn set_duration(&mut self, audio_id: i32, duration: Option<Duration>) {
-        for track in self.view.entries.iter_mut().map(|row| &mut row.track) {
+        for track in Arc::make_mut(&mut self.view.entries)
+            .iter_mut()
+            .map(|row| &mut row.track)
+        {
             if track.audio_source_id == audio_id {
                 track.duration = duration;
             }

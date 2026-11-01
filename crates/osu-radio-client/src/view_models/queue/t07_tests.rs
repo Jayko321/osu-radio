@@ -247,7 +247,7 @@ async fn mixed_queue_commands_are_serial_and_errors_and_noops_keep_confirmed_sta
     state.playback = Some(worker);
     state.downloads = Some(downloads);
     state.player.assignment = Some(assignment(1, 10, 7, PlaybackMode::Paused));
-    state.upcoming.view.entries = vec![queue_row(track(42), 3)];
+    state.upcoming.view.entries = vec![queue_row(track(42), 3)].into();
     let confirmed = state.upcoming.view.entries.clone();
     let actions = [
         QueueAction::Insert {
@@ -380,7 +380,7 @@ async fn successful_noop_refreshes_open_panel_and_close_discards_its_late_get() 
     state.session = Some(session);
     state.player.assignment = Some(assignment(1, 10, 7, PlaybackMode::Paused));
     state.upcoming.open = true;
-    state.upcoming.view.entries = vec![queue_row(track(7), 1)];
+    state.upcoming.view.entries = vec![queue_row(track(7), 1)].into();
     let (entered, ready) = tokio::sync::oneshot::channel();
     let (release, held) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {

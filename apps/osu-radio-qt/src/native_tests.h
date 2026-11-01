@@ -18,17 +18,26 @@ inline QString checkArtworkCache() {
     ArtworkProvider provider;
     QSize size;
     auto image = provider.requestImage(artworkUrl(generation, 1).mid(QStringLiteral("image://artwork/").size()), &size, {});
-    if (size != QSize(1280, 640) || image.size() != size) return "proportional scaling failed";
+    if (size != QSize(512, 256) || image.size() != size) return "proportional scaling failed";
     if (image.pixelColor(10, 10) != QColor(Qt::red)) return "decoded pixels differ";
+    protectArtwork(generation, 1);
+    installArtwork(generation, 1, bytes);
+    const auto selected = provider.requestImage(selectedArtworkUrl(generation, 1).mid(QStringLiteral("image://artwork/").size()), &size, {});
+    if (selected.size() != QSize(1280, 640) || image.size() != QSize(512, 256)) return "thumbnail replaced selected variant";
+    const auto requested = provider.requestImage(artworkUrl(generation, 1).mid(QStringLiteral("image://artwork/").size()), nullptr, QSize(128, 128));
+    if (requested.size() != QSize(128, 64)) return "provider ignored requested size";
+    protectArtwork(generation, -1);
     const auto originalUrl = artworkUrl(generation, 1);
     installArtwork(generation, 1, bytes);
+    if (artworkUrl(generation, 1) != originalUrl) return "duplicate delivery replaced immutable thumbnail";
+    installCachedArtwork(generation, QString::number(1), bytes);
     const auto replacementUrl = artworkUrl(generation, 1);
     if (replacementUrl == originalUrl) return "same-key installation reused provider URL";
     const auto resident = provider.requestImage(originalUrl.mid(QStringLiteral("image://artwork/").size()), &size, {});
     if (resident.isNull() || resident.size() != image.size() || resident.pixelColor(10, 10) != QColor(Qt::red)) return "resident same-key image missing through earlier installation URL";
     if (provider.requestImage(replacementUrl.mid(QStringLiteral("image://artwork/").size()), &size, {}).isNull()) return "new image installation version missing";
-    for (int id = 2; id <= 24; ++id) installArtwork(generation, id, bytes);
-    if (!artworkUrl(generation, 1).isEmpty() || artworkUrl(generation, 24).isEmpty()) return "eviction failed";
+    for (int id = 2; id <= 160; ++id) installArtwork(generation, id, bytes);
+    if (!artworkUrl(generation, 1).isEmpty() || artworkUrl(generation, 160).isEmpty()) return "eviction failed";
     if (!provider.requestImage(replacementUrl.mid(QStringLiteral("image://artwork/").size()), &size, {}).isNull()) return "evicted provider key exposed";
     if (image.pixelColor(10, 10) != QColor(Qt::red)) return "eviction invalidated an already displayed image";
     {
@@ -36,7 +45,7 @@ inline QString checkArtworkCache() {
         QMutexLocker lock(&cache->mutex);
         if (cache->bytes > 64 * 1024 * 1024) return "decoded budget exceeded";
     }
-    const auto lastUrl = artworkUrl(generation, 24);
+    const auto lastUrl = artworkUrl(generation, 160);
     resetArtwork();
     if (!installArtwork(generation, 99, bytes).isEmpty()) return "stale decode installed";
     if (!provider.requestImage(lastUrl.mid(QStringLiteral("image://artwork/").size()), &size, {}).isNull()) return "stale provider image exposed";
@@ -45,7 +54,7 @@ inline QString checkArtworkCache() {
     installArtwork(protectedGeneration, 1, bytes);
     protectArtwork(protectedGeneration, 1);
     const auto protectedUrl = artworkUrl(protectedGeneration, 1);
-    for (int id = 2; id <= 30; ++id) {
+    for (int id = 2; id <= 160; ++id) {
         const auto affected = installArtwork(protectedGeneration, id, bytes);
         if (affected.size() != 1 || affected.first() != id) return "eviction advertised a displayed victim";
     }

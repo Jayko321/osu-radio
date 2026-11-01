@@ -8,6 +8,7 @@ use crate::describe;
 use crate::models::{Playlist, PlaylistItem, PlaylistSummary, TrackDifficulty};
 use std::collections::HashMap;
 use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,7 +75,7 @@ pub struct PlaylistsState {
     pub editor_name: String,
     pub editor_epoch: u64,
     #[serde(skip)]
-    pub editor_cover_png: Option<Vec<u8>>,
+    pub editor_cover_png: Option<Arc<Vec<u8>>>,
     pub editor_cover_reset: bool,
     pub open: bool,
     pub adding: bool,
@@ -83,7 +84,7 @@ pub struct PlaylistsState {
     pub message: String,
     pub playlists: Vec<PlaylistSummary>,
     pub active_id: Option<i32>,
-    pub active: Option<Playlist>,
+    pub active: Option<Arc<Playlist>>,
     pub selected_item_id: Option<i32>,
     pub target_id: Option<i32>,
     pub candidates: Vec<PlaylistCandidate>,
@@ -276,7 +277,7 @@ impl PlaylistsViewModel {
             .as_mut()
             .filter(|active| active.id == summary.id)
         {
-            active.name.clone_from(&summary.name);
+            Arc::make_mut(active).name.clone_from(&summary.name);
         }
         if let Some(row) = self
             .view
@@ -292,10 +293,11 @@ impl PlaylistsViewModel {
 }
 
 impl PlaylistsViewModel {
-    pub(crate) fn install_candidates(&mut self, track: Track) {
+    pub(crate) fn install_candidates(&mut self, track: &Track) {
         self.view.candidates = track
             .difficulties
-            .into_iter()
+            .iter()
+            .cloned()
             .map(|difficulty| PlaylistCandidate {
                 beatmap_id: difficulty.beatmap_id,
                 name: difficulty
@@ -380,7 +382,7 @@ impl PlaylistsViewModel {
                 track,
             })
             .collect();
-        self.view.active = Some(playlist);
+        self.view.active = Some(Arc::new(playlist));
         self.reorder(sort);
         self.view.selected_item_id = selected
             .filter(|id| self.tracks.iter().any(|row| row.item_id == *id))
@@ -388,7 +390,7 @@ impl PlaylistsViewModel {
     }
     pub(crate) fn reorder(&mut self, sort: super::TrackSort) {
         if let Some(playlist) = &mut self.view.active {
-            sort.sort_playlist(playlist, &mut self.tracks);
+            sort.sort_playlist(Arc::make_mut(playlist), &mut self.tracks);
         }
     }
 }
@@ -440,7 +442,7 @@ impl PlaylistsViewModel {
                     match png {
                         Ok(Some(bytes)) if bytes.len() <= 2 * 1024 * 1024 => {
                             self.view.editor_epoch = self.view.editor_epoch.wrapping_add(1);
-                            self.view.editor_cover_png = Some(bytes);
+                            self.view.editor_cover_png = Some(Arc::new(bytes));
                             self.view.editor_cover_reset = false;
                             self.view.message.clear();
                         }
@@ -574,7 +576,7 @@ impl PlaylistsViewModel {
                 Err(error) => Err(error.clone()),
                 Ok(playlist) => {
                     if let Some(png) = png {
-                        api.set_playlist_cover(playlist.id, png)
+                        api.set_playlist_cover(playlist.id, (*png).clone())
                             .await
                             .map_err(|error| describe(&error))
                     } else if reset {
@@ -657,7 +659,7 @@ impl PlaylistsViewModel {
             .and_then(|index| input.library.tracks.get(*index))
             .cloned()
         {
-            self.install_candidates(track);
+            self.install_candidates(&track);
         } else if let Some(api) = work.api.clone() {
             // Search results may omit a playlist song; reload its complete difficulty group.
             let epoch = self.candidates_epoch;
@@ -886,7 +888,7 @@ impl PlaylistsViewModel {
                 }
                 match result {
                     Ok(track) => {
-                        self.install_candidates(track);
+                        self.install_candidates(&track);
                         if self.view.message == "Loading difficulties…" {
                             self.view.message.clear();
                         }
@@ -961,12 +963,13 @@ impl PlaylistsViewModel {
                                 playlist_id,
                                 item_id,
                             } => {
-                                if let Some(mut playlist) = self
+                                if let Some(playlist) = self
                                     .view
                                     .active
                                     .clone()
                                     .filter(|active| active.id == playlist_id)
                                 {
+                                    let mut playlist = Arc::unwrap_or_clone(playlist);
                                     playlist.items.retain(|item| item.id != item_id);
                                     self.install_playlist(playlist, input, work);
                                 }
@@ -1076,7 +1079,7 @@ impl PlaylistsViewModel {
             }
         }
         if let Some(playlist) = &mut self.view.active {
-            for item in &mut playlist.items {
+            for item in &mut Arc::make_mut(playlist).items {
                 if let Some(id) = item.audio_source_id {
                     item.last_played_at_ms = dates.get(&id).copied();
                 }
@@ -1101,7 +1104,7 @@ impl PlaylistsViewModel {
             }
         }
         if let Some(playlist) = &mut self.view.active {
-            for item in &mut playlist.items {
+            for item in &mut Arc::make_mut(playlist).items {
                 if item.audio_source_id == Some(audio_id) {
                     item.volume_percent = percent;
                 }

@@ -49,9 +49,11 @@ and the existing 30-second request timeout. Decode/cache installation or stale
 result discard acknowledges delivery before a slot is released.
 
 Qt owns image decoding, URLs and one bounded decoded cache shared across panels,
-playlist artwork and editor drafts. The existing 64 MiB limit, proportional
-1280px image bound, selected-cover protection and immutable version/epoch keys
-remain. QML disables its additional provider cache. Keeping these facilities out
+playlist artwork and editor drafts. The 64 MiB limit, proportional 1280px ceiling,
+selected-cover protection and immutable version/epoch keys remain. The approved
+client-memory work (2026-11-01) separates thumbnails (512px at DPR 1, 1024px at DPR 2,
+1280px above that, chosen for attached screens) from the selected 1280px variant;
+quality is part of the cache key. Only the selected cover installs the large variant. QML disables its additional provider cache. Keeping these facilities out
 of toolkit-free VMs avoids making Qt resources part of reusable state.
 
 Queue mutations join the existing `PendingPlayback` lane; additions are never
@@ -85,6 +87,25 @@ The existing child kill protocol remains; hard process termination cannot acknow
 worker shutdown. See [backend lifecycle](backend.md#queue-availability-worker) and
 [worker tests](../../apps/osu-radio-server/src/queue_check/tests.rs). This implements
 the approved [T05](../impl/queue-rework/T05.md) without adding another queue owner.
+
+## Approved client memory and tray behavior (2026-11-01)
+
+The user authorized the full client-memory audit implementation, including visual
+unloading in the tray. `Track` shares per-track metadata snapshots through `Arc`;
+duration, volume, mods, IDs and listening dates stay independently mutable. Queue
+entries, active playlist and editor PNG snapshots share allocations; actual edits
+use copy-on-write without changing VM ownership or HTTP/DB contracts.
+
+Hiding the window suppresses GUI media demand and list delivery, while audio,
+server, tray and system integrations keep running. After 15 seconds, a QML Loader
+destroys visual panels and Qt releases the decoded cache and scene resources.
+Current renderer cleanup and measured glibc tuning are implementation details
+documented in [frontend](frontend.md#qt-frontend).
+Window/AppBridge and toolkit-free models survive. Returning restores current
+snapshots, tab, queries, scroll and the editor draft; a quick return cancels the
+unload. Minimization is not hiding. This is independent of the existing shutdown
+and native media detach handshake. RSS/GPU release depends on Qt and the allocator;
+Linux offscreen checks do not establish native Windows or physical audio behavior.
 
 ## Approved system media boundary
 

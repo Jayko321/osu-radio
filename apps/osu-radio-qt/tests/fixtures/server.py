@@ -589,7 +589,9 @@ class Handler(BaseHTTPRequestHandler):
                 threading.Event().wait(60)
             counts["library"] += 1
             n = counts["library"]
-            if case == "queue-insert":
+            if case == "tray-memory":
+                payload = library(range(1, 61))
+            elif case == "queue-insert":
                 query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
                 payload = library([42, 103] if query else [7, 42, 103])
             elif case == "queue" or case.startswith("queue-managed"):
@@ -603,7 +605,7 @@ class Handler(BaseHTTPRequestHandler):
                     status, payload = 500, {"message": "visual fixture error: " + "Длинное описание ошибки / 日本語 / " * 6}
                 else:
                     payload = library([] if query == "missing" else [7, 42, 103] + list(range(200, 225)))
-            elif case in ("playback", "hotkeys", "folders", "sorting", "volume", "mods", "playlist-covers", "playlist-cover-preview", "settings-search") or case.startswith("native"):
+            elif case in ("tray-memory", "playback", "hotkeys", "folders", "sorting", "volume", "mods", "playlist-covers", "playlist-cover-preview", "settings-search") or case.startswith("native"):
                 payload = library([7, 42, 103])
             elif case == "search":
                 query = parse_qs(urlsplit(self.path).query).get("q", [""])[0]

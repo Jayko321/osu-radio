@@ -6,6 +6,7 @@ Item {
     property url source
     property real radius: 8
     property real imageOpacity: 1
+    readonly property int decodeEdge: Math.min(1280, Math.max(1, Math.ceil(width * Screen.devicePixelRatio / 256) * 256))
     // Off for wide card backgrounds, where a centered icon would sit under the text.
     property bool placeholder: true
     // A replacement image keeps the previous one visible, so only the first image after an empty source fades in.
@@ -17,6 +18,7 @@ Item {
         id: image
         anchors.fill: parent
         source: art.source
+        sourceSize: Qt.size(art.decodeEdge, art.decodeEdge)
         cache: false
         fillMode: Image.PreserveAspectCrop
         horizontalAlignment: Image.AlignHCenter

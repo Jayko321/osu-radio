@@ -32,7 +32,7 @@ impl Default for MockQueue {
         ] {
             if let Ok(mut row) = queue.row(audio, None, "Demo song") {
                 row.availability = availability;
-                queue.view.entries.push(row);
+                std::sync::Arc::make_mut(&mut queue.view.entries).push(row);
             }
         }
         queue.view.current_entry_id = queue.view.entries.get(1).map(|row| row.id);
@@ -80,7 +80,10 @@ impl MockQueue {
         }))
     }
     fn reindex(&mut self) {
-        for (index, row) in self.view.entries.iter_mut().enumerate() {
+        for (index, row) in std::sync::Arc::make_mut(&mut self.view.entries)
+            .iter_mut()
+            .enumerate()
+        {
             row.position = index;
         }
         if let Some(index) = self
@@ -93,9 +96,12 @@ impl MockQueue {
         }
         if self.view.history_len > 5000 {
             let remove = self.view.history_len.saturating_sub(5000);
-            self.view.entries.drain(..remove);
+            std::sync::Arc::make_mut(&mut self.view.entries).drain(..remove);
             self.view.history_len = self.view.history_len.saturating_sub(remove);
-            for (index, row) in self.view.entries.iter_mut().enumerate() {
+            for (index, row) in std::sync::Arc::make_mut(&mut self.view.entries)
+                .iter_mut()
+                .enumerate()
+            {
                 row.position = index;
             }
         }
@@ -130,7 +136,7 @@ impl MockQueue {
             QueuePlacement::End => self.view.entries.len(),
             QueuePlacement::Next => self.next_index(),
         };
-        self.view.entries.splice(index..index, rows);
+        std::sync::Arc::make_mut(&mut self.view.entries).splice(index..index, rows);
     }
     /// Invalid actions keep the confirmed list and transport intention intact.
     pub fn apply(&mut self, action: QueueAction, playlists: &super::MockPlaylists) {
@@ -179,7 +185,7 @@ impl MockQueue {
             }
             QueueAction::Remove(id) => {
                 let index = self.index(id)?;
-                self.view.entries.remove(index);
+                std::sync::Arc::make_mut(&mut self.view.entries).remove(index);
                 if self.view.current_entry_id == Some(id) {
                     let mode = if self.view.mode == PlaybackMode::Playing {
                         PlaybackMode::Playing
@@ -202,18 +208,18 @@ impl MockQueue {
                     .transpose()?
                     .unwrap_or(self.view.entries.len());
                 if from != to && from.saturating_add(1) != to {
-                    let row = self.view.entries.remove(from);
-                    self.view
-                        .entries
+                    let row = std::sync::Arc::make_mut(&mut self.view.entries).remove(from);
+                    std::sync::Arc::make_mut(&mut self.view.entries)
                         .insert(if from < to { to.saturating_sub(1) } else { to }, row);
                 }
             }
             QueueAction::ClearUpcoming => {
-                self.view.entries.truncate(self.next_index());
+                let next = self.next_index();
+                std::sync::Arc::make_mut(&mut self.view.entries).truncate(next);
             }
             QueueAction::ClearAll => {
                 if !self.view.entries.is_empty() {
-                    self.view.entries.clear();
+                    std::sync::Arc::make_mut(&mut self.view.entries).clear();
                     self.view.current_entry_id = None;
                     self.view.history_len = 0;
                     self.view.waiting_for_check = false;
@@ -290,7 +296,7 @@ impl MockQueue {
         let Ok(index) = self.index(id) else {
             return;
         };
-        let Some(row) = self.view.entries.get_mut(index) else {
+        let Some(row) = std::sync::Arc::make_mut(&mut self.view.entries).get_mut(index) else {
             return;
         };
         if row.availability != QueueAvailability::Checking {
@@ -444,7 +450,7 @@ mod tests {
             for placement in [QueuePlacement::End, QueuePlacement::Next] {
                 let mut state = MockState::default();
                 if exhausted {
-                    state.queue.view.entries.truncate(2);
+                    std::sync::Arc::make_mut(&mut state.queue.view.entries).truncate(2);
                     state.queue.forward(2, PlaybackMode::Playing);
                 } else {
                     state.apply(Action::Queue(QueueAction::ClearAll));

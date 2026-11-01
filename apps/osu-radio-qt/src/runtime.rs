@@ -84,6 +84,8 @@ pub mod ffi {
         type QByteArray = cxx_qt_lib::QByteArray;
         include!("cxx-qt-lib/qvector.h");
         type QVector_i32 = cxx_qt_lib::QVector<i32>;
+        #[rust_name = "configure_memory"]
+        fn configureMemory();
         #[rust_name = "configure_engine"]
         fn configureEngine(engine: Pin<&mut QQmlApplicationEngine>, smoke: bool);
         #[rust_name = "configure_probe"]
@@ -93,6 +95,10 @@ pub mod ffi {
         #[must_use]
         fn connectLiveWindow(engine: Pin<&mut QQmlApplicationEngine>)
         -> UniquePtr<LiveWindowMedia>;
+        #[rust_name = "suspend_artwork"]
+        fn suspendArtwork(suspended: bool);
+        #[rust_name = "release_window_resources"]
+        fn releaseWindowResources();
         #[rust_name = "reset_artwork"]
         #[allow(clippy::must_use_candidate)]
         // Clearing is useful without retaining the epoch.
@@ -100,6 +106,9 @@ pub mod ffi {
         #[rust_name = "artwork_url"]
         #[must_use]
         fn artworkUrl(generation: u64, id: i32) -> QString;
+        #[rust_name = "selected_artwork_url"]
+        #[must_use]
+        fn selectedArtworkUrl(generation: u64, id: i32) -> QString;
         #[rust_name = "protect_artwork"]
         fn protectArtwork(generation: u64, id: i32);
         #[rust_name = "install_artwork"]

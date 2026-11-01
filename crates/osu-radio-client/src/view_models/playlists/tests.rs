@@ -394,7 +394,10 @@ fn offline_editor_keeps_its_draft_rejects_oversized_covers_and_omits_bytes_from_
         epoch,
         png: Ok(Some(vec![0; 2 * 1024 * 1024 + 1])),
     });
-    assert_eq!(state.playlists.view.editor_cover_png, Some(vec![1, 2, 3]));
+    assert_eq!(
+        state.playlists.view.editor_cover_png,
+        Some(vec![1, 2, 3].into())
+    );
     assert_eq!(state.playlists.view.editor_epoch, epoch);
     assert_eq!(
         state.playlists.view.message,
@@ -624,7 +627,10 @@ fn editor_retains_created_id_after_cover_failure_and_rejects_stale_picker_result
     });
     assert_eq!(state.playlists.view.editor_id, Some(7));
     assert_eq!(state.playlists.view.editor_name, " Evening ");
-    assert_eq!(state.playlists.view.editor_cover_png, Some(vec![1, 2]));
+    assert_eq!(
+        state.playlists.view.editor_cover_png,
+        Some(vec![1, 2].into())
+    );
     assert_eq!(state.playlists.view.playlists.len(), 1);
     assert!(state.playlists.view.editor_open && !state.playlists.view.busy);
     state.playlist_action(PlaylistAction::ResetEditorCover);
@@ -647,7 +653,7 @@ fn editor_retains_created_id_after_cover_failure_and_rejects_stale_picker_result
         epoch,
         png: Err("Invalid PNG".into()),
     });
-    assert_eq!(state.playlists.view.editor_cover_png, Some(vec![4]));
+    assert_eq!(state.playlists.view.editor_cover_png, Some(vec![4].into()));
     assert_eq!(state.playlists.view.message, "Invalid PNG");
     state.playlist_action(PlaylistAction::CancelEditor);
     state.playlist_action(PlaylistAction::BeginCreate);

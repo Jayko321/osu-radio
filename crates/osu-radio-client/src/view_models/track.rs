@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use crate::BeatmapSet;
 
@@ -17,6 +17,13 @@ pub struct Track {
     pub volume_percent: Option<u8>,
     pub mods: Option<crate::models::AudioModsProfile>,
     pub cover_beatmap_id: Option<i32>,
+    pub duration: Option<Duration>,
+    pub metadata: Arc<TrackMetadata>,
+}
+
+/// Immutable snapshots shared with adapters; edits detach only this track's metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrackMetadata {
     pub title: String,
     pub artist: String,
     pub subtitle: String,
@@ -25,8 +32,19 @@ pub struct Track {
     pub artist_original: Option<String>,
     pub artist_unicode: Option<String>,
     pub subtitle_suffix: String,
-    pub duration: Option<Duration>,
     pub difficulties: Vec<crate::models::TrackDifficulty>,
+}
+
+impl std::ops::Deref for Track {
+    type Target = TrackMetadata;
+    fn deref(&self) -> &Self::Target {
+        &self.metadata
+    }
+}
+impl std::ops::DerefMut for Track {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        Arc::make_mut(&mut self.metadata)
+    }
 }
 
 impl Track {
@@ -39,16 +57,18 @@ impl Track {
             volume_percent: None,
             mods: None,
             cover_beatmap_id: None,
-            title_original: Some(title.clone()),
-            title_unicode: None,
-            artist_original: Some(artist.clone()),
-            artist_unicode: None,
-            subtitle_suffix: String::new(),
-            title,
-            subtitle: artist.clone(),
-            artist,
             duration: Some(duration),
-            difficulties: Vec::new(),
+            metadata: Arc::new(TrackMetadata {
+                title_original: Some(title.clone()),
+                title_unicode: None,
+                artist_original: Some(artist.clone()),
+                artist_unicode: None,
+                subtitle_suffix: String::new(),
+                title,
+                subtitle: artist.clone(),
+                artist,
+                difficulties: Vec::new(),
+            }),
         }
     }
 
@@ -234,16 +254,18 @@ impl From<crate::models::LibraryTrack> for Track {
             volume_percent: track.volume_percent,
             mods: track.mods,
             cover_beatmap_id: track.cover_beatmap_id,
-            title,
-            artist,
-            subtitle,
-            title_original: track.title,
-            title_unicode: track.title_unicode,
-            artist_original: track.artist,
-            artist_unicode: track.artist_unicode,
-            subtitle_suffix,
             duration: None,
-            difficulties: track.difficulties,
+            metadata: Arc::new(TrackMetadata {
+                title,
+                artist,
+                subtitle,
+                title_original: track.title,
+                title_unicode: track.title_unicode,
+                artist_original: track.artist,
+                artist_unicode: track.artist_unicode,
+                subtitle_suffix,
+                difficulties: track.difficulties,
+            }),
         }
     }
 }
@@ -280,6 +302,23 @@ mod tests {
             artist: Some("Artist".into()),
             ..BeatmapDetails::default()
         }
+    }
+    #[test]
+    fn snapshots_share_metadata_and_isolate_presentation_edits() {
+        let original = Track::new("Title", "Artist", Duration::from_secs(90));
+        let mut snapshot = original.clone();
+        assert!(Arc::ptr_eq(&original.metadata, &snapshot.metadata));
+        snapshot.duration = Some(Duration::from_secs(91));
+        snapshot.volume_percent = Some(42);
+        assert!(Arc::ptr_eq(&original.metadata, &snapshot.metadata));
+        snapshot.title_unicode = Some("曲".into());
+        snapshot.apply_name_preferences(TrackNamePreferences {
+            use_unicode_titles: true,
+            use_unicode_artists: false,
+        });
+        assert_eq!(snapshot.title, "曲");
+        assert_eq!(original.title, "Title");
+        assert_eq!(original.duration, Some(Duration::from_secs(90)));
     }
     #[test]
     fn groups_globally_and_only_annotates_split_audio() {

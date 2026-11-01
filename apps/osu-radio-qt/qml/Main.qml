@@ -21,6 +21,31 @@ Basic.ApplicationWindow {
 
     property int selectedTab: 0
     property var mediaDelegates: []
+    property bool visualActive: true
+    property var savedView: null
+    readonly property var applicationScene: sceneLoader.item
+    readonly property var player: applicationScene ? applicationScene.playerPanel : null
+    readonly property var songsPanel: applicationScene ? applicationScene.songsView : null
+    readonly property var playlistsPanel: applicationScene ? applicationScene.playlistsView : null
+    readonly property var settingsPanel: applicationScene ? applicationScene.settingsView : null
+    onVisibleChanged: {
+        bridge.setUiVisible(visible);
+        if (visible) unloadTimer.stop();
+        else unloadTimer.restart();
+        scheduleVisibleMedia();
+    }
+    Timer {
+        id: unloadTimer
+        objectName: "trayUnloadTimer"
+        interval: 15000
+        onTriggered: {
+            if (root.visible || !root.applicationScene) return;
+            root.savedView = root.applicationScene.saveView();
+            confirmDialog.close();
+            root.visualActive = false;
+            Qt.callLater(() => { if (!root.visible) bridge.releaseVisualResources(); });
+        }
+    }
     function scheduleVisibleMedia() {
         if (!visibleMediaTimer.running) visibleMediaTimer.start();
     }
@@ -38,7 +63,7 @@ Basic.ApplicationWindow {
         interval: 0
         onTriggered: {
             const ids = [];
-            for (const row of root.mediaDelegates) {
+            if (root.visible) for (const row of root.mediaDelegates) {
                 if (row && row.inViewport && row.available && row.audioId >= 0) ids.push(row.audioId);
             }
             bridge.setVisibleMedia(ids);
@@ -50,7 +75,7 @@ Basic.ApplicationWindow {
         scheduleVisibleMedia();
     }
     readonly property alias appBridge: bridge
-    readonly property bool hotkeysBlocked: folderDialog.visible || playlistsDialog.visible || confirmDialog.visible || player.popupOpen
+    readonly property bool hotkeysBlocked: folderDialog.visible || playlistsDialog.visible || confirmDialog.visible || (player && player.popupOpen)
     // Panels ask the scene, which owns the single dialog and toast, so they stay free of both.
     function confirm(title: string, message: string, actionText: string, action: var): void {
         confirmDialog.title = title;
@@ -76,6 +101,7 @@ Basic.ApplicationWindow {
     }
     // The search field of the active tab; null where the tab has none (an open playlist, for one).
     function activeSearch(): Item {
+        if (!applicationScene) return null;
         const field = selectedTab === 0 ? songsPanel.searchField
             : selectedTab === 1 ? playlistsPanel.searchField : settingsPanel.searchField;
         return field && field.visible ? field : null;
@@ -105,7 +131,7 @@ Basic.ApplicationWindow {
     Shortcut {
         sequence: "F1"
         enabled: !folderDialog.visible && !playlistsDialog.visible && !confirmDialog.visible
-        onActivated: player.openMods()
+        onActivated: if (root.player) root.player.openMods()
     }
     Shortcut {
         sequence: "Ctrl+F"
@@ -135,6 +161,12 @@ Basic.ApplicationWindow {
         objectName: "appBridge"
         Component.onCompleted: connectSession()
         onMediaViewChanged: root.scheduleVisibleMedia()
+        onPresentationReady: {
+            if (!root.visible) return;
+            root.visualActive = true;
+            if (bridge.player.hasSelection) bridge.requestMedia(bridge.player.selectedAudioId);
+            root.scheduleVisibleMedia();
+        }
     }
 
 
@@ -143,222 +175,255 @@ Basic.ApplicationWindow {
         function onSelectedArtworkUrlChanged() { if (bridge.player.hasSelection && String(bridge.player.selectedArtworkUrl).length === 0) bridge.requestMedia(bridge.player.selectedAudioId); }
     }
 
-    Item {
-        id: applicationScene
+    Loader {
+        id: sceneLoader
+        objectName: "visualSceneLoader"
         anchors.fill: parent
-        // Holds focus when no control does, so Space and arrows work until a field or button takes it.
-        focus: true
-        Keys.onPressed: event => { event.accepted = root.handleHotkey(event.key, event.modifiers); }
-
-        WindowBar {
-            id: titleBar
-            objectName: "titleBar"
-            width: parent.width
-            window: root
-            selectedTab: root.selectedTab
-            queueEnabled: bridge.connected
-            queueVisible: player.queue.visible
-            onTabSelected: index => root.selectedTab = index
-            onQueueRequested: player.queue.visible ? player.queue.close() : player.queue.open()
-        }
-
-        // Overlay: it never takes part in the layout, so the window does not shift when it appears.
-        Item {
-            id: connectionBanner
-            readonly property bool shown: !bridge.connected
-            anchors.top: titleBar.bottom
-            width: parent.width
-            height: Math.max(connectionText.implicitHeight + 24, 60)
-            z: 10
-            clip: true
-            visible: shown || bannerContent.opacity > 0
-
-            Rectangle {
-                id: bannerContent
-                width: parent.width
-                height: parent.height
-                y: connectionBanner.shown ? 0 : -height
-                opacity: connectionBanner.shown ? 1 : 0
-                color: "#f81c1416"
-                Behavior on y { NumberAnimation { duration: Theme.ms(Theme.motionBase); easing.type: Theme.easing } }
-                Behavior on opacity { NumberAnimation { duration: Theme.ms(Theme.motionBase); easing.type: Theme.easing } }
-                Rectangle { width: 4; height: parent.height; color: Theme.red }
-                Rectangle { width: parent.width; height: 1; anchors.bottom: parent.bottom; color: Theme.border }
-                Canvas {
-                    id: connectionSpinner
-                    objectName: "connectionSpinner"
-                    x: 24
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: 14
-                    height: 14
-                    visible: bridge.connecting
-                    onPaint: {
-                        const ctx = getContext("2d");
-                        ctx.reset();
-                        ctx.lineWidth = 2;
-                        ctx.strokeStyle = Theme.muted;
-                        ctx.beginPath();
-                        ctx.arc(7, 7, 6, 0, Math.PI * 2);
-                        ctx.stroke();
-                        ctx.strokeStyle = Theme.text;
-                        ctx.beginPath();
-                        ctx.arc(7, 7, 6, -Math.PI / 2, 0);
-                        ctx.stroke();
-                    }
-                    RotationAnimator on rotation {
-                        from: 0
-                        to: 360
-                        duration: 800
-                        loops: Animation.Infinite
-                        running: connectionSpinner.visible && connectionBanner.visible
-                    }
-                }
-                Text {
-                    id: connectionText
-                    objectName: "connectionStatus"
-                    x: connectionSpinner.visible ? 48 : 24
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: parent.width - x - (connectionRetry.visible ? connectionRetry.width + 20 : 0) - 20
-                    text: bridge.connectionStatus
-                    color: Theme.text
-                    font.family: Theme.fontFamily
-                    font.pixelSize: 14
-                    wrapMode: Text.Wrap
-                }
-                AppButton {
-                    id: connectionRetry
-                    objectName: "retryConnection"
-                    anchors.right: parent.right
-                    anchors.rightMargin: 20
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "Retry"
-                    visible: !bridge.connecting
-                    enabled: !bridge.connecting
-                    onClicked: bridge.connectSession()
-                }
+        active: root.visualActive
+        onLoaded: {
+            if (root.savedView) {
+                const saved = root.savedView;
+                root.savedView = null;
+                Qt.callLater(() => { if (sceneLoader.item) root.applicationScene.restoreView(saved); });
             }
         }
-
-        Item {
-            id: body
-            objectName: "body"
-            anchors.top: titleBar.bottom
-            anchors.bottom: parent.bottom
-            width: parent.width
-            clip: true
-
+        sourceComponent: Component {
             Item {
-                id: backdrop
+                id: scene
+                property alias songsView: songsPanel
+                property alias playlistsView: playlistsPanel
+                property alias settingsView: settingsPanel
+                property alias playerPanel: player
+                function saveView(): var {
+                    return { songs: songsPanel.saveView(), playlists: playlistsPanel.saveView(),
+                        settings: settingsPanel.saveView(), queue: player.queue.visible,
+                        queueScroll: player.queue.scrollPosition };
+                }
+                function restoreView(state: var): void {
+                    songsPanel.restoreView(state.songs);
+                    playlistsPanel.restoreView(state.playlists);
+                    settingsPanel.restoreView(state.settings);
+                    if (state.queue) {
+                        player.queue.open();
+                        Qt.callLater(() => player.queue.restoreScroll(state.queueScroll));
+                    }
+                }
                 anchors.fill: parent
-                CrossfadeSource {
-                    id: backdropFade
-                    duration: Theme.ms(400)
-                    source: String(bridge.player.selectedArtworkUrl)
+                // Holds focus when no control does, so Space and arrows work until a field or button takes it.
+                focus: true
+                Keys.onPressed: event => { event.accepted = root.handleHotkey(event.key, event.modifiers); }
+
+                WindowBar {
+                    id: titleBar
+                    objectName: "titleBar"
+                    width: parent.width
+                    window: root
+                    selectedTab: root.selectedTab
+                    queueEnabled: bridge.connected
+                    queueVisible: player.queue.visible
+                    onTabSelected: index => root.selectedTab = index
+                    onQueueRequested: player.queue.visible ? player.queue.close() : player.queue.open()
                 }
+
+                // Overlay: it never takes part in the layout, so the window does not shift when it appears.
                 Item {
-                    id: backdropArt
-                    anchors.fill: parent
-                    visible: false
-                    layer.enabled: true
-                    Image {
+                    id: connectionBanner
+                    readonly property bool shown: !bridge.connected
+                    anchors.top: titleBar.bottom
+                    width: parent.width
+                    height: Math.max(connectionText.implicitHeight + 24, 60)
+                    z: 10
+                    clip: true
+                    visible: shown || bannerContent.opacity > 0
+
+                    Rectangle {
+                        id: bannerContent
+                        width: parent.width
+                        height: parent.height
+                        y: connectionBanner.shown ? 0 : -height
+                        opacity: connectionBanner.shown ? 1 : 0
+                        color: "#f81c1416"
+                        Behavior on y { NumberAnimation { duration: Theme.ms(Theme.motionBase); easing.type: Theme.easing } }
+                        Behavior on opacity { NumberAnimation { duration: Theme.ms(Theme.motionBase); easing.type: Theme.easing } }
+                        Rectangle { width: 4; height: parent.height; color: Theme.red }
+                        Rectangle { width: parent.width; height: 1; anchors.bottom: parent.bottom; color: Theme.border }
+                        Canvas {
+                            id: connectionSpinner
+                            objectName: "connectionSpinner"
+                            x: 24
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 14
+                            height: 14
+                            visible: bridge.connecting
+                            onPaint: {
+                                const ctx = getContext("2d");
+                                ctx.reset();
+                                ctx.lineWidth = 2;
+                                ctx.strokeStyle = Theme.muted;
+                                ctx.beginPath();
+                                ctx.arc(7, 7, 6, 0, Math.PI * 2);
+                                ctx.stroke();
+                                ctx.strokeStyle = Theme.text;
+                                ctx.beginPath();
+                                ctx.arc(7, 7, 6, -Math.PI / 2, 0);
+                                ctx.stroke();
+                            }
+                            RotationAnimator on rotation {
+                                from: 0
+                                to: 360
+                                duration: 800
+                                loops: Animation.Infinite
+                                running: connectionSpinner.visible && connectionBanner.visible
+                            }
+                        }
+                        Text {
+                            id: connectionText
+                            objectName: "connectionStatus"
+                            x: connectionSpinner.visible ? 48 : 24
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - x - (connectionRetry.visible ? connectionRetry.width + 20 : 0) - 20
+                            text: bridge.connectionStatus
+                            color: Theme.text
+                            font.family: Theme.fontFamily
+                            font.pixelSize: 14
+                            wrapMode: Text.Wrap
+                        }
+                        AppButton {
+                            id: connectionRetry
+                            objectName: "retryConnection"
+                            anchors.right: parent.right
+                            anchors.rightMargin: 20
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "Retry"
+                            visible: !bridge.connecting
+                            enabled: !bridge.connecting
+                            onClicked: bridge.connectSession()
+                        }
+                    }
+                }
+
+                Item {
+                    id: body
+                    objectName: "body"
+                    anchors.top: titleBar.bottom
+                    anchors.bottom: parent.bottom
+                    width: parent.width
+                    clip: true
+
+                    Item {
+                        id: backdrop
                         anchors.fill: parent
-                        source: backdropFade.previous
-                        cache: false
-                        fillMode: Image.PreserveAspectCrop
+                        CrossfadeSource {
+                            id: backdropFade
+                            duration: Theme.ms(400)
+                            source: String(bridge.player.selectedArtworkUrl)
+                        }
+                        Item {
+                            id: backdropArt
+                            anchors.fill: parent
+                            visible: false
+                            layer.enabled: true
+                            Image {
+                                anchors.fill: parent
+                                source: backdropFade.previous
+                                cache: false
+                                fillMode: Image.PreserveAspectCrop
+                            }
+                            Image {
+                                id: backdropImage
+                                anchors.fill: parent
+                                source: backdropFade.source
+                                opacity: backdropFade.progress
+                                cache: false
+                                fillMode: Image.PreserveAspectCrop
+                            }
+                        }
+                        MultiEffect {
+                            anchors.fill: parent
+                            source: backdropArt
+                            blurEnabled: true
+                            blurMax: 20
+                            blur: 1.0
+                            opacity: 0.06
+                        }
+                        Canvas {
+                            anchors.fill: parent
+                            onWidthChanged: requestPaint()
+                            onHeightChanged: requestPaint()
+                            onPaint: {
+                                const ctx = getContext("2d");
+                                ctx.reset();
+                                const warm = ctx.createRadialGradient(width * 0.3 + 500, height * -0.1 + 500,
+                                    0, width * 0.3 + 500, height * -0.1 + 500, 500);
+                                warm.addColorStop(0, "rgba(154,39,41,0.5)");
+                                warm.addColorStop(0.31, "rgba(154,39,41,0.34)");
+                                warm.addColorStop(0.58, "rgba(154,39,41,0.16)");
+                                warm.addColorStop(1, "rgba(154,39,41,0)");
+                                ctx.fillStyle = warm;
+                                ctx.fillRect(0, 0, width, height);
+                                const cool = ctx.createRadialGradient(width * -0.18 + 600, height * 0.4 + 450,
+                                    0, width * -0.18 + 600, height * 0.4 + 450, 600);
+                                cool.addColorStop(0, "rgba(75,15,48,0.52)");
+                                cool.addColorStop(0.31, "rgba(75,15,48,0.35)");
+                                cool.addColorStop(0.58, "rgba(75,15,48,0.17)");
+                                cool.addColorStop(1, "rgba(75,15,48,0)");
+                                ctx.fillStyle = cool;
+                                ctx.fillRect(0, 0, width, height);
+                            }
+                        }
                     }
-                    Image {
-                        id: backdropImage
-                        anchors.fill: parent
-                        source: backdropFade.source
-                        opacity: backdropFade.progress
-                        cache: false
-                        fillMode: Image.PreserveAspectCrop
+
+                    MaterialSurface {
+                        id: sidebar
+                        width: 480
+                        height: parent.height
+                        kind: "regular"
+                        sourceItem: backdrop
+                        radius: 0
+                        Rectangle { anchors.fill: parent; color: "transparent"; border.color: Theme.border }
+                        SongsPanel {
+                            id: songsPanel
+                            anchors.fill: parent
+                            visible: root.selectedTab === 0
+                            NumberAnimation on opacity { from: 0; to: 1; duration: Theme.ms(Theme.motionFast); easing.type: Theme.easing; running: songsPanel.visible }
+                            bridge: root.appBridge
+                            shell: root
+                        }
+
+                        PlaylistsPanel {
+                            id: playlistsPanel
+                            anchors.fill: parent
+                            visible: root.selectedTab === 1
+                            NumberAnimation on opacity { from: 0; to: 1; duration: Theme.ms(Theme.motionFast); easing.type: Theme.easing; running: playlistsPanel.visible }
+                            bridge: root.appBridge
+                            shell: root
+                        }
+
+                        SettingsPanel {
+                            id: settingsPanel
+                            anchors.fill: parent
+                            visible: root.selectedTab === 2
+                            NumberAnimation on opacity { from: 0; to: 1; duration: Theme.ms(Theme.motionFast); easing.type: Theme.easing; running: settingsPanel.visible }
+                            bridge: root.appBridge
+                        }
+                    }
+
+                    PlayerPanel {
+                        id: player
+                        bridge: root.appBridge
+                        shell: root
+                        x: sidebar.width
+                        width: parent.width - x
+                        height: parent.height
                     }
                 }
-                MultiEffect {
-                    anchors.fill: parent
-                    source: backdropArt
-                    blurEnabled: true
-                    blurMax: 20
-                    blur: 1.0
-                    opacity: 0.06
-                }
-                Canvas {
-                    anchors.fill: parent
-                    onWidthChanged: requestPaint()
-                    onHeightChanged: requestPaint()
-                    onPaint: {
-                        const ctx = getContext("2d");
-                        ctx.reset();
-                        const warm = ctx.createRadialGradient(width * 0.3 + 500, height * -0.1 + 500,
-                            0, width * 0.3 + 500, height * -0.1 + 500, 500);
-                        warm.addColorStop(0, "rgba(154,39,41,0.5)");
-                        warm.addColorStop(0.31, "rgba(154,39,41,0.34)");
-                        warm.addColorStop(0.58, "rgba(154,39,41,0.16)");
-                        warm.addColorStop(1, "rgba(154,39,41,0)");
-                        ctx.fillStyle = warm;
-                        ctx.fillRect(0, 0, width, height);
-                        const cool = ctx.createRadialGradient(width * -0.18 + 600, height * 0.4 + 450,
-                            0, width * -0.18 + 600, height * 0.4 + 450, 600);
-                        cool.addColorStop(0, "rgba(75,15,48,0.52)");
-                        cool.addColorStop(0.31, "rgba(75,15,48,0.35)");
-                        cool.addColorStop(0.58, "rgba(75,15,48,0.17)");
-                        cool.addColorStop(1, "rgba(75,15,48,0)");
-                        ctx.fillStyle = cool;
-                        ctx.fillRect(0, 0, width, height);
-                    }
-                }
-            }
-
-            MaterialSurface {
-                id: sidebar
-                width: 480
-                height: parent.height
-                kind: "regular"
-                sourceItem: backdrop
-                radius: 0
-                Rectangle { anchors.fill: parent; color: "transparent"; border.color: Theme.border }
-                SongsPanel {
-                    id: songsPanel
-                    anchors.fill: parent
-                    visible: root.selectedTab === 0
-                    NumberAnimation on opacity { from: 0; to: 1; duration: Theme.ms(Theme.motionFast); easing.type: Theme.easing; running: songsPanel.visible }
-                    bridge: root.appBridge
-                    shell: root
-                }
-
-                PlaylistsPanel {
-                    id: playlistsPanel
-                    anchors.fill: parent
-                    visible: root.selectedTab === 1
-                    NumberAnimation on opacity { from: 0; to: 1; duration: Theme.ms(Theme.motionFast); easing.type: Theme.easing; running: playlistsPanel.visible }
-                    bridge: root.appBridge
-                    shell: root
-                }
-
-                SettingsPanel {
-                    id: settingsPanel
-                    anchors.fill: parent
-                    visible: root.selectedTab === 2
-                    NumberAnimation on opacity { from: 0; to: 1; duration: Theme.ms(Theme.motionFast); easing.type: Theme.easing; running: settingsPanel.visible }
-                    bridge: root.appBridge
-                }
-            }
-
-            PlayerPanel {
-                id: player
-                bridge: root.appBridge
-                shell: root
-                x: sidebar.width
-                width: parent.width - x
-                height: parent.height
-            }
-        }
+            }        }
     }
+
     PlaylistsModal {
         id: playlistsDialog
         objectName: "playlistsDialog"
-        scene: applicationScene
+        scene: root.applicationScene
         playlists: bridge.playlists.playlists
         candidates: bridge.playlists.playlistCandidates
         adding: bridge.playlists.playlistAdding
@@ -383,13 +448,13 @@ Basic.ApplicationWindow {
         id: confirmDialog
         objectName: "confirmDialog"
         property var action: null
-        scene: applicationScene
+        scene: root.applicationScene
         onConfirmed: if (action) action()
     }
     Toast {
         id: toast
         objectName: "toast"
-        anchorItem: player
+        anchorItem: root.player
     }
     OperationWatcher {
         id: queueOperation
@@ -423,7 +488,7 @@ Basic.ApplicationWindow {
     FolderSelectionModal {
         id: folderDialog
         objectName: "folderSelectionDialog"
-        scene: applicationScene
+        scene: root.applicationScene
         rows: bridge.settings.folderSelectionRows
         applying: bridge.settings.folderSelectionApplying
         discovering: bridge.settings.folderSelectionDiscovering

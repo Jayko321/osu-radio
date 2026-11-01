@@ -36,6 +36,7 @@ fn main() -> ExitCode {
         );
         return ExitCode::SUCCESS;
     }
+    runtime::ffi::configure_memory();
     let live = if mode == LaunchMode::Songs {
         match runtime::LiveRuntime::new() {
             Ok(runtime) => Some(runtime),

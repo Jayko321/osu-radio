@@ -97,7 +97,7 @@ QtObject {
     readonly property Connections flickerPlayer: Connections {
         target: probe.bridge ? probe.bridge.player : null
         function onSelectedArtworkUrlChanged() {
-            if (probe.monitorArtwork) probe.check(probe.bridge.player.selectedArtworkUrl === probe.retainedArtwork, "selected source changes during warmed navigation/scroll");
+            if (probe.monitorArtwork) probe.check(probe.bridge.player.selectedArtworkUrl === probe.retainedArtwork, "selected source changes during warmed navigation/scroll: " + probe.retainedArtwork + " -> " + probe.bridge.player.selectedArtworkUrl);
         }
     }
     function imageWithSource(item: var, source: string, wide: bool): var {

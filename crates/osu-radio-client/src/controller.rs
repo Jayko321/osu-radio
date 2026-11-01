@@ -116,6 +116,8 @@ pub enum AppCommand {
         audio_id: i32,
         artwork_missing: bool,
     },
+    SetUiVisible(bool),
+    MediaDiscarded(MediaTicket),
     SetVisibleMedia(Vec<(i32, bool)>),
     SetVisibleQueueMedia(Vec<(crate::models::QueueEntryId, bool)>),
     MediaInstalled {
@@ -126,6 +128,7 @@ pub enum AppCommand {
 }
 #[derive(Clone, Debug)]
 pub enum AppUpdate {
+    UiResumed,
     Queue(QueueView),
     AudioSettings(AudioSettingsState),
     AudioMods(crate::view_models::AudioModsState),
@@ -293,6 +296,7 @@ pub(crate) struct Controller {
     folder_sender: mpsc::UnboundedSender<folders::FolderEvent>,
     options: ServerOptions,
     emit: Arc<dyn Fn(AppUpdate) + Send + Sync>,
+    ui_visible: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) session: Option<Session>,
     connecting: bool,
     pub(crate) tasks: JoinSet<Completed>,
@@ -309,6 +313,28 @@ pub(crate) struct Controller {
 }
 impl Controller {
     pub(crate) fn new(options: ServerOptions, emit: Arc<dyn Fn(AppUpdate) + Send + Sync>) -> Self {
+        let ui_visible = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let visible = ui_visible.clone();
+        let emit: Arc<dyn Fn(AppUpdate) + Send + Sync> = Arc::new(move |update| {
+            if !visible.load(std::sync::atomic::Ordering::Relaxed)
+                && matches!(
+                    update,
+                    AppUpdate::LibraryTracksReplaced { .. }
+                        | AppUpdate::LibraryTracksReordered(_)
+                        | AppUpdate::LibraryTrackChanged(_)
+                        | AppUpdate::PlaylistTracksReplaced { .. }
+                        | AppUpdate::PlaylistTracksReordered(_)
+                        | AppUpdate::PlaylistTrackChanged(_)
+                        | AppUpdate::Playlists(_)
+                        | AppUpdate::Queue(_)
+                        | AppUpdate::PlaylistCover { .. }
+                        | AppUpdate::PlaylistArtwork { .. }
+                )
+            {
+                return;
+            }
+            emit(update);
+        });
         let (cancel, _) = watch::channel(false);
         let (folder_sender, folder_events) = mpsc::unbounded_channel();
         let (assignment_sender, assignments) = mpsc::unbounded_channel();
@@ -328,6 +354,7 @@ impl Controller {
             folder_events,
             options,
             emit,
+            ui_visible,
             session: None,
             connecting: false,
             tasks: JoinSet::new(),
@@ -549,6 +576,8 @@ impl Controller {
                 audio_id,
                 artwork_missing,
             } => self.request_media(audio_id, artwork_missing),
+            AppCommand::SetUiVisible(visible) => self.set_ui_visible(visible),
+            AppCommand::MediaDiscarded(ticket) => self.media.discarded(ticket),
             AppCommand::SetVisibleMedia(visible) => self.set_visible_media(visible),
             AppCommand::MediaInstalled { ticket, available } => self.media.installed(
                 ticket,
@@ -683,16 +712,18 @@ pub(crate) mod tests {
             volume_percent: None,
             mods: None,
             cover_beatmap_id: Some(id.saturating_add(100)),
-            title_original: Some(id.to_string()),
-            title_unicode: None,
-            artist_original: Some("Artist".into()),
-            artist_unicode: None,
-            subtitle_suffix: String::new(),
-            title: id.to_string(),
-            artist: "Artist".into(),
-            subtitle: "Artist".into(),
-            difficulties: Vec::new(),
             duration: None,
+            metadata: std::sync::Arc::new(crate::view_models::TrackMetadata {
+                title_original: Some(id.to_string()),
+                title_unicode: None,
+                artist_original: Some("Artist".into()),
+                artist_unicode: None,
+                subtitle_suffix: String::new(),
+                title: id.to_string(),
+                artist: "Artist".into(),
+                subtitle: "Artist".into(),
+                difficulties: Vec::new(),
+            }),
         }
     }
     fn folder(id: i32) -> OsuFolder {
@@ -1258,7 +1289,7 @@ mod media_tests {
             state.request_media(1, true);
             state.set_visible_media(vec![(1, true)]);
             state.upcoming.open = true;
-            state.upcoming.view.entries = vec![super::tests::queue_row(track(1), 1)];
+            state.upcoming.view.entries = vec![super::tests::queue_row(track(1), 1)].into();
             state.set_visible_queue_media(vec![(
                 crate::models::QueueEntryId::new(1).unwrap(),
                 true,

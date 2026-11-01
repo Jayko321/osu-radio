@@ -10,6 +10,13 @@ Item {
     id: songsPane
     objectName: "songsPane"
     readonly property alias searchField: search
+    function saveView(): var { return { query: search.text, scroll: songList.contentY, focus: search.activeFocus, cursor: search.cursorPosition }; }
+    function restoreView(state: var): void {
+        search.text = state.query;
+        songList.forceLayout();
+        songList.contentY = Math.max(songList.originY, Math.min(state.scroll, songList.originY + Math.max(0, songList.contentHeight - songList.height)));
+        if (state.focus) { search.forceActiveFocus(); search.cursorPosition = state.cursor; }
+    }
     anchors.fill: parent
     AppField {
         id: search

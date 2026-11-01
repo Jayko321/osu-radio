@@ -642,6 +642,9 @@ impl Controller {
         self.apply_effects(effects);
     }
     pub(crate) fn start_playlist_images(&mut self) {
+        if self.media.gui_hidden {
+            return;
+        }
         let mut work = workflow::Workflow {
             api: self.session.as_ref().map(|session| session.api().clone()),
             tasks: &mut self.tasks,
@@ -749,6 +752,32 @@ impl Controller {
     }
     pub(crate) fn queue_action(&mut self, action: crate::view_models::QueueAction) {
         self.queue_work(|queue, input, work| queue.action(action, input, work));
+    }
+    pub(crate) fn set_ui_visible(&mut self, visible: bool) {
+        self.ui_visible
+            .store(visible, std::sync::atomic::Ordering::Relaxed);
+        self.media.gui_hidden = !visible;
+        if visible {
+            (self.emit)(AppUpdate::LibraryTracksReplaced {
+                tracks: self.library.tracks.clone(),
+                invalidate_artwork: false,
+            });
+            (self.emit)(AppUpdate::PlaylistTracksReplaced {
+                tracks: self.playlists.tracks.clone(),
+                invalidate_artwork: false,
+            });
+            (self.emit)(AppUpdate::LibrarySelected(self.library.selected));
+            self.emit_playlists();
+            self.emit_queue();
+            self.emit_player();
+            self.emit_statuses();
+            (self.emit)(AppUpdate::UiResumed);
+        } else {
+            self.media.visible = Some(Vec::new());
+            self.media.close_queue_demand();
+            self.playlists.pending_images.clear();
+        }
+        self.reconcile_media();
     }
     pub(crate) fn set_visible_media(&mut self, visible: Vec<(i32, bool)>) {
         self.media_work(|media, input, work| media.set_visible_media(visible, input, work));
