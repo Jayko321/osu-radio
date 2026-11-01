@@ -937,7 +937,7 @@ shows all three rows; matching a field name shows its row. Values and the URL
 are not search keys. The version binds to `Qt.application.version`:
 [`main.rs`](../../apps/osu-radio-qt/src/main.rs) sets it from `CARGO_PKG_VERSION`
 through the existing CXX-Qt `QGuiApplication::set_application_version` before
-loading QML. Both Qt and server manifests use `0.1.0-alpha`. No VM, protocol or
+loading QML. Both Qt and server manifests use `0.1.0-alpha.3`. No VM, protocol or
 QSettings key/location changes are involved; the gallery still uses no native
 preference storage or backend. The probe checks exact About values and the live
 metadata binding. [Release T06](../impl/arch-linux-release/T06.md) additionally
