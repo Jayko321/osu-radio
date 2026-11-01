@@ -52,7 +52,10 @@ async fn query_each<T: sea_orm::FromQueryResult + Send>(
             query.stream(transaction).await?
         }
     };
-    while let Some(row) = std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await {
+    while let Some(row) =
+        tokio::task::coop::cooperative(std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)))
+            .await
+    {
         consume(row?)?;
     }
     Ok(())
@@ -101,12 +104,17 @@ mod tests {
         assert!(
             tokio::time::timeout(
                 std::time::Duration::from_millis(20),
-                query_all::<Row>(
+                query_each::<Row>(
                     &connection,
                     statement(
                         "WITH RECURSIVE numbers(value) AS \
-                         (SELECT 1 UNION ALL SELECT value + 1 FROM numbers) SELECT value FROM numbers",
+                         (SELECT 1 UNION ALL SELECT value + 1 FROM numbers WHERE value < 1024) \
+                         SELECT value FROM numbers",
                     ),
+                    |_| {
+                        std::thread::sleep(std::time::Duration::from_millis(1));
+                        Ok(())
+                    },
                 ),
             )
             .await

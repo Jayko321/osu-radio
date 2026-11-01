@@ -15,6 +15,7 @@ QtObject {
     // qmllint enable unqualified
     readonly property var bridge: gallery || !window ? null : window.appBridge
     property int stage: 0
+    property string releaseVersion: ""
     onStageChanged: console.info(testCase + " probe stage", stage)
     property int notifications: 0
     property int rowChanges: 0
@@ -1498,7 +1499,8 @@ QtObject {
                 "empty query shows current settings and respects conditional global volume");
             check(general.y < audio.y && audio.y < discord.y && discord.y < about.y,
                 "sections are ordered General, Audio, Integrations, About");
-            check(Qt.application.version === "0.1.0-alpha" && version.text === "Version — " + Qt.application.version,
+            releaseVersion = Qt.application.version;
+            check(releaseVersion.length > 0 && version.text === "Version — " + releaseVersion,
                 "About shows the nonempty release version from Qt application metadata");
             check(license.text === "License — MIT" && link.text === "https://github.com/Jayko321/osu-radio"
                 && link.Accessible.name === "Project: " + link.text && link.enabled,
@@ -1615,11 +1617,11 @@ QtObject {
             break;
         case 13:
             check(version.text === "Version — metadata-binding-probe", "About follows application metadata changes");
-            Qt.application.version = "0.1.0-alpha";
+            Qt.application.version = releaseVersion;
             stage = 14;
             break;
         case 14:
-            check(version.text === "Version — 0.1.0-alpha", "About restores the release metadata binding");
+            check(version.text === "Version — " + releaseVersion, "About restores the release metadata binding");
             finish();
             break;
         }

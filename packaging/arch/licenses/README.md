@@ -4,7 +4,8 @@ Install the root project `LICENSE` as `/usr/share/licenses/osu-radio/LICENSE`
 and **every file in this directory** alongside it. Preserve the filenames and
 complete contents. The Linux system archive built by
 [packaging/linux](../../linux/README.md) already carries them; Arch recipes reuse that layout. These are prepared materials, not evidence of an
-installed release.
+installed release. `HELPER-FILES.tsv` records a historical helper build;
+`BUILD-INFO.txt` in each archive lists the files and hashes from that build.
 
 The root MIT license covers project code. Its copyright name and year come from
 the repository's initial author records (2026, Василий Коршунов); the workspace

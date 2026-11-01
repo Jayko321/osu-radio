@@ -191,7 +191,9 @@ per-difficulty metadata. The returned library still scales with result size.
 The older metadata/difficulty projections remain for reference benchmarks and
 contracts, using `query_all` on the same streaming helper. Reader regression
 checks order, empty results and release after cancellation, decoding errors and
-consumer errors. RSS may retain allocator arenas after results are freed.
+consumer errors. Stream polling participates in Tokio's cooperative budget, so
+an always-ready row stream does not indefinitely delay cancellation or other
+tasks. RSS may retain allocator arenas after results are freed.
 
 [Search contracts](../../crates/radio-services/src/tests/search.rs) cover literal
 symbols, Unicode expansion/context, cross-reference matches, 70 unique words,

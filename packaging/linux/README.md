@@ -8,7 +8,7 @@ separate checks. Ubuntu and AppImage are outside the first release.
 | File | Role |
 | --- | --- |
 | [build.sh](build.sh) | Builds in a prepared root; writes `WORKDIR/out/{osu-radio-qt,osu-radio-server,helper/,build-env.txt,source-info.txt,source-files.sha256}`. |
-| [stage-archive.sh](stage-archive.sh) | Creates `osu-radio-0.1.0-alpha-arch-x86_64.tar.gz` and `.sha256`; checks composition and rejects incomplete/self-contained helper output. |
+| [stage-archive.sh](stage-archive.sh) | Creates `osu-radio-<version>-arch-x86_64.tar.gz` and `.sha256`; checks composition and rejects incomplete/self-contained helper output. |
 | [runtime-check.sh](runtime-check.sh) | Installs into a disposable Arch runtime root; runs server/helper/offscreen GUI as an ordinary user, with a missing-.NET negative control. |
 | [enter-arch.sh](enter-arch.sh) | Enters a prepared root through `unshare` (requires subuid/subgid ranges). Only explicitly bound paths are visible. |
 | [ARCHIVE-README.md](ARCHIVE-README.md), [osu-radio.desktop](osu-radio.desktop) | Installed instructions and desktop entry. |

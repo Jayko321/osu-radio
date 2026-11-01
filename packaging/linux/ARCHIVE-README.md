@@ -1,4 +1,4 @@
-# osu! radio 0.1.0-alpha — Arch Linux system archive (x86_64)
+# osu! radio — Arch Linux system archive (x86_64)
 
 Layout for installation into system directories (`usr/` relative to the install root):
 
