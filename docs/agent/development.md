@@ -88,51 +88,27 @@ queried through Context7 and checked against the published 0.1.3 sources.
 The [distribution inventory](../../packaging/arch/licenses/README.md)
 includes wrapper, embedded C++ notices and transitive normal/build dependencies.
 
-### Arch Linux packaging
+### Arch Linux packaging and release CI
 
 The [Arch recipes](../../packaging/arch/README.md) provide mutually exclusive
 [`osu-radio-git`](../../packaging/arch/osu-radio-git/PKGBUILD) and
 [`osu-radio-bin`](../../packaging/arch/osu-radio-bin/PKGBUILD) with system Qt and
-.NET 10. The Git recipe builds the full main history; the binary recipe installs
-the T05 Arch system layout and requires only runtime dependencies. Both retain
-XDG/QSettings paths, include icons and notices, and supply the same commands.
+.NET 10. The Git recipe builds `dev`; the binary recipe installs a versioned
+archive from a GitHub Release. The checked-in binary checksum is a template,
+not the published AUR checksum. Both variants retain XDG/QSettings paths.
 
-The `-bin` release checksum is intentionally invalid until T09 stages the real
-asset after the separately authorized tag move. Candidate archives and old tag
-checksums must not be used as release evidence. Generate `.SRCINFO` with
-`makepkg --printsrcinfo` for each recipe. The partial T09
-[recipe staging script](../../packaging/release/stage-arch-recipes.py) reads
-recipes from a selected commit and checks the archive's recorded clean source;
-it does not verify the remote tag or artifact contents. Its focused check is
-`python3 -B -m unittest discover -s packaging/release -p 'test_*.py' -v`.
-Check the
-[T07 report](../impl/first-release-packaging/T07.md) for executed checks and
-remaining acceptance. The [older Arch release reports](../impl/arch-linux-release.md)
-remain historical and do not validate the new variants.
+The [manual release workflow](../../.github/workflows/release-staging.yml)
+checks out a selected source commit and builds Windows Setup and an Arch archive
+independently. Its outputs are Actions artifacts; publishing the tag and GitHub
+Release is manual. No separate Windows materials archive is required. See the
+[release build instructions](../../packaging/release/README.md).
 
-### Release candidate CI
-
-The manual [release staging workflow](../../.github/workflows/release-staging.yml)
-checks out one full `source_sha` on Windows and in a pinned Arch container. It
-calls the existing packaging builders, then generates recipes/`.SRCINFO`, a
-commit source archive, manifest and SHA-256 in a separate directory. All actions
-are pinned by commit, and only read permissions are granted. Uploads include
-hidden `.SRCINFO` files from the isolated output, never the source checkout.
-
-[Release inputs and handoff](../../packaging/release/README.md) document the
-required reviewed Windows notices, matching Qt sources/patches and hashes.
-`inputs.json` currently lacks their URL/checksum, so preflight intentionally
-fails. The manifest remains explicitly a candidate; it does not verify or move
-the remote tag. Missing files, dirty/mismatched source provenance and altered
-hashes fail assembly before an output directory is published. This validates
-handoff integrity, not licensing or installed application behavior. See
-[T09](../impl/first-release-packaging/T09.md) for executed checks and blockers.
-
-Run `python3 -B -m unittest discover -s packaging/release -p 'test_*.py' -v`
-on Arch with Git and `makepkg` as an ordinary user; run the existing Windows
-packaging unit checks after changing its builder. Validate workflow YAML with
-`actionlint .github/workflows/release-staging.yml`. Native Windows/Arch builds,
-downloaded CI artifacts and physical audio remain distinct acceptance checks.
+The [AUR workflow](../../.github/workflows/aur.yml) publishes generated recipes
+following successful Linux CI on `dev` or a published GitHub Release. Its
+[setup and limitations](../../packaging/aur/README.md) include AUR credentials,
+source branch races and the versioning policy. Run `python3 -B -m unittest
+discover -s packaging/aur -v` for its local checks. Release and AUR CI results
+are separate from native installation, audio and GUI checks.
 
 ### Installed first-release acceptance
 
@@ -241,14 +217,20 @@ a fake `dotnet` on POSIX. These checks cover helper overrides, build arguments,
 private/default .NET homes and build failures; they do not replace the Rust
 scanner's real synthetic-Realm integration test. Both commands are in Linux CI.
 
-Qt/QML builds are outside this minimal workflow. Qt requires
-6.8+ and additional QML modules/plugins; add those checks only after validating
-that setup reproducibly on a hosted runner. PostgreSQL integration, desktop/GPU
-interaction, physical audio and Windows validation remain separate. Workspace
+Linux CI also builds the Qt application with Qt 6.8+ and the required QML
+modules/plugins. Qt interface tests run before releases, rather than on every
+PR. PostgreSQL integration, desktop/GPU interaction, physical audio and Windows
+validation remain separate. Workspace
 formatting checks all remaining packages. `--locked` applies to Cargo builds/tests/
 Clippy, not `cargo fmt` or the helper's NuGet restore.
 
 ## Environment and executable discovery
+
+[`.env.example`](../../.env.example) documents application overrides and development
+settings without real credentials. Copy it to a private `.env` for standalone
+server/CLI use. Qt and build-time settings must be exported into the launching
+process environment; Qt does not load `.env`, and its supervised server skips it.
+Backend selection is a Cargo feature, not a runtime URL switch.
 
 | Input | Current use | Source |
 | --- | --- | --- |

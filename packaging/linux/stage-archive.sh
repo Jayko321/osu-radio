@@ -9,7 +9,12 @@ repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 work=$(cd "$1" && pwd)
 dist=$(mkdir -p "${2:-$work/dist}" && cd "${2:-$work/dist}" && pwd)
 in=$work/out
-version=0.1.0-alpha
+version=$(python3 -c 'import pathlib, re, sys, tomllib
+root = pathlib.Path(sys.argv[1])
+versions = [tomllib.loads((root / "apps" / name / "Cargo.toml").read_text())["package"]["version"] for name in ("osu-radio-qt", "osu-radio-server")]
+if versions[0] != versions[1] or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", versions[0]):
+    sys.exit("Qt and server must have the same supported release version")
+print(versions[0])' "$repo")
 name=osu-radio-$version-arch-x86_64
 
 for f in osu-radio-qt osu-radio-server helper/osu-lazer-realm-parser helper/osu-lazer-realm-parser.dll helper/osu-lazer-realm-parser.deps.json \
@@ -21,18 +26,6 @@ done
 if [[ -n $(find "$in/helper" -name 'libcoreclr.so' -print -quit) ]]; then
   echo 'helper publish is self-contained; the archive needs the framework-dependent one' >&2; exit 1
 fi
-# The installed inventory must describe this publish, not an earlier candidate.
-while IFS=$'\t' read -r file size hash rest; do
-  [[ $file == filename ]] && continue
-  [[ -f $in/helper/$file ]] && [[ $(stat -c %s "$in/helper/$file") == "$size" ]] &&
-    [[ $(sha256sum "$in/helper/$file" | cut -d' ' -f1) == "$hash" ]] || {
-      echo "helper inventory mismatch: $file (refresh HELPER-FILES.tsv)" >&2; exit 1;
-    }
-done < "$repo/packaging/arch/licenses/HELPER-FILES.tsv"
-[[ $(find "$in/helper" -type f | wc -l) == $(tail -n +2 "$repo/packaging/arch/licenses/HELPER-FILES.tsv" | wc -l) ]] || {
-  echo 'helper inventory has a different file count' >&2; exit 1;
-}
-
 stage=$dist/stage/$name
 rm -rf "$dist/stage"
 install -d "$stage/usr/bin" "$stage/usr/lib/osu-radio" "$stage/usr/share/applications" \

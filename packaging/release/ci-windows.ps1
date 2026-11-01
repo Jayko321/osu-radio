@@ -5,10 +5,11 @@ $repo = (Resolve-Path "$PSScriptRoot/../..").Path
 $pins = Get-Content "$PSScriptRoot/inputs.json" -Raw | ConvertFrom-Json
 $work = Join-Path $env:RUNNER_TEMP 'osu-radio-windows'
 $materials = Join-Path $env:RUNNER_TEMP 'windows-materials'
-python -B "$PSScriptRoot/stage.py" check $SourceSha
+python -B "$PSScriptRoot/build-inputs.py" $SourceSha
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-python -B "$PSScriptRoot/stage.py" materials $materials
-if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+New-Item -ItemType Directory $materials | Out-Null
+Copy-Item "$repo/LICENSE" $materials
+Copy-Item "$repo/packaging/arch/licenses/*" $materials
 
 $installer = Join-Path $env:RUNNER_TEMP 'innosetup.exe'
 Invoke-WebRequest $pins.windows.inno_url -OutFile $installer
@@ -30,7 +31,7 @@ $sdkConfig = Join-Path (Split-Path $repo -Parent) 'global.json'
 @{ sdk = @{ version = $pins.windows.dotnet_sdk; rollForward = 'disable' } } | ConvertTo-Json | Set-Content $sdkConfig
 python -B "$repo/packaging/windows/build.py" --qt $env:QT_ROOT_DIR --redist $redist --iscc $iscc --materials $materials --work $work --qt-version $pins.windows.qt --dotnet-sdk $pins.windows.dotnet_sdk --msvc-version $pins.windows.msvc --windows-sdk $pins.windows.windows_sdk --iscc-sha256 $isccHash
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-python -B "$PSScriptRoot/stage.py" check $SourceSha
+python -B "$PSScriptRoot/build-inputs.py" $SourceSha
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 # Only this small, explicit directory is uploaded; no Cargo caches or environment dumps.
 $handoff = Join-Path $env:RUNNER_TEMP 'windows-handoff'

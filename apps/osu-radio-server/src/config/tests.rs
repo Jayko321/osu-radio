@@ -9,12 +9,11 @@ const DATABASE_URL: &str = "database-from-environment";
 
 #[test]
 fn repository_dotenv_parses_without_loading_values_or_connecting() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.env");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.env.example");
     let file = match fs::File::open(path) {
         Ok(file) => file,
-        Err(error) if error.kind() == ErrorKind::NotFound => return,
         Err(error) => panic!(
-            "cannot read repository .env ({:?}); contents withheld",
+            "cannot read repository .env.example ({:?}); contents withheld",
             error.kind()
         ),
     };
@@ -23,7 +22,7 @@ fn repository_dotenv_parses_without_loading_values_or_connecting() {
     for entry in dotenvy::from_read_iter(file) {
         assert!(
             entry.is_ok(),
-            "repository .env syntax error; contents withheld"
+            "repository .env.example syntax error; contents withheld"
         );
     }
     assert!(

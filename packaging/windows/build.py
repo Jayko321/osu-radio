@@ -2,6 +2,7 @@
 """Build a Windows candidate in an MSVC developer environment; no publishing."""
 
 import argparse
+import tomllib
 import hashlib
 import json
 import os
@@ -38,7 +39,7 @@ def main():
     parser.add_argument("--qt", type=Path, required=True, help="Qt MSVC x64 installation")
     parser.add_argument("--redist", type=Path, required=True, help="MSVC x64 app-local redistributable DLL directory")
     parser.add_argument("--iscc", type=Path, required=True, help="Inno Setup ISCC.exe")
-    parser.add_argument("--materials", type=Path, required=True, help="reviewed Windows license and Qt source materials")
+    parser.add_argument("--materials", type=Path, required=True, help="directory of license and notice files to include")
     parser.add_argument("--work", type=Path, required=True, help="new build and staging directory")
     parser.add_argument("--qt-version", required=True, help="expected exact Qt version")
     parser.add_argument("--dotnet-sdk", required=True, help="expected exact .NET 10 SDK version")
@@ -54,7 +55,7 @@ def main():
         if not path.is_file():
             parser.error(f"required tool or runtime file missing: {path}")
     if not materials.is_dir() or not any(materials.iterdir()):
-        parser.error("reviewed Windows license and Qt source materials are required")
+        parser.error("a nonempty license and notice directory is required")
     env = os.environ.copy()
     env["PATH"] = str(qt / "bin") + os.pathsep + env["PATH"]
     env["QMAKE"] = str(qt / "bin/qmake.exe")
@@ -116,8 +117,9 @@ def main():
                 with path.open("rb") as file:
                     digest = hashlib.file_digest(file, "sha256").hexdigest()
                 hashes.write(f"{digest}  {path.relative_to(stage).as_posix()}\n")
-    run([iscc, f"/DStageDir={stage}", f"/DOutputDir={output}", ROOT / "packaging/windows/osu-radio.iss"], cwd=ROOT, env=env)
-    setup = output / "osu-radio-0.1.0-alpha-setup.exe"
+    version = tomllib.loads((ROOT / "apps/osu-radio-qt/Cargo.toml").read_text())["package"]["version"]
+    run([iscc, f"/DAppVersion={version}", f"/DStageDir={stage}", f"/DOutputDir={output}", ROOT / "packaging/windows/osu-radio.iss"], cwd=ROOT, env=env)
+    setup = output / f"osu-radio-{version}-setup.exe"
     if not setup.is_file() or not setup.stat().st_size:
         raise ValueError("Inno Setup did not create the installer")
     with setup.open("rb") as file:

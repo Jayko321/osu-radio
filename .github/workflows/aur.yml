@@ -1,0 +1,142 @@
+name: Publish AUR recipes
+on:
+  workflow_run:
+    workflows: [Linux CI]
+    types: [completed]
+    branches: [dev]
+  release:
+    types: [published]
+permissions:
+  contents: read
+concurrency:
+  group: aur-${{ github.event_name == 'release' && 'bin' || 'git' }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    if: >-
+      github.event_name == 'release' ||
+      (github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    outputs:
+      ready: ${{ steps.recipe.outputs.ready }}
+    runs-on: ubuntu-24.04
+    container: archlinux:base
+    steps:
+      - name: Install packaging tools
+        run: pacman -Syu --noconfirm git openssh python base-devel sudo
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Prepare recipe without publication credentials
+        id: recipe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PUBLICATION_REVISION: ${{ github.run_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          if [[ "$EVENT_NAME" == workflow_run ]]; then
+            current=$(git ls-remote origin refs/heads/dev | cut -f1)
+            if [[ "$current" != "$HEAD_SHA" ]]; then
+              echo 'Superseded dev commit; skipping publication.'
+              exit 0
+            fi
+            variant=git
+            git fetch --no-tags origin "$HEAD_SHA"
+            git show "$HEAD_SHA:packaging/arch/osu-radio-git/PKGBUILD" > /tmp/recipe-template
+            export AUR_RECIPE_TEMPLATE=/tmp/recipe-template
+            python packaging/aur/prepare.py git "$PUBLICATION_REVISION" /tmp/PKGBUILD
+          else
+            variant=bin
+            version=${RELEASE_TAG#v}
+            export VERSION="$version"
+            python - <<'PY'
+          import json, os, urllib.request
+          repository = os.environ['GITHUB_REPOSITORY']
+          tag = os.environ['RELEASE_TAG']
+          request = urllib.request.Request(f'https://api.github.com/repos/{repository}/releases/tags/{tag}', headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN']})
+          with urllib.request.urlopen(request) as response:
+              release = json.load(response)
+          name = f"osu-radio-{os.environ['VERSION']}-arch-x86_64.tar.gz"
+          asset = next(asset for asset in release['assets'] if asset['name'] == name)
+          urllib.request.urlretrieve(asset['browser_download_url'], '/tmp/release.tar.gz')
+          PY
+            python packaging/aur/prepare.py bin "$PUBLICATION_REVISION" /tmp/PKGBUILD "$version" /tmp/release.tar.gz
+          fi
+          useradd -m packager
+          install -d -o packager /tmp/recipe
+          install -o packager /tmp/PKGBUILD /tmp/recipe/PKGBUILD
+          cd /tmp/recipe
+          sudo -u packager makepkg --printsrcinfo > .SRCINFO
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: steps.recipe.outputs.ready == 'true'
+        with:
+          name: aur-recipe
+          path: |
+            /tmp/recipe/PKGBUILD
+            /tmp/recipe/.SRCINFO
+          include-hidden-files: true
+          if-no-files-found: error
+  publish:
+    needs: prepare
+    if: needs.prepare.outputs.ready == 'true'
+    runs-on: ubuntu-24.04
+    container: archlinux:base
+    steps:
+      - name: Install publication tools
+        run: pacman -Syu --noconfirm git openssh python
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: aur-recipe
+          path: /tmp/recipe
+      - name: Publish prepared files
+        env:
+          PACKAGE_NAME: osu-radio-${{ github.event_name == 'release' && 'bin' || 'git' }}
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          AUR_KNOWN_HOSTS: ${{ secrets.AUR_KNOWN_HOSTS }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$AUR_SSH_PRIVATE_KEY"
+          test -n "$AUR_KNOWN_HOSTS"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$AUR_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          trap 'rm -f ~/.ssh/id_ed25519' EXIT
+          git clone "ssh://aur@aur.archlinux.org/$PACKAGE_NAME.git" /tmp/aur
+          set +e
+          python packaging/aur/versions.py /tmp/recipe/.SRCINFO /tmp/aur/.SRCINFO
+          comparison=$?
+          set -e
+          if [[ "$comparison" == 3 ]]; then exit 0; fi
+          if [[ "$comparison" != 0 ]]; then exit "$comparison"; fi
+          cp /tmp/recipe/PKGBUILD /tmp/recipe/.SRCINFO /tmp/aur/
+          cd /tmp/aur
+          git config user.name 'osu-radio packaging'
+          git config user.email 'actions@users.noreply.github.com'
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "chore: update $PACKAGE_NAME"
+          if [[ "$EVENT_NAME" == workflow_run ]]; then
+            current=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" refs/heads/dev | cut -f1)
+            if [[ "$current" != "$HEAD_SHA" ]]; then
+              echo 'Dev changed during preparation; skipping stale publication.'
+              exit 0
+            fi
+          fi
+          # A regular push rejects concurrent AUR updates rather than overwriting them.
+          git push origin HEAD:master

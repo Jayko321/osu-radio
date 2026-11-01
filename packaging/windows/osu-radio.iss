@@ -9,10 +9,14 @@
   #error Staged Windows payload is missing required application or runtime files
 #endif
 
+#ifndef AppVersion
+  #error AppVersion must match the application version
+#endif
+
 [Setup]
 AppId=osu-radio-desktop
 AppName=osu! radio
-AppVersion=0.1.0-alpha
+AppVersion={#AppVersion}
 DefaultDirName={autopf}\osu-radio
 DefaultGroupName=osu! radio
 PrivilegesRequired=lowest
@@ -22,7 +26,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 SetupIconFile=..\icons\osu-radio.ico
 UninstallDisplayIcon={app}\osu-radio-qt.exe
 OutputDir={#OutputDir}
-OutputBaseFilename=osu-radio-0.1.0-alpha-setup
+OutputBaseFilename=osu-radio-{#AppVersion}-setup
 Compression=lzma2
 SolidCompression=yes
 
