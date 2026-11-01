@@ -22,6 +22,8 @@ env:
 jobs:
   qt-build:
     runs-on: ubuntu-24.04
+    env:
+      RUSTFLAGS: '-C link-arg=-fuse-ld=lld'
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
@@ -31,7 +33,7 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - name: Install native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config libasound2-dev libclang-dev libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-dev libfontconfig1-dev libxcb-cursor0
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config lld libasound2-dev libclang-dev libgl1-mesa-dev libegl1-mesa-dev libxkbcommon-dev libfontconfig1-dev libxcb-cursor0
       - uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730 # v4.3.1
         with:
           version: '6.8.3'
