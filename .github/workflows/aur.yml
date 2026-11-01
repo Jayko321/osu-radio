@@ -117,6 +117,7 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           printf '%s\n' "$AUR_KNOWN_HOSTS" > ~/.ssh/known_hosts
           trap 'rm -f ~/.ssh/id_ed25519' EXIT
+          export GIT_SSH_COMMAND="ssh -i \"$HOME/.ssh/id_ed25519\" -o UserKnownHostsFile=\"$HOME/.ssh/known_hosts\" -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes"
           git clone "ssh://aur@aur.archlinux.org/$PACKAGE_NAME.git" /tmp/aur
           set +e
           python packaging/aur/versions.py /tmp/recipe/.SRCINFO /tmp/aur/.SRCINFO
