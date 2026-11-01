@@ -15,6 +15,7 @@
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
 #include "artwork.h"
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #ifdef __GLIBC__
@@ -197,7 +198,7 @@ inline std::unique_ptr<LiveWindowMedia> connectLiveWindow(QQmlApplicationEngine 
         auto cache = artworkCache();
         QMutexLocker lock(&cache->mutex);
         qreal dpr = 1;
-        for (auto *screen : QGuiApplication::screens()) dpr = std::max(dpr, screen->devicePixelRatio());
+        for (auto *screen : QGuiApplication::screens()) dpr = (std::max)(dpr, screen->devicePixelRatio());
         cache->thumbnailEdge = dpr <= 1 ? 512 : dpr <= 2 ? 1024 : 1280;
     }
     return std::make_unique<LiveWindowMedia>(window);
