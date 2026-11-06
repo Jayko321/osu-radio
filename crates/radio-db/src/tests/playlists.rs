@@ -362,7 +362,7 @@ pub(super) async fn unicode_migration_contracts(database: &Database) {
         database.playlists().get(701).await.unwrap(),
         Some(saved.clone())
     );
-    crate::migrations::Migrator::down(&database.connection, Some(8))
+    crate::migrations::Migrator::down(&database.connection, Some(9))
         .await
         .unwrap();
     assert!(

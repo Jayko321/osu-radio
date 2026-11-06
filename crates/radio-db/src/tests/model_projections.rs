@@ -108,6 +108,7 @@ pub(super) async fn contracts(database: &Database) {
         .await
         .unwrap();
     let expected_map = Beatmap {
+        osu_last_played_at_ms: None,
         id: map.id,
         beatmap_set_id: set.id,
         difficulty_name: Some("Easy".into()),
@@ -124,6 +125,7 @@ pub(super) async fn contracts(database: &Database) {
         Some(expected_map.clone())
     );
     let empty = ImportedBeatmap {
+        osu_last_played_at_ms: None,
         difficulty_name: None,
         bpm: None,
         hash: None,
@@ -141,6 +143,7 @@ pub(super) async fn contracts(database: &Database) {
         .await
         .unwrap();
     let expected_empty = Beatmap {
+        osu_last_played_at_ms: None,
         id: silent.id,
         beatmap_set_id: set.id,
         difficulty_name: None,
@@ -168,6 +171,7 @@ pub(super) async fn contracts(database: &Database) {
         ]
     );
     let expected_detail = BeatmapDetails {
+        osu_last_played_at_ms: None,
         id: map.id,
         audio_source_id: Some(audio.id),
         difficulty_name: Some("Easy".into()),
@@ -178,6 +182,7 @@ pub(super) async fn contracts(database: &Database) {
         has_cover: true,
     };
     let empty_detail = BeatmapDetails {
+        osu_last_played_at_ms: None,
         id: silent.id,
         audio_source_id: None,
         difficulty_name: None,
@@ -420,6 +425,7 @@ async fn playlist_projections(
     );
     let item_id = saved.items[0].id;
     let expected_item = PlaylistItem {
+        osu_last_played_at_ms: None,
         id: item_id,
         playlist_id: playlist.id,
         source_kind: "lazer".into(),

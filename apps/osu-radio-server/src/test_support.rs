@@ -10,6 +10,7 @@ use crate::state::AppState;
 
 pub(crate) fn beatmap(difficulty_name: &str, audio_file: &str) -> ImportedBeatmap {
     ImportedBeatmap {
+        osu_last_played_at_ms: None,
         md5_hash: None,
         difficulty_name: Some(difficulty_name.to_owned()),
         bpm: Some(180.0),

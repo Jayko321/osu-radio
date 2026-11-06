@@ -204,6 +204,10 @@ impl BeatmapSetRepository<'_> {
                 Expr::col((audio_source::Entity, Audio::Location)),
                 Alias::new("audio_location"),
             )
+            .expr_as(
+                Expr::col((beatmap::Entity, Map::OsuLastPlayedAtMs)),
+                Alias::new("osu_last_played_at_ms"),
+            )
             .expr_as(Expr::col((beatmap::Entity, Map::Id)), Alias::new("map_id"))
             .expr_as(
                 Expr::col((beatmap::Entity, Map::DifficultyName)),
@@ -266,6 +270,7 @@ impl BeatmapSetRepository<'_> {
             }
             if let Some(id) = row.map_id {
                 set.beatmaps.push(BeatmapDetails {
+                    osu_last_played_at_ms: row.osu_last_played_at_ms,
                     id,
                     audio_source_id: row.audio_id,
                     difficulty_name: row.difficulty_name,
@@ -312,6 +317,7 @@ struct SetWithAudio {
     audio_kind: Option<String>,
     audio_location: Option<String>,
     map_id: Option<i32>,
+    osu_last_played_at_ms: Option<i64>,
     difficulty_name: Option<String>,
     has_cover: bool,
     title: Option<String>,

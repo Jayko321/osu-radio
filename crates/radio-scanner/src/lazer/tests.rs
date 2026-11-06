@@ -673,6 +673,14 @@ async fn imports_real_realm_fixtures_with_the_production_helper() {
     assert_eq!(snapshot.beatmap_sets.len(), 1);
     assert_eq!(snapshot.beatmap_sets[0].beatmaps.len(), 2);
     assert_eq!(
+        snapshot.beatmap_sets[0].beatmaps[0].osu_last_played_at_ms,
+        Some(1_700_000_000_123)
+    );
+    assert_eq!(
+        snapshot.beatmap_sets[0].beatmaps[1].osu_last_played_at_ms,
+        None
+    );
+    assert_eq!(
         snapshot.beatmap_sets[0].beatmaps[0].hash.as_deref(),
         Some("Native-Hash-Is-NOT-MD5")
     );
@@ -734,6 +742,11 @@ async fn real_realm_metadata_and_file_references_round_trip_without_modifying_th
     assert_eq!(set.online_id, None, "overflowing Realm long must not wrap");
     assert_eq!(set.hash.as_deref(), Some("rich-set"));
     assert_eq!(set.beatmaps.len(), 4);
+    assert!(
+        set.beatmaps
+            .iter()
+            .all(|map| map.osu_last_played_at_ms.is_none())
+    );
     let map = &set.beatmaps[0];
     assert_eq!(map.difficulty_name.as_deref(), Some("Hard"));
     assert_eq!(map.bpm, Some(180.5));

@@ -338,7 +338,10 @@ QtObject {
         check(sortMenu.currentIndex === 1 && sorted.tracks[0].artist === "Creepy Nuts", "gallery artist sort uses shared mock action");
         check(sorted.tracks[sorted.selected].id === selectedId, "gallery sorting retains selection by ID");
         sortMenu.choose(2);
-        check(sortMenu.currentIndex === 2, "gallery recent mode");
+        check(sortMenu.currentIndex === 2, "gallery recently played mode");
+        sortMenu.choose(3);
+        sorted = JSON.parse(mock.stateJson);
+        check(sortMenu.currentIndex === 3 && sorted.tracks[0].id === 1, "gallery recently listened mode");
         sortMenu.choose(0);
         sorted = JSON.parse(mock.stateJson);
         check(sorted.tracks[0].title === "Alice" && sorted.tracks[sorted.selected].id === selectedId, "gallery default title sort restored");
@@ -2835,7 +2838,7 @@ QtObject {
         const list = findChild(window.contentItem, "songList");
         switch (stage) {
         case 0:
-            check(menu.currentIndex === 0 && menu.entries.length === 3, "default title sort and three modes");
+            check(menu.currentIndex === 0 && menu.entries.length === 4, "default title sort and four modes");
             bridge.library.selectTrack(42);
             stage = 1;
             break;
@@ -2871,13 +2874,15 @@ QtObject {
             break;
         case 4:
             if (!menu.popup.opened) return;
-            input.keyClick(Qt.Key_End, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_Down, Qt.NoModifier, 0);
             input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
             stage = 5;
             break;
         case 5:
             if (bridge.library.trackSortIndex !== 2 || menu.popup.visible || !sortedRowsMatch([7, 42, 103])) return;
             check(menu.activeFocus, "recent selection restores trigger focus");
+            check(menu.displayText === "Recently played" && !menu.contentItem.truncated,
+                "recently played label is visible in the menu");
             menu.popup.open();
             stage = 6;
             break;
@@ -2894,11 +2899,24 @@ QtObject {
             break;
         case 8:
             if (!menu.popup.opened) return;
-            input.keyClick(Qt.Key_Home, Qt.NoModifier, 0);
-            input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_End, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
             stage = 9;
             break;
         case 9:
+            if (bridge.library.trackSortIndex !== 3 || menu.popup.visible || !sortedRowsMatch([103, 42, 7])) return;
+            check(menu.displayText === "Recently listened" && !menu.contentItem.truncated,
+                "recently listened label is visible in the menu");
+            menu.popup.open();
+            stage = 10;
+            break;
+        case 10:
+            if (!menu.popup.opened) return;
+            input.keyClick(Qt.Key_Home, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
+            stage = 11;
+            break;
+        case 11:
             if (bridge.library.trackSortIndex !== 0 || menu.popup.visible || !sortedRowsMatch([103, 42, 7])) return;
             finish();
             break;

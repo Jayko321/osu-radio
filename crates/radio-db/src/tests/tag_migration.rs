@@ -289,6 +289,7 @@ async fn collision_rolls_back(database: &Database) {
         format!("SELECT id,difficulty_name,bpm,hash,beatmap_set_id,metadata_hash,audio_source_id,background_path FROM beatmaps WHERE id = {}", old_map.id))).await.unwrap().unwrap();
     assert_eq!(
         crate::model::Beatmap {
+            osu_last_played_at_ms: None,
             id: preserved.try_get("", "id").unwrap(),
             difficulty_name: preserved.try_get("", "difficulty_name").unwrap(),
             bpm: preserved.try_get("", "bpm").unwrap(),

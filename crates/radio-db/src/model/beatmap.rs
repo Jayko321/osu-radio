@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, PartialEq)]
 pub struct Beatmap {
     pub id: i32,
+    pub osu_last_played_at_ms: Option<i64>,
     pub difficulty_name: Option<String>,
     pub bpm: Option<f64>,
     pub hash: Option<String>,

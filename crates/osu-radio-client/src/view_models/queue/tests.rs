@@ -29,6 +29,7 @@ pub(super) fn assignment(
             artist_unicode: None,
             cover_beatmap_id: Some(id.saturating_add(100)),
             difficulties: vec![TrackDifficulty {
+                osu_last_played_at_ms: None,
                 beatmap_id: id,
                 beatmap_set_id: 1,
                 beatmap_set_online_id: None,
@@ -458,7 +459,7 @@ async fn started_assignment_updates_recent_dates_without_restart_or_selection_ch
         ],
         true,
     );
-    state.command(AppCommand::SetTrackSort(TrackSort::RecentlyPlayed));
+    state.command(AppCommand::SetTrackSort(TrackSort::RecentlyListened));
     let (worker, downloads) = crate::playback::Worker::spawn_fake(Arc::new(|_| {})).unwrap();
     state.playback = Some(worker);
     state.downloads = Some(downloads);

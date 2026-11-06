@@ -130,6 +130,7 @@ mod tests {
             ],
             beatmaps: vec![
                 BeatmapDetails {
+                    osu_last_played_at_ms: None,
                     id: 71,
                     audio_source_id: Some(51),
                     difficulty_name: Some("Hard".into()),
@@ -140,6 +141,7 @@ mod tests {
                     has_cover: true,
                 },
                 BeatmapDetails {
+                    osu_last_played_at_ms: None,
                     id: 72,
                     audio_source_id: None,
                     difficulty_name: None,

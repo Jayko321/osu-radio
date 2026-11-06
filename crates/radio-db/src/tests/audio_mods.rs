@@ -46,13 +46,36 @@ pub(super) async fn contracts(database: &Database, url: &str) {
         .await
         .unwrap();
     let map = read_v11_beatmap(database, 91).await;
-    let playlist = database.playlists().get(91).await.unwrap();
     let other = Database::connect(url).await.unwrap();
     let (one, two) = tokio::join!(database.migrate(), other.migrate());
     one.unwrap();
     two.unwrap();
     assert_eq!(database.beatmaps().get(91).await.unwrap(), map);
-    assert_eq!(database.playlists().get(91).await.unwrap(), playlist);
+    let playlist = database.playlists().get(91).await.unwrap();
+    let saved = playlist.as_ref().unwrap();
+    assert_eq!(
+        (saved.id, saved.name.as_str(), saved.items.len()),
+        (91, "Keep playlist", 1)
+    );
+    let item = &saved.items[0];
+    assert_eq!(
+        (
+            item.id,
+            item.playlist_id,
+            item.source_kind.as_str(),
+            item.beatmap_hash.as_str()
+        ),
+        (91, 91, "lazer", "mods-map")
+    );
+    assert_eq!(
+        (
+            item.beatmap_id,
+            item.beatmap_set_id,
+            item.audio_source_id,
+            item.osu_last_played_at_ms
+        ),
+        (Some(91), Some(91), Some(91), None)
+    );
     // The v14 schema predates the queue repository's columns, so the pre-upgrade snapshot is the fixture itself.
     let queue = database.queue().get().await.unwrap();
     assert_eq!(
@@ -176,7 +199,7 @@ pub(super) async fn contracts(database: &Database, url: &str) {
     );
     constraints(database, &source).await;
     // Downgrading past v15 removes only mods (and the newer queue modes) and re-upgrades without losing models.
-    Migrator::down(&database.connection, Some(3)).await.unwrap();
+    Migrator::down(&database.connection, Some(4)).await.unwrap();
     database.migrate().await.unwrap();
     assert_eq!(database.beatmaps().get(91).await.unwrap(), map);
     assert_eq!(database.playlists().get(91).await.unwrap(), playlist);

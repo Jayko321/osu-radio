@@ -172,12 +172,12 @@ async fn reversible_migrations_preserve_the_library(database: &Database) {
     .await
     .unwrap();
     assert_schema(database, 4).await;
-    for version in 5..=17 {
+    for version in 5..=18 {
         Migrator::up(&database.connection, Some(1)).await.unwrap();
         assert_schema(database, version).await;
         assert_library(database, &installation, set.id, map.id).await;
     }
-    for version in (4..=16).rev() {
+    for version in (4..=17).rev() {
         Migrator::down(&database.connection, Some(1)).await.unwrap();
         assert_schema(database, version).await;
         assert_library(database, &installation, set.id, map.id).await;
@@ -193,7 +193,7 @@ async fn reversible_migrations_preserve_the_library(database: &Database) {
     assert_schema(database, 4).await;
     assert_library(database, &installation, set.id, map.id).await;
     database.migrate().await.unwrap();
-    assert_schema(database, 17).await;
+    assert_schema(database, 18).await;
     assert_library(database, &installation, set.id, map.id).await;
     assert_eq!(
         database.queue().get().await.unwrap(),
@@ -234,6 +234,7 @@ async fn assert_schema(database: &Database, version: usize) {
     for (table, column, since) in [
         ("beatmaps", "background_path", 2),
         ("beatmaps", "search_difficulty_name", 17),
+        ("beatmaps", "osu_last_played_at_ms", 18),
         ("beatmap_metadata", "search_title", 17),
         ("beatmap_metadata", "search_title_unicode", 17),
         ("beatmap_metadata", "search_artist", 17),
@@ -399,7 +400,7 @@ async fn search_text_upgrade(database: &Database) {
     }
     for _ in 0..2 {
         database.migrate().await.unwrap();
-        assert_schema(database, 17).await;
+        assert_schema(database, 18).await;
         let rows = database.connection.query_all_raw(Statement::from_string(
             database.connection.get_database_backend(),
             "SELECT m.*, b.id, b.difficulty_name, b.search_difficulty_name FROM beatmap_metadata m \
@@ -446,7 +447,7 @@ async fn search_text_upgrade(database: &Database) {
                 .unwrap()
                 .is_empty()
         );
-        Migrator::down(&database.connection, Some(1)).await.unwrap();
+        Migrator::down(&database.connection, Some(2)).await.unwrap();
         assert_schema(database, 16).await;
     }
     drop_application_tables(database).await;

@@ -77,6 +77,7 @@ void Create(string filename, bool collections, bool invalidHash = false, bool mi
             Hash = "Native-Hash-Is-NOT-MD5",
             MD5Hash = "ABCDEF0123456789ABCDEF0123456789",
             DifficultyName = "Hard",
+            LastPlayed = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_123),
         });
         set.Beatmaps.Add(new Beatmap
         {
@@ -112,6 +113,7 @@ public partial class BeatmapSet : IRealmObject
 
 public partial class Beatmap : IRealmObject
 {
+    public DateTimeOffset? LastPlayed { get; set; }
     public string? Hash { get; set; }
     public string? MD5Hash { get; set; }
     public string? DifficultyName { get; set; }

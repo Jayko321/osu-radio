@@ -657,6 +657,7 @@ pub(crate) const fn track_sort_from_index(index: i32) -> Option<TrackSort> {
         0 => Some(TrackSort::TitleAsc),
         1 => Some(TrackSort::ArtistAsc),
         2 => Some(TrackSort::RecentlyPlayed),
+        3 => Some(TrackSort::RecentlyListened),
         _ => None,
     }
 }
@@ -665,6 +666,7 @@ pub(crate) const fn track_sort_index(sort: TrackSort) -> i32 {
         TrackSort::TitleAsc => 0,
         TrackSort::ArtistAsc => 1,
         TrackSort::RecentlyPlayed => 2,
+        TrackSort::RecentlyListened => 3,
     }
 }
 struct ArtworkAck {
@@ -834,12 +836,13 @@ mod tests {
             (0, TrackSort::TitleAsc),
             (1, TrackSort::ArtistAsc),
             (2, TrackSort::RecentlyPlayed),
+            (3, TrackSort::RecentlyListened),
         ] {
             assert_eq!(track_sort_from_index(index), Some(sort));
             assert_eq!(track_sort_index(sort), index);
         }
         assert!(track_sort_from_index(-1).is_none());
-        assert!(track_sort_from_index(3).is_none());
+        assert!(track_sort_from_index(4).is_none());
     }
     fn first_media_reorder(
         bridge: &mut Pin<&mut ffi::AppBridge>,

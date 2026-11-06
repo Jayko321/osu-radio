@@ -46,6 +46,7 @@ impl ImportedBeatmapSet {
 
 #[derive(Debug, Clone)]
 pub struct ImportedBeatmap {
+    pub osu_last_played_at_ms: Option<i64>,
     pub md5_hash: Option<String>,
     pub difficulty_name: Option<String>,
     pub bpm: Option<f64>,
@@ -93,6 +94,7 @@ mod tests {
 
     fn beatmap() -> ImportedBeatmap {
         ImportedBeatmap {
+            osu_last_played_at_ms: None,
             md5_hash: None,
             difficulty_name: None,
             bpm: None,

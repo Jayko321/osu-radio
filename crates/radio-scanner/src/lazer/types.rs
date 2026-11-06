@@ -28,6 +28,7 @@ struct LazerBeatmapSetRecord {
 
 #[derive(Debug, Deserialize)]
 struct LazerBeatmapRecord {
+    osu_last_played_at_ms: Option<i64>,
     md5_hash: Option<String>,
     difficulty_name: Option<String>,
     bpm: Option<f64>,
@@ -156,6 +157,7 @@ impl From<LazerBeatmapSetRecord> for ImportedBeatmapSet {
 impl From<LazerBeatmapRecord> for ImportedBeatmap {
     fn from(record: LazerBeatmapRecord) -> Self {
         Self {
+            osu_last_played_at_ms: record.osu_last_played_at_ms,
             difficulty_name: record.difficulty_name,
             md5_hash: record.md5_hash,
             bpm: record.bpm,

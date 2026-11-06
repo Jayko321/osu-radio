@@ -1180,6 +1180,7 @@ fn track_from_entry(entry: &QueueEntry, audio_source_id: i32) -> LibraryTrack {
             .beatmap_id
             .zip(entry.beatmap_set_id)
             .map(|(beatmap_id, beatmap_set_id)| crate::TrackDifficulty {
+                osu_last_played_at_ms: None,
                 beatmap_id,
                 beatmap_set_id,
                 beatmap_set_online_id: None,

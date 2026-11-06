@@ -8,6 +8,7 @@ pub struct BeatmapSet {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BeatmapDetails {
+    pub osu_last_played_at_ms: Option<i64>,
     pub id: i32,
     pub audio_source_id: Option<i32>,
     pub difficulty_name: Option<String>,
