@@ -178,6 +178,7 @@ async fn insert_legacy_beatmap(
     let row = database.connection.query_one_raw(Statement::from_sql_and_values(database.connection.get_database_backend(),
         format!("INSERT INTO beatmaps (beatmap_set_id,difficulty_name,bpm,hash,metadata_hash,audio_source_id,background_path) VALUES ({placeholders}) RETURNING id"), values)).await?.unwrap();
     Ok(crate::model::Beatmap {
+        osu_last_played_at_ms: None,
         id: row.try_get("", "id")?,
         beatmap_set_id: set_id,
         difficulty_name: imported.difficulty_name.clone(),
@@ -210,6 +211,7 @@ async fn read_v11_beatmap(database: &Database, id: i32) -> Option<crate::model::
         format!("SELECT id,beatmap_set_id,difficulty_name,bpm,hash,md5_hash,metadata_hash,audio_source_id,background_path FROM beatmaps WHERE id={id}"),
     )).await.unwrap()?;
     Some(crate::model::Beatmap {
+        osu_last_played_at_ms: None,
         id: row.try_get("", "id").unwrap(),
         beatmap_set_id: row.try_get("", "beatmap_set_id").unwrap(),
         difficulty_name: row.try_get("", "difficulty_name").unwrap(),
@@ -265,6 +267,7 @@ fn snapshot(title: &str, path: &str) -> Vec<ImportedBeatmapSet> {
         beatmaps: ["Easy", "Hard"]
             .into_iter()
             .map(|difficulty| ImportedBeatmap {
+                osu_last_played_at_ms: None,
                 md5_hash: None,
                 difficulty_name: Some(difficulty.to_owned()),
                 bpm: Some(180.5),
@@ -498,7 +501,7 @@ async fn concurrent_schema_changes(database: &Database, url: &str) {
                 .await
                 .unwrap()
                 .len(),
-            17
+            18
         );
         let (reset, migrate) = tokio::join!(database.reset(), other.migrate());
         reset.unwrap();

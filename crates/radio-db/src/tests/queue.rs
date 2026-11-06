@@ -315,7 +315,7 @@ async fn repository_contracts(database: &Database, other: &Database, state: &Que
                 .await
                 .unwrap()
                 .len(),
-            17
+            18
         );
         assert!(
             !SchemaManager::new(&database.connection)
@@ -378,7 +378,7 @@ async fn queue_modes_contracts(database: &Database, other: &Database, state: &Qu
             .await
             .unwrap()
             .len(),
-        17
+        18
     );
     save(database, state).await.unwrap();
 }
@@ -483,7 +483,7 @@ async fn downgrade_guards(database: &Database, state: &QueueState) {
                 .await
                 .unwrap()
                 .len(),
-            17
+            18
         );
         save(database, state).await.unwrap();
     }
@@ -595,7 +595,7 @@ async fn waiting_migration(database: &Database, url: &str) {
             .await
             .unwrap()
             .len(),
-        17
+        18
     );
     assigned.entries[0].availability = QueueAvailability::Available;
     save(database, &assigned).await.unwrap();
@@ -663,7 +663,7 @@ async fn launch_source_migration(database: &Database, url: &str) {
                     .await
                     .unwrap()
                     .len(),
-                17
+                18
             );
         }
         for invalid in [

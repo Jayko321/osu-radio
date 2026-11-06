@@ -19,6 +19,7 @@ impl BeatmapRepository<'_> {
     ) -> Result<Beatmap> {
         Ok(into_model(
             beatmap::ActiveModel {
+                osu_last_played_at_ms: Set(imported.osu_last_played_at_ms),
                 difficulty_name: Set(imported.difficulty_name.clone()),
                 search_difficulty_name: Set(imported
                     .difficulty_name
@@ -61,6 +62,7 @@ impl BeatmapRepository<'_> {
 fn into_model(value: beatmap::Model) -> Beatmap {
     Beatmap {
         id: value.id,
+        osu_last_played_at_ms: value.osu_last_played_at_ms,
         difficulty_name: value.difficulty_name,
         bpm: value.bpm,
         hash: value.hash,

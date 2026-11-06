@@ -321,6 +321,7 @@ pub(super) fn playlist() -> Playlist {
         ]
         .into_iter()
         .map(|(id, title, difficulty, audio)| PlaylistItem {
+            osu_last_played_at_ms: None,
             id,
             playlist_id: 7,
             source_kind: "stable".into(),

@@ -306,8 +306,13 @@ impl<'a> Reader<'a> {
         let tags = self.string()?;
         self.take(2)?; // Online offset.
         self.string()?; // Title font.
-        self.boolean()?; // Unplayed.
-        self.take(8)?; // Last played ticks.
+        let unplayed = self.boolean()?;
+        let ticks = i64::from_le_bytes(self.array()?);
+        let osu_last_played_at_ms = if !unplayed && ticks > 0 {
+            (ticks / 10_000).checked_sub(62_135_596_800_000)
+        } else {
+            None
+        };
         self.boolean()?; // osz2.
         let folder = self
             .string()?
@@ -327,6 +332,7 @@ impl<'a> Reader<'a> {
             osu_file,
             online_id,
             beatmap: ImportedBeatmap {
+                osu_last_played_at_ms,
                 difficulty_name,
                 md5_hash: hash
                     .as_deref()

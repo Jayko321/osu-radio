@@ -186,6 +186,7 @@ fn snapshot(title: &str, path: &str) -> Vec<ImportedBeatmapSet> {
         beatmaps: ["Easy", "Hard"]
             .into_iter()
             .map(|difficulty| ImportedBeatmap {
+                osu_last_played_at_ms: None,
                 md5_hash: None,
                 difficulty_name: Some(difficulty.to_owned()),
                 bpm: Some(180.5),

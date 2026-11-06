@@ -14,7 +14,9 @@ async fn started(database: &Services, token: u64) -> PlaybackAssignment {
 #[allow(clippy::too_many_lines)] // End-to-end acknowledgement, projections and source lifetime share one persisted scenario.
 pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url: &str) {
     let installation = register(database, "listening-history").await;
-    let imported = snapshot("History song", "/history/source");
+    let mut imported = snapshot("History song", "/history/source");
+    imported[0].beatmaps[0].osu_last_played_at_ms = Some(100);
+    imported[0].beatmaps[1].osu_last_played_at_ms = Some(200);
     database
         .osu_installations()
         .replace_snapshot(installation, &imported)
@@ -28,6 +30,14 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
         .remove(0);
     let audio = track.audio_source_id;
     assert_eq!(track.last_played_at_ms, None);
+    assert_eq!(
+        track
+            .difficulties
+            .iter()
+            .map(|map| map.osu_last_played_at_ms)
+            .collect::<Vec<_>>(),
+        [Some(100), Some(200)]
+    );
     let playlist = database
         .playlists()
         .create("History playlist")
@@ -48,6 +58,14 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
             .items
             .iter()
             .all(|item| item.last_played_at_ms.is_none())
+    );
+    assert_eq!(
+        playlist
+            .items
+            .iter()
+            .map(|item| item.osu_last_played_at_ms)
+            .collect::<Vec<_>>(),
+        [Some(100), Some(200)]
     );
     database.playlists().play(playlist.id, None).await.unwrap();
     super::queue::complete_checks(database).await;
@@ -98,6 +116,14 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
         .await
         .unwrap();
     assert_eq!(tracks[0].last_played_at_ms, Some(timestamp));
+    assert_eq!(
+        tracks[0]
+            .difficulties
+            .iter()
+            .map(|map| map.osu_last_played_at_ms)
+            .collect::<Vec<_>>(),
+        [Some(100), Some(200)]
+    );
     let saved = database
         .playlists()
         .get(playlist.id)
@@ -164,6 +190,48 @@ pub(super) async fn contracts(database: &TestDatabase, other: &TestDatabase, url
             .get(&audio),
         Some(&latest),
         "queue clear retains listening history"
+    );
+    imported[0].beatmaps[0].osu_last_played_at_ms = Some(300);
+    imported[0].beatmaps[1].osu_last_played_at_ms = None;
+    database
+        .osu_installations()
+        .replace_snapshot(installation, &imported)
+        .await
+        .unwrap();
+    let refreshed = database
+        .beatmap_sets()
+        .search_tracks("History song")
+        .await
+        .unwrap();
+    assert_eq!(refreshed[0].last_played_at_ms, Some(latest));
+    assert_eq!(
+        refreshed[0]
+            .difficulties
+            .iter()
+            .map(|map| map.osu_last_played_at_ms)
+            .collect::<Vec<_>>(),
+        [Some(300), None],
+        "refresh replaces osu! dates independently of radio listening history"
+    );
+    let refreshed_playlist = database
+        .playlists()
+        .get(playlist.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        refreshed_playlist
+            .items
+            .iter()
+            .map(|item| item.osu_last_played_at_ms)
+            .collect::<Vec<_>>(),
+        [Some(300), None]
+    );
+    assert!(
+        refreshed_playlist
+            .items
+            .iter()
+            .all(|item| item.last_played_at_ms == Some(latest))
     );
     database
         .osu_installations()

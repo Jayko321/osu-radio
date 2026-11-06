@@ -224,6 +224,7 @@ mod tests {
 
     fn fixture() -> (ImportedBeatmapSet, ImportedBeatmap) {
         let beatmap = ImportedBeatmap {
+            osu_last_played_at_ms: None,
             md5_hash: None,
             difficulty_name: Some("Hard".into()),
             bpm: Some(123.45),

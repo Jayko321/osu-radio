@@ -15,6 +15,7 @@ fn playlist(id: i32) -> Playlist {
             .map(|(index, name)| {
                 let item_id = i32::try_from(index).unwrap().saturating_add(1);
                 PlaylistItem {
+                    osu_last_played_at_ms: None,
                     id: item_id,
                     last_played_at_ms: None,
                     volume_percent: None,
@@ -40,6 +41,50 @@ fn install(state: &mut Controller, id: i32) {
     state.playlists.view.visible = true;
     state.playlists.view.active_id = Some(id);
     state.install_playlist(playlist(id));
+}
+
+#[test]
+fn recently_played_uses_each_playlist_difficulty_and_accepts_old_responses() {
+    let (mut state, _) = crate::controller::tests::controller();
+    let mut incoming = playlist(7);
+    incoming.items[0].osu_last_played_at_ms = Some(10);
+    incoming.items[0].last_played_at_ms = Some(999);
+    incoming.items[1].osu_last_played_at_ms = Some(20);
+    state.command(AppCommand::SetTrackSort(TrackSort::RecentlyPlayed));
+    state.playlists.view.active_id = Some(7);
+    state.install_playlist(incoming.clone());
+    assert_eq!(
+        state
+            .playlists
+            .tracks
+            .iter()
+            .map(|row| row.item_id)
+            .collect::<Vec<_>>(),
+        [2, 1, 3]
+    );
+    // Old servers omit the osu! date; radio history must not become a fallback.
+    let mut old = serde_json::to_value(incoming).unwrap();
+    for item in old["items"].as_array_mut().unwrap() {
+        item.as_object_mut()
+            .unwrap()
+            .remove("osu_last_played_at_ms");
+    }
+    let old: Playlist = serde_json::from_value(old).unwrap();
+    assert!(
+        old.items
+            .iter()
+            .all(|item| item.osu_last_played_at_ms.is_none())
+    );
+    state.install_playlist(old);
+    assert_eq!(
+        state
+            .playlists
+            .tracks
+            .iter()
+            .map(|row| row.item_id)
+            .collect::<Vec<_>>(),
+        [1, 2, 3]
+    );
 }
 
 #[test]
@@ -159,7 +204,7 @@ fn recent_assignment_reorders_shared_audio_rows_and_late_playlist_dates_cannot_r
         .iter_mut()
         .for_each(|track| track.duration = Some(std::time::Duration::from_secs(42)));
     let generation = state.media.generation;
-    state.command(AppCommand::SetTrackSort(TrackSort::RecentlyPlayed));
+    state.command(AppCommand::SetTrackSort(TrackSort::RecentlyListened));
     assert_eq!(
         state
             .playlists
@@ -297,6 +342,7 @@ async fn add_dialog_keeps_concrete_difficulties_and_failed_requests_keep_retryab
         .iter()
         .take(2)
         .map(|item| TrackDifficulty {
+            osu_last_played_at_ms: None,
             beatmap_id: item.beatmap_id.unwrap(),
             beatmap_set_id: 10,
             beatmap_set_online_id: None,

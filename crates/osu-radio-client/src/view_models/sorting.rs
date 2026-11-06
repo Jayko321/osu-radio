@@ -10,6 +10,7 @@ pub enum TrackSort {
     TitleAsc,
     ArtistAsc,
     RecentlyPlayed,
+    RecentlyListened,
 }
 
 impl TrackSort {
@@ -27,7 +28,7 @@ impl TrackSort {
         };
         (
             Reverse(
-                (self == Self::RecentlyPlayed)
+                matches!(self, Self::RecentlyPlayed | Self::RecentlyListened)
                     .then_some(last_played_at_ms)
                     .flatten(),
             ),
@@ -37,12 +38,24 @@ impl TrackSort {
         )
     }
 
+    fn date(self, track: &Track) -> Option<i64> {
+        match self {
+            Self::RecentlyPlayed => track
+                .difficulties
+                .iter()
+                .filter_map(|map| map.osu_last_played_at_ms)
+                .max(),
+            Self::RecentlyListened => track.last_played_at_ms,
+            _ => None,
+        }
+    }
+
     pub(crate) fn sort_tracks(self, tracks: &mut [Track]) {
         tracks.sort_by_cached_key(|track| {
             self.key(
                 &track.title,
                 &track.artist,
-                track.last_played_at_ms,
+                self.date(track),
                 i64::from(track.audio_source_id),
             )
         });
@@ -57,7 +70,7 @@ impl TrackSort {
             self.key(
                 &row.track.title,
                 &row.track.artist,
-                row.track.last_played_at_ms,
+                self.date(&row.track),
                 i64::from(row.item_id),
             )
         });

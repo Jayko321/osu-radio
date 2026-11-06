@@ -579,6 +579,8 @@ pub struct LibraryTrack {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct TrackDifficulty {
+    #[serde(default)]
+    pub osu_last_played_at_ms: Option<i64>,
     pub beatmap_id: i32,
     pub beatmap_set_id: i32,
     #[serde(default)]
@@ -800,6 +802,8 @@ pub struct PlaylistSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct PlaylistItem {
+    #[serde(default)]
+    pub osu_last_played_at_ms: Option<i64>,
     pub id: i32,
     #[serde(default)]
     pub last_played_at_ms: Option<i64>,

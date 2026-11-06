@@ -25,6 +25,7 @@ pub(crate) struct TrackResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
 pub(crate) struct TrackDifficulty {
+    pub osu_last_played_at_ms: Option<i64>,
     pub beatmap_id: i32,
     pub beatmap_set_id: i32,
     pub beatmap_set_online_id: Option<i32>,
@@ -48,6 +49,7 @@ impl From<radio_services::LibraryTrack> for TrackResponse {
                 .difficulties
                 .into_iter()
                 .map(|map| TrackDifficulty {
+                    osu_last_played_at_ms: map.osu_last_played_at_ms,
                     beatmap_id: map.beatmap_id,
                     beatmap_set_id: map.beatmap_set_id,
                     beatmap_set_online_id: map.beatmap_set_online_id,
@@ -101,6 +103,7 @@ mod tests {
             cover_beatmap_id: Some(71),
             difficulties: vec![
                 radio_services::TrackDifficulty {
+                    osu_last_played_at_ms: Some(100),
                     beatmap_id: 71,
                     beatmap_set_id: 31,
                     beatmap_set_online_id: Some(3100),
@@ -108,6 +111,7 @@ mod tests {
                     set_has_multiple_audio_sources: true,
                 },
                 radio_services::TrackDifficulty {
+                    osu_last_played_at_ms: None,
                     beatmap_id: 72,
                     beatmap_set_id: 32,
                     beatmap_set_online_id: None,
@@ -123,13 +127,15 @@ mod tests {
                 "audio_source_id": 17, "last_played_at_ms": 1_700_000_000_123_i64, "volume_percent": 0, "mods": null,
                 "title": "Title", "title_unicode": "題", "artist": "Artist", "artist_unicode": "演奏者", "cover_beatmap_id": 71,
                 "difficulties": [
-                    {"beatmap_id": 71, "beatmap_set_id": 31, "beatmap_set_online_id": 3100, "difficulty_name": "Hard", "set_has_multiple_audio_sources": true},
-                    {"beatmap_id": 72, "beatmap_set_id": 32, "beatmap_set_online_id": null, "difficulty_name": null, "set_has_multiple_audio_sources": false},
+                    {"osu_last_played_at_ms": 100, "beatmap_id": 71, "beatmap_set_id": 31, "beatmap_set_online_id": 3100, "difficulty_name": "Hard", "set_has_multiple_audio_sources": true},
+                    {"osu_last_played_at_ms": null, "beatmap_id": 72, "beatmap_set_id": 32, "beatmap_set_online_id": null, "difficulty_name": null, "set_has_multiple_audio_sources": false},
                 ]
             })
         );
         let wire: osu_radio_client::models::LibraryTrack = serde_json::from_value(actual).unwrap();
         assert_eq!(wire.volume_percent, Some(0));
+        assert_eq!(wire.difficulties[0].osu_last_played_at_ms, Some(100));
+        assert_eq!(wire.difficulties[1].osu_last_played_at_ms, None);
         let empty = radio_services::LibraryTrack {
             audio_source_id: 18,
             last_played_at_ms: None,

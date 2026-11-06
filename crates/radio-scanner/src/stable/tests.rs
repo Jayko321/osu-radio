@@ -25,6 +25,8 @@ struct Entry {
     duration: i32,
     timings: Vec<(f64, f64, bool)>,
     star_tags: [u8; 4],
+    last_played_ticks: i64,
+    unplayed: bool,
 }
 
 impl Default for Entry {
@@ -41,6 +43,8 @@ impl Default for Entry {
             duration: 20_000,
             timings: vec![(500.0, 0.0, true)],
             star_tags: [0x0d; 4],
+            last_played_ticks: 0,
+            unplayed: true,
         }
     }
 }
@@ -130,8 +134,8 @@ fn entry_bytes(version: i32, entry: &Entry) -> Vec<u8> {
     string(&mut bytes, "TAG two");
     bytes.extend([0; 2]);
     string(&mut bytes, "");
-    bytes.push(1);
-    bytes.extend([0; 8]);
+    bytes.push(u8::from(entry.unplayed));
+    bytes.extend(entry.last_played_ticks.to_le_bytes());
     bytes.push(0);
     string(&mut bytes, &entry.folder);
     bytes.extend([0; 8 + 5]);
@@ -183,6 +187,40 @@ fn write_osu(root: &Path, directory: &str, entry: &Entry, contents: &str) {
         .join(entry.osu_file.replace('\\', "/"));
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, contents).unwrap();
+}
+
+#[test]
+fn imports_last_played_ticks_and_ignores_unplayed_maps() {
+    let entry = Entry {
+        unplayed: false,
+        last_played_ticks: 638_355_968_001_230_000,
+        ..Entry::default()
+    };
+    let unplayed = Entry {
+        unplayed: true,
+        ..entry.clone()
+    };
+    let zero = Entry {
+        last_played_ticks: 0,
+        ..entry.clone()
+    };
+    let invalid = Entry {
+        last_played_ticks: -1,
+        ..entry.clone()
+    };
+    let records = decode(&database(
+        2025_01_07,
+        false,
+        &[entry, unplayed, zero, invalid],
+    ))
+    .unwrap();
+    assert_eq!(
+        records[0].beatmap.osu_last_played_at_ms,
+        Some(1_700_000_000_123)
+    );
+    assert_eq!(records[1].beatmap.osu_last_played_at_ms, None);
+    assert_eq!(records[2].beatmap.osu_last_played_at_ms, None);
+    assert_eq!(records[3].beatmap.osu_last_played_at_ms, None);
 }
 
 #[test]
