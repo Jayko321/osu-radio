@@ -161,6 +161,7 @@ static object ToBeatmap(IRealmObjectBase beatmap)
         bpm = GetDouble(beatmap, "BPM"),
         hash = GetString(beatmap, "Hash"),
         md5_hash = GetString(beatmap, "MD5Hash") is { } md5 ? NormalizeMD5(md5) : null,
+        osu_last_played_at_ms = GetUnixMilliseconds(beatmap, "LastPlayed"),
         metadata = metadata is null ? null : new
         {
             title = GetString(metadata, "Title"),
@@ -279,6 +280,22 @@ static double? GetDouble(IRealmObjectBase value, string propertyName)
         ?? GetRealmValue<float>(value, propertyName)
         ?? GetRealmValue<long>(value, propertyName)
         ?? GetRealmValue<int>(value, propertyName);
+}
+
+static long? GetUnixMilliseconds(IRealmObjectBase value, string propertyName)
+{
+    try
+    {
+        return value.DynamicApi.Get<DateTimeOffset?>(propertyName)?.ToUnixTimeMilliseconds();
+    }
+    catch (MissingMemberException)
+    {
+        return null;
+    }
+    catch (InvalidCastException)
+    {
+        return null;
+    }
 }
 
 static T? GetRealmValue<T>(IRealmObjectBase value, string propertyName)
