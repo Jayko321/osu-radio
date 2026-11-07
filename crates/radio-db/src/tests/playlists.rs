@@ -14,16 +14,9 @@ pub(super) async fn cover_migration_contracts(database: &Database, url: &str) {
         .unwrap()
         .into_installation();
     let imported = snapshot("Saved cover library", "/cover-upgrade/audio");
-    let set = database
-        .beatmap_sets()
-        .insert(installation.id, &imported[0])
-        .await
-        .unwrap();
-    let audio = database
-        .audio_sources()
-        .get_or_insert(&SourceType::Local("/cover-upgrade/audio".into()))
-        .await
-        .unwrap();
+    let set = insert_legacy_set(database, installation.id, &imported[0]).await;
+    let audio =
+        insert_legacy_audio(database, &SourceType::Local("/cover-upgrade/audio".into())).await;
     let map = insert_legacy_beatmap(
         database,
         set.id,
@@ -153,11 +146,7 @@ pub(super) async fn migration_contracts(database: &Database, url: &str) {
         .unwrap()
         .into_installation();
     let imported = snapshot("Existing library", "/playlist-upgrade/audio");
-    let set = database
-        .beatmap_sets()
-        .insert(installation.id, &imported[0])
-        .await
-        .unwrap();
+    let set = insert_legacy_set(database, installation.id, &imported[0]).await;
     let map = insert_legacy_beatmap(database, set.id, &imported[0].beatmaps[0], None, None, None)
         .await
         .unwrap();
@@ -274,28 +263,24 @@ pub(super) async fn unicode_migration_contracts(database: &Database) {
         .unwrap()
         .into_installation();
     let imported = snapshot("Ordinary", "/unicode-upgrade/audio");
-    let set = database
-        .beatmap_sets()
-        .insert(installation.id, &imported[0])
-        .await
-        .unwrap();
+    let set = insert_legacy_set(database, installation.id, &imported[0]).await;
     sql(database, "INSERT INTO beatmap_metadata(hash,title,title_unicode,artist,artist_unicode) VALUES \
         ('unicode-first','First','最初','Artist','作者'),('unicode-second','First','第二','Artist','作者')").await;
-    let online = database
-        .audio_sources()
-        .get_or_insert(&SourceType::Online("https://example.test/audio".into()))
-        .await
-        .unwrap();
-    let copied = database
-        .audio_sources()
-        .get_or_insert(&SourceType::Copied("/unicode-upgrade/copied".into()))
-        .await
-        .unwrap();
-    let local = database
-        .audio_sources()
-        .get_or_insert(&SourceType::Local("/unicode-upgrade/local".into()))
-        .await
-        .unwrap();
+    let online = insert_legacy_audio(
+        database,
+        &SourceType::Online("https://example.test/audio".into()),
+    )
+    .await;
+    let copied = insert_legacy_audio(
+        database,
+        &SourceType::Copied("/unicode-upgrade/copied".into()),
+    )
+    .await;
+    let local = insert_legacy_audio(
+        database,
+        &SourceType::Local("/unicode-upgrade/local".into()),
+    )
+    .await;
     // Earlier missing/Online beatmaps cannot win over a usable Local/Copied candidate.
     for (audio, metadata) in [
         (None, "unicode-second"),
@@ -362,7 +347,7 @@ pub(super) async fn unicode_migration_contracts(database: &Database) {
         database.playlists().get(701).await.unwrap(),
         Some(saved.clone())
     );
-    crate::migrations::Migrator::down(&database.connection, Some(9))
+    crate::migrations::Migrator::down(&database.connection, Some(10))
         .await
         .unwrap();
     assert!(

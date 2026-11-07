@@ -598,10 +598,18 @@ async fn rollback_and_visibility(db: &TestDatabase, other: &TestDatabase) {
     }
     let before = db.queue().get().await.unwrap();
     // The shared workflow has reached its commit barrier; another pool still sees the old snapshot.
-    let tx = db.database.begin().await.unwrap();
-    crate::OsuInstallationService::replace_imported_snapshot_in(&tx, installation, &replacement)
+    let durations = crate::osu_installation::prepare_durations(&replacement.beatmap_sets)
         .await
         .unwrap();
+    let tx = db.database.begin().await.unwrap();
+    crate::OsuInstallationService::replace_imported_snapshot_in(
+        &tx,
+        installation,
+        &replacement,
+        &durations,
+    )
+    .await
+    .unwrap();
     assert_ne!(tx.queue().get().await.unwrap(), before);
     assert_eq!(other.queue().get().await.unwrap(), before);
     assert_eq!(maps(other, installation).await, old_maps);
@@ -632,11 +640,16 @@ async fn rollback_and_visibility(db: &TestDatabase, other: &TestDatabase) {
     let cancelled_snapshot = initial.clone();
     let (reached, barrier) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
+        let durations =
+            crate::osu_installation::prepare_durations(&cancelled_snapshot.beatmap_sets)
+                .await
+                .unwrap();
         let tx = services.database.begin().await.unwrap();
         crate::OsuInstallationService::replace_imported_snapshot_in(
             &tx,
             installation,
             &cancelled_snapshot,
+            &durations,
         )
         .await
         .unwrap();

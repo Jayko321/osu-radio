@@ -45,7 +45,10 @@ fields. The default mode emits one `radio-core`-shaped beatmap-set object per
 line. Each record uses snake_case field names matching `ImportedBeatmapSet` and
 its nested types. Lazer content-addressed file paths are emitted under
 `files[].file.resolved_path`; each child beatmap's `metadata.audio_file` remains
-the beatmap metadata filename.
+the beatmap metadata filename. Set records include nullable `ranked_at_ms` and
+`submitted_at_ms`; beatmaps include nullable `stars` and source numeric `status`.
+The Rust decoder maps lazer status codes to shared meanings and treats star
+sentinel -1 as unknown. Missing optional Realm properties remain unknown.
 
 
 Collection import extends normal NDJSON with `type: "collection"` records carrying
@@ -62,7 +65,7 @@ temporary directories and check the production executable and Rust importer:
 - Minimal schemas retain compatibility with missing optional metadata/files and
   no collection type; invalid collection hashes/names reject the snapshot.
 - A separate rich schema checks metadata/author fields, ordered user tags,
-  numeric overflow and content-addressed paths, including null/short hashes.
+  numeric overflow, stars, status, dates and content-addressed paths, including null/short hashes.
 - `--schema` emits sorted object records with scalar/list/set/dictionary field
   types, nullability, primary keys and index metadata. An unrelated schema can be
   inspected but cannot be imported as beatmaps.

@@ -2,8 +2,8 @@ use crate::{FolderChanges, ImportSummary, Services, metadata_hash, model::Source
 use radio_core::{
     OsuKind, OsuMarker,
     import_types::{
-        BeatmapMetadata as ImportedMetadata, ImportedBeatmap, ImportedBeatmapSet, RealmFile,
-        RealmNamedFileUsage, RealmUser,
+        BeatmapMetadata as ImportedMetadata, BeatmapStatus, ImportedBeatmap, ImportedBeatmapSet,
+        ImportedCollection, ImportedSnapshot, RealmFile, RealmNamedFileUsage, RealmUser,
     },
 };
 use sea_orm::ConnectionTrait;
@@ -64,6 +64,8 @@ async fn contracts(url: &str) {
     let other_pool = TestDatabase::connect(url).await;
     registrations_and_updates(&database, &other_pool).await;
     snapshots_and_cleanup(&database, &other_pool).await;
+    search_data_snapshot(&database).await;
+    duration_snapshot(&database).await;
     tags::contracts(&database, &other_pool).await;
     search::contracts(&database, &other_pool).await;
     rollback_preserves_snapshot(&database).await;
@@ -81,6 +83,236 @@ async fn contracts(url: &str) {
     listening_history::contracts(&database, &other_pool, url).await;
     audio_settings::contracts(&database, &other_pool, url).await;
     audio_mods::contracts(&database, &other_pool, url).await;
+}
+
+#[allow(clippy::too_many_lines)]
+async fn duration_snapshot(database: &TestDatabase) {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("audio");
+    let wav = include_bytes!("../../../apps/osu-radio-server/tests/fixtures/tone.wav");
+    let mut longer = Vec::new();
+    longer.extend(b"RIFF");
+    longer.extend(64036_u32.to_le_bytes());
+    longer.extend(b"WAVEfmt ");
+    longer.extend(16_u32.to_le_bytes());
+    longer.extend(1_u16.to_le_bytes());
+    longer.extend(1_u16.to_le_bytes());
+    longer.extend(8000_u32.to_le_bytes());
+    longer.extend(16000_u32.to_le_bytes());
+    longer.extend(2_u16.to_le_bytes());
+    longer.extend(16_u16.to_le_bytes());
+    longer.extend(b"data");
+    longer.extend(64000_u32.to_le_bytes());
+    longer.extend(vec![0; 64000]);
+    std::fs::write(&path, wav).unwrap();
+    let source = path.to_str().unwrap();
+    let id = register(database, "duration").await;
+    let other = register(database, "duration-shared").await;
+    let imported = snapshot("Duration", source);
+    let prepared = crate::osu_installation::prepare_durations(&imported)
+        .await
+        .unwrap();
+    assert_eq!(prepared.len(), 1);
+    database
+        .osu_installations()
+        .replace_snapshot(id, &imported)
+        .await
+        .unwrap();
+    database
+        .osu_installations()
+        .replace_snapshot(other, &imported)
+        .await
+        .unwrap();
+    let audio = database
+        .audio_sources()
+        .find(&SourceType::Local(source.into()))
+        .await
+        .unwrap()
+        .unwrap();
+    let initial = audio.duration_ms.unwrap();
+    assert!((200..=350).contains(&initial));
+    let set = database
+        .beatmap_sets()
+        .for_installation(id)
+        .await
+        .unwrap()
+        .remove(0);
+    let maps = database.beatmaps().for_set(set.id).await.unwrap();
+    assert!(maps.iter().all(|map| map.audio_source_id == Some(audio.id)));
+    std::fs::write(&path, &longer).unwrap();
+    database
+        .osu_installations()
+        .replace_snapshot(id, &imported)
+        .await
+        .unwrap();
+    let current = database
+        .audio_sources()
+        .get(audio.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.duration_ms, Some(4000));
+    assert_eq!(
+        database
+            .beatmap_sets()
+            .search_tracks("Duration length>3s")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_ne!(current.duration_ms, Some(initial));
+    assert_eq!(
+        current.duration_ms,
+        crate::probe_source_duration(SourceType::Local(source.into()))
+            .await
+            .unwrap()
+            .map(|v| i64::try_from(v).unwrap())
+    );
+    std::fs::write(&path, b"corrupt").unwrap();
+    install_failure_trigger(database).await;
+    let mut failed = imported.clone();
+    failed[0].beatmaps[1].difficulty_name = Some("FAIL_IMPORT".into());
+    let before = database.osu_installations().get(id).await.unwrap();
+    assert!(
+        database
+            .osu_installations()
+            .replace_snapshot(id, &failed)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        database.audio_sources().get(audio.id).await.unwrap(),
+        Some(current)
+    );
+    assert_eq!(database.osu_installations().get(id).await.unwrap(), before);
+    assert_eq!(
+        database
+            .beatmap_sets()
+            .for_installation(id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    remove_failure_trigger(database).await;
+    database
+        .osu_installations()
+        .replace_snapshot(id, &imported)
+        .await
+        .unwrap();
+    assert_eq!(
+        database
+            .audio_sources()
+            .get(audio.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .duration_ms,
+        None
+    );
+    assert!(
+        database
+            .beatmap_sets()
+            .search_tracks("Duration length!=3s")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    std::fs::remove_file(&path).unwrap();
+    database
+        .osu_installations()
+        .replace_snapshot(id, &imported)
+        .await
+        .unwrap();
+    assert_eq!(
+        database
+            .audio_sources()
+            .get(audio.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .duration_ms,
+        None
+    );
+    database.osu_installations().delete(id).await.unwrap();
+    database.osu_installations().delete(other).await.unwrap();
+}
+
+async fn search_data_snapshot(database: &TestDatabase) {
+    let id = register(database, "search-data").await;
+    let mut imported = snapshot("Search data", "/audio/search-data.mp3");
+    imported[0].ranked_at_ms = Some(1_700_000_000_123);
+    imported[0].submitted_at_ms = Some(-1234);
+    imported[0].beatmaps[0].stars = Some(5.987);
+    imported[0].beatmaps[0].status = Some(BeatmapStatus::Loved);
+    database
+        .osu_installations()
+        .replace_snapshot(id, &imported)
+        .await
+        .unwrap();
+    let set = database
+        .beatmap_sets()
+        .for_installation(id)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        (set.ranked_at_ms, set.submitted_at_ms),
+        (Some(1_700_000_000_123), Some(-1234))
+    );
+    let listed = database
+        .beatmap_sets()
+        .all_with_audio_sources()
+        .await
+        .unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .find(|item| item.beatmap_set.id == set.id)
+            .unwrap()
+            .beatmap_set,
+        set
+    );
+    let maps = database.beatmaps().for_set(set.id).await.unwrap();
+    assert_eq!(
+        (maps[0].stars, maps[0].status),
+        (Some(5.987), Some(BeatmapStatus::Loved))
+    );
+    let audio_id = maps[0].audio_source_id.unwrap();
+    database
+        .osu_installations()
+        .replace_snapshot(id, &snapshot("Search data", "/audio/search-data.mp3"))
+        .await
+        .unwrap();
+    let set = database
+        .beatmap_sets()
+        .for_installation(id)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!((set.ranked_at_ms, set.submitted_at_ms), (None, None));
+    let maps = database.beatmaps().for_set(set.id).await.unwrap();
+    assert_eq!((maps[0].stars, maps[0].status), (None, None));
+    assert_eq!(maps[0].audio_source_id, Some(audio_id));
+    database.osu_installations().delete(id).await.unwrap();
+}
+
+fn snapshot_with_collection(title: &str, path: &str, collection_name: &str) -> ImportedSnapshot {
+    let mut sets = snapshot(title, path);
+    sets[0].ranked_at_ms = Some(111);
+    sets[0].submitted_at_ms = Some(222);
+    sets[0].beatmaps[0].stars = Some(4.25);
+    sets[0].beatmaps[0].status = Some(BeatmapStatus::Ranked);
+    sets[0].beatmaps[0].md5_hash = Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
+    ImportedSnapshot {
+        beatmap_sets: sets,
+        collections: vec![ImportedCollection {
+            source_id: "collection-id".into(),
+            name: collection_name.into(),
+            beatmap_md5_hashes: vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()],
+        }],
+    }
 }
 
 async fn assert_counts(database: &TestDatabase, expected: [i64; 4]) {
@@ -164,6 +396,8 @@ fn metadata(title: &str) -> ImportedMetadata {
 
 fn snapshot(title: &str, path: &str) -> Vec<ImportedBeatmapSet> {
     vec![ImportedBeatmapSet {
+        ranked_at_ms: None,
+        submitted_at_ms: None,
         source: OsuKind::Lazer,
         online_id: Some(23),
         hash: Some(format!("set-{title}")),
@@ -186,6 +420,8 @@ fn snapshot(title: &str, path: &str) -> Vec<ImportedBeatmapSet> {
         beatmaps: ["Easy", "Hard"]
             .into_iter()
             .map(|difficulty| ImportedBeatmap {
+                stars: None,
+                status: None,
                 osu_last_played_at_ms: None,
                 md5_hash: None,
                 difficulty_name: Some(difficulty.to_owned()),
@@ -564,7 +800,10 @@ async fn rollback_preserves_snapshot(database: &TestDatabase) {
     let installation = register(database, "rollback").await;
     database
         .osu_installations()
-        .replace_snapshot(installation, &snapshot("Old", "/audio/old.mp3"))
+        .replace_imported_snapshot(
+            installation,
+            &snapshot_with_collection("Old", "/audio/old.mp3", "Old collection"),
+        )
         .await
         .unwrap();
     let old_installation = database
@@ -590,16 +829,31 @@ async fn rollback_preserves_snapshot(database: &TestDatabase) {
         .get(old_maps[0].audio_source_id.unwrap())
         .await
         .unwrap();
+    let playlist_id = database
+        .playlists()
+        .all()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|p| p.name == "Old collection")
+        .unwrap()
+        .id;
+    let old_playlist = database.playlists().get(playlist_id).await.unwrap();
     assert_eq!(
         old_maps[0].background_path.as_deref(),
         Some("/audio/old.mp3.jpg")
     );
     install_failure_trigger(database).await;
-    let mut replacement = snapshot("Failed", "/audio/failed.mp3");
-    replacement[0].beatmaps[1].difficulty_name = Some("FAIL_IMPORT".to_owned());
+    let mut replacement =
+        snapshot_with_collection("Failed", "/audio/failed.mp3", "Failed collection");
+    replacement.beatmap_sets[0].ranked_at_ms = None;
+    replacement.beatmap_sets[0].submitted_at_ms = Some(999);
+    replacement.beatmap_sets[0].beatmaps[0].stars = None;
+    replacement.beatmap_sets[0].beatmaps[0].status = Some(BeatmapStatus::Loved);
+    replacement.beatmap_sets[0].beatmaps[1].difficulty_name = Some("FAIL_IMPORT".to_owned());
     let error = database
         .osu_installations()
-        .replace_snapshot(installation, &replacement)
+        .replace_imported_snapshot(installation, &replacement)
         .await
         .unwrap_err();
     assert!(format!("{error:#}").contains("forced import failure"));
@@ -657,11 +911,16 @@ async fn rollback_preserves_snapshot(database: &TestDatabase) {
     );
     assert_eq!(database.tags().all().await.unwrap(), old_tags);
     assert_eq!(
+        database.playlists().get(playlist_id).await.unwrap(),
+        old_playlist
+    );
+    assert_eq!(
         database.tags().for_set(old_sets[0].id).await.unwrap(),
         old_links
     );
     assert_counts(database, [1, 2, 1, 1]).await;
     remove_failure_trigger(database).await;
+    database.playlists().delete(playlist_id).await.unwrap();
     database
         .osu_installations()
         .delete(installation)
@@ -802,11 +1061,19 @@ async fn source_files_remain_untouched(database: &TestDatabase) {
 
 // Suspend after the complete service workflow, before commit, then cancel its owner.
 // This checks rollback of sets, shared-row cleanup and timestamp together without timing sleeps.
+#[allow(clippy::too_many_lines)] // Check the whole cancelled snapshot and collection together.
 async fn cancellation_preserves_snapshot(database: &TestDatabase) {
     let id = register(database, "cancelled").await;
     database
         .osu_installations()
-        .replace_snapshot(id, &snapshot("Before cancel", "/audio/before.mp3"))
+        .replace_imported_snapshot(
+            id,
+            &snapshot_with_collection(
+                "Before cancel",
+                "/audio/before.mp3",
+                "Before cancel collection",
+            ),
+        )
         .await
         .unwrap();
     let old_installation = database.osu_installations().get(id).await.unwrap();
@@ -824,14 +1091,34 @@ async fn cancellation_preserves_snapshot(database: &TestDatabase) {
         .get(old_maps[0].audio_source_id.unwrap())
         .await
         .unwrap();
+    let playlist_id = database
+        .playlists()
+        .all()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|p| p.name == "Before cancel collection")
+        .unwrap()
+        .id;
+    let old_playlist = database.playlists().get(playlist_id).await.unwrap();
     let services = database.services.clone();
     let (ready, wait) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
+        let mut replacement =
+            snapshot_with_collection("Cancelled", "/audio/cancelled.mp3", "Cancelled collection");
+        replacement.beatmap_sets[0].ranked_at_ms = None;
+        replacement.beatmap_sets[0].submitted_at_ms = Some(999);
+        replacement.beatmap_sets[0].beatmaps[0].stars = None;
+        replacement.beatmap_sets[0].beatmaps[0].status = Some(BeatmapStatus::Loved);
+        let durations = crate::osu_installation::prepare_durations(&replacement.beatmap_sets)
+            .await
+            .unwrap();
         let transaction = services.database.begin().await.unwrap();
-        crate::OsuInstallationService::replace_snapshot_in(
+        crate::OsuInstallationService::replace_imported_snapshot_in(
             &transaction,
             id,
-            &snapshot("Cancelled", "/audio/cancelled.mp3"),
+            &replacement,
+            &durations,
         )
         .await
         .unwrap();
@@ -888,10 +1175,15 @@ async fn cancellation_preserves_snapshot(database: &TestDatabase) {
     );
     assert_eq!(database.tags().all().await.unwrap(), old_tags);
     assert_eq!(
+        database.playlists().get(playlist_id).await.unwrap(),
+        old_playlist
+    );
+    assert_eq!(
         database.tags().for_set(old_sets[0].id).await.unwrap(),
         old_links
     );
     assert_counts(database, [1, 2, 1, 1]).await;
+    database.playlists().delete(playlist_id).await.unwrap();
     database.osu_installations().delete(id).await.unwrap();
 }
 

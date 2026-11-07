@@ -3,7 +3,9 @@
 use std::{collections::HashMap, path::Path};
 
 use anyhow::{Context, Result, ensure};
-use radio_core::import_types::{BeatmapMetadata, ImportedBeatmap, ImportedCollection, RealmUser};
+use radio_core::import_types::{
+    BeatmapMetadata, BeatmapStatus, ImportedBeatmap, ImportedCollection, RealmUser,
+};
 
 pub(super) struct Record {
     pub index: usize,
@@ -258,23 +260,35 @@ impl<'a> Reader<'a> {
         let osu_file = self
             .string()?
             .with_context(|| self.context("empty .osu filename"))?;
-        self.take(1 + 6 + 8)?; // Status, object counts, last modification ticks.
+        let status = match self.byte()? {
+            4 => Some(BeatmapStatus::Ranked),
+            5 => Some(BeatmapStatus::Approved),
+            6 => Some(BeatmapStatus::Qualified),
+            7 => Some(BeatmapStatus::Loved),
+            // shortcut: stable code 2 cannot distinguish pending/wip/graveyard; revisit when stable support changes or is removed.
+            2 => Some(BeatmapStatus::Pending),
+            _ => None,
+        };
+        self.take(6 + 8)?; // Object counts and last modification ticks.
         self.take(if version < 2014_06_09 { 4 } else { 16 })?; // AR, CS, HP, OD.
         self.take(8)?; // Slider velocity.
+        let mut stars_by_mode = [None; 4];
         if version >= 2014_06_09 {
-            for _ in 0..4 {
+            for stars in &mut stars_by_mode {
                 let count = self.count("star rating count", 10)?;
                 for _ in 0..count {
                     let tag = self.byte()?;
                     self.check(tag == 0x08, "invalid star rating integer tag")?;
-                    self.take(4)?; // Mods.
+                    let mods = self.i32()?;
                     let tag = self.byte()?;
-                    let width = match tag {
-                        0x0c => 4,
-                        0x0d => 8,
+                    let value = match tag {
+                        0x0c => f64::from(f32::from_le_bytes(self.array()?)),
+                        0x0d => self.f64()?,
                         _ => anyhow::bail!("{}", self.context("invalid star rating numeric tag")),
                     };
-                    self.take(width)?;
+                    if mods == 0 {
+                        *stars = Some(value);
+                    }
                 }
             }
         }
@@ -301,7 +315,9 @@ impl<'a> Reader<'a> {
         self.take(4)?; // Difficulty ID.
         let id = self.i32()?;
         let online_id = (id > 0).then_some(id);
-        self.take(4 + 4 + 2 + 4 + 1)?; // Thread ID, grades, local offset, stack leniency, mode.
+        self.take(4 + 4 + 2 + 4)?; // Thread ID, grades, local offset, stack leniency.
+        let mode = usize::from(self.byte()?);
+        let stars = stars_by_mode.get(mode).copied().flatten();
         let source = self.string()?;
         let tags = self.string()?;
         self.take(2)?; // Online offset.
@@ -332,6 +348,8 @@ impl<'a> Reader<'a> {
             osu_file,
             online_id,
             beatmap: ImportedBeatmap {
+                stars,
+                status,
                 osu_last_played_at_ms,
                 difficulty_name,
                 md5_hash: hash

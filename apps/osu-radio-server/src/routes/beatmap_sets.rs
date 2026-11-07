@@ -72,7 +72,7 @@ pub(crate) struct LibraryQuery {
         path = "/api/beatmap-sets",
         tag = "beatmap-sets",
         description = "Every stored beatmap set with the audio sources its difficulties reference.",
-        params(("q" = Option<String>, Query, description = "All whitespace-separated words must match literal case-insensitive substrings in tags, title, artist or difficulty (including Unicode variants); blank returns all.")),
+        params(("q" = Option<String>, Query, description = "Case-insensitive text search: words, artist/title/creator/author/mapper/diff/source/tag conditions with =, :, != or !:, quoted phrases and quoted exact values ending in !; bpm/star/stars/sr/length accept numeric comparisons; length accepts seconds, m:ss, h:mm:ss, ms/s/m/h. status accepts =, :, !=, !: and ranked/approved/qualified/loved/pending/wip/graveyard/locallymodified/none (comma means OR; negative excludes any matching difficulty); ranked/submitted/created and lastplayed accept =, !=, <, <=, >, >= and : aliases. Dates use UTC year, year-month or year-month-day with -, / or .; equality covers the period. played accepts true/false, yes/no, 1/0 with =, :, !=, !:. lastplayed compares age in s/m/h/d/w (default days), using latest imported osu! play date; unknown dates never match numeric comparisons. Conditions combine with AND; invalid fragments remain literal. A single positive free number also matches online set ID. Blank returns all.")),
         responses(
             (status = OK, body = Vec<BeatmapSetResponse>),
             (status = INTERNAL_SERVER_ERROR, body = crate::error::ApiErrorBody)
@@ -109,6 +109,8 @@ mod tests {
         let listed = BeatmapSetWithAudio {
             has_multiple_audio_sources: true,
             beatmap_set: BeatmapSet {
+                ranked_at_ms: None,
+                submitted_at_ms: None,
                 id: 17,
                 online_id: Some(123),
                 hash: Some("set-identity".into()),
@@ -116,14 +118,17 @@ mod tests {
             },
             audio_sources: vec![
                 AudioSource {
+                    duration_ms: None,
                     id: 51,
                     s_type: SourceType::Local("fixture/曲/a.mp3".into()),
                 },
                 AudioSource {
+                    duration_ms: None,
                     id: 52,
                     s_type: SourceType::Copied(r"C:\copied\a.ogg".into()),
                 },
                 AudioSource {
+                    duration_ms: None,
                     id: 53,
                     s_type: SourceType::Online("https://fixture.invalid/a?q=曲".into()),
                 },
@@ -174,6 +179,8 @@ mod tests {
         let empty = BeatmapSetWithAudio {
             has_multiple_audio_sources: false,
             beatmap_set: BeatmapSet {
+                ranked_at_ms: None,
+                submitted_at_ms: None,
                 id: 18,
                 online_id: None,
                 hash: None,

@@ -19,7 +19,10 @@ pub use audio_settings::{AudioSettings, AudioSettingsError, AudioSettingsService
 mod beatmap;
 mod beatmap_metadata;
 mod beatmap_set;
+mod duration;
 mod folder_selection;
+mod search;
+pub use duration::probe_source_duration;
 mod listening_history;
 pub use listening_history::ListeningHistoryService;
 mod osu_installation;

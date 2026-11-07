@@ -27,7 +27,9 @@ void CreateMetadata()
     using var realm = Realm.GetInstance(configuration);
     realm.Write(() =>
     {
-        var set = new RichBeatmapSet { OnlineID = (long)int.MaxValue + 1, Hash = "rich-set" };
+        var set = new RichBeatmapSet { OnlineID = (long)int.MaxValue + 1, Hash = "rich-set",
+            DateSubmitted = DateTimeOffset.FromUnixTimeMilliseconds(1_500_000_000_123),
+            DateRanked = DateTimeOffset.FromUnixTimeMilliseconds(1_600_000_000_456) };
         var metadata = new Metadata
         {
             Title = "Song", TitleUnicode = "曲 🎵", Artist = "Artist", ArtistUnicode = "演奏者",
@@ -37,13 +39,13 @@ void CreateMetadata()
         };
         metadata.UserTags.Add("favorite");
         metadata.UserTags.Add("曲");
-        set.Beatmaps.Add(new RichBeatmap { DifficultyName = "Hard", BPM = 180.5f, Metadata = metadata });
+        set.Beatmaps.Add(new RichBeatmap { DifficultyName = "Hard", BPM = 180.5f, Metadata = metadata, StarRating = 5.25, Status = 4, LastPlayed = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_123) });
         set.Beatmaps.Add(new RichBeatmap
         {
-            BPM = 120, Metadata = new Metadata { PreviewTime = long.MinValue,
+            BPM = 120, StarRating = -1, Status = -3, Metadata = new Metadata { PreviewTime = long.MinValue,
                 Author = new Author { OnlineID = long.MaxValue } },
         });
-        set.Beatmaps.Add(new RichBeatmap());
+        set.Beatmaps.Add(new RichBeatmap { Status = 999 });
         set.Beatmaps.Add(new RichBeatmap { Metadata = new Metadata() });
         foreach (var (filename, hash) in new (string?, string?)[]
         {
@@ -132,6 +134,8 @@ public partial class RichBeatmapSet : IRealmObject
 {
     public long OnlineID { get; set; }
     public string? Hash { get; set; }
+    public DateTimeOffset? DateSubmitted { get; set; }
+    public DateTimeOffset? DateRanked { get; set; }
     public IList<RichBeatmap> Beatmaps { get; } = null!;
     public IList<NamedFileUsage> Files { get; } = null!;
 }
@@ -141,6 +145,9 @@ public partial class RichBeatmap : IRealmObject
 {
     public string? DifficultyName { get; set; }
     public float BPM { get; set; }
+    public double? StarRating { get; set; }
+    public int? Status { get; set; }
+    public DateTimeOffset? LastPlayed { get; set; }
     public Metadata? Metadata { get; set; }
 }
 

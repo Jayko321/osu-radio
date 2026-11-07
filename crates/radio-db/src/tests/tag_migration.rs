@@ -38,11 +38,7 @@ pub(super) async fn contracts(database: &Database, url: &str) {
         vec![&first_hash, &second_hash, &first_hash],
         vec![&second_hash],
     ] {
-        let set = database
-            .beatmap_sets()
-            .insert(installation.id, &imported[0])
-            .await
-            .unwrap();
+        let set = insert_legacy_set(database, installation.id, &imported[0]).await;
         set_ids.push(set.id);
         for hash in hashes {
             old_maps.push(
@@ -256,11 +252,7 @@ async fn collision_rolls_back(database: &Database) {
         .unwrap()
         .into_installation();
     let imported = snapshot("Original", "/audio/old.mp3");
-    let set = database
-        .beatmap_sets()
-        .insert(installation.id, &imported[0])
-        .await
-        .unwrap();
+    let set = insert_legacy_set(database, installation.id, &imported[0]).await;
     let old_map = insert_legacy_beatmap(
         database,
         set.id,
@@ -289,6 +281,8 @@ async fn collision_rolls_back(database: &Database) {
         format!("SELECT id,difficulty_name,bpm,hash,beatmap_set_id,metadata_hash,audio_source_id,background_path FROM beatmaps WHERE id = {}", old_map.id))).await.unwrap().unwrap();
     assert_eq!(
         crate::model::Beatmap {
+            stars: None,
+            status: None,
             osu_last_played_at_ms: None,
             id: preserved.try_get("", "id").unwrap(),
             difficulty_name: preserved.try_get("", "difficulty_name").unwrap(),

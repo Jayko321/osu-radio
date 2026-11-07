@@ -87,6 +87,17 @@ impl BeatmapMetadataRepository<'_> {
                 .as_deref()
                 .unwrap_or_default()
                 .to_lowercase(),
+            search_mapper: imported
+                .author
+                .as_ref()
+                .and_then(|author| author.username.as_deref())
+                .unwrap_or_default()
+                .to_lowercase(),
+            search_source: imported
+                .source
+                .as_deref()
+                .unwrap_or_default()
+                .to_lowercase(),
             author: imported.author.as_ref().map(|author| {
                 serde_json::json!({
                     "online_id": author.online_id,

@@ -58,6 +58,11 @@ not add difficulty notation. `Track` retains every related difficulty (IDs, null
 multiplicity), plus title, artist, subtitle and optional `Duration`, with no toolkit assets. Unknown duration is `--:--`. Selection survives a
 refresh by audio ID, falling back to the first remaining row. Tests live in
 [track.rs](../../crates/osu-radio-client/src/view_models/track.rs).
+The opt-in `real_backend_songs_search_preserves_sort_and_selection` probe in
+[launch_smoke.rs](../../apps/osu-radio-qt/tests/launch_smoke.rs) exercises a quoted
+field query and clear through offscreen Qt, a real server and a disposable SQLite
+library; it checks retained artist sorting, selected audio, all displayed related
+difficulties and absence of playback. Native input and Windows remain separate.
 
 The [per-file coverage worklist](test-coverage.md#client-dtos-and-presentation-state-2026-10-15)
 records executed DTO volume/null/default/token checks and library/queue request
@@ -77,8 +82,12 @@ and fake workers/sessions; live Qt interactions and physical sound are separate.
 The shared [sorting keys](../../crates/osu-radio-client/src/view_models/sorting.rs)
 defaults to `TrackSort::TitleAsc`; `SetTrackSort` changes
 the mode for the current session, including search results, refreshes and open
-playlists. `ArtistAsc` compares artist then title; `RecentlyPlayed` compares
-`last_played_at_ms` descending with unheard rows last, then title and artist.
+playlists. `ArtistAsc` compares artist then title; `RecentlyPlayed` (shown as
+“Recently played”) compares imported osu! play dates descending, with
+unknown dates last, then title and artist. A library track uses the latest date
+among its difficulties; a playlist row uses its own difficulty's date.
+`RecentlyListened` (shown as “Recently listened”) compares osu!radio listening
+dates descending, with unknown dates last and the same text and ID tie-breakers.
 Alphabetical keys use the displayed fallback strings and Unicode `to_lowercase()`,
 with audio IDs (library) or item IDs (playlist) as the final tie-breaker.
 This is deterministic string ordering, without locale collation.
@@ -92,8 +101,12 @@ typed library adapter.
 Only a successful engine start sends the token-bound `started` callback through
 the existing retry lane. Loading, decoding or device failure records no listening
 date; pause/resume of an already started launch records no new date. Updated
-assignment dates are merged into every known row sharing that audio ID and
-immediately reorder recent results. Late list responses retain newer known dates.
+assignment dates are merged into every known row sharing that audio ID and reorder
+the Recently listened view. Late list
+responses retain newer known dates. These osu!radio dates do not affect the osu!
+sort. Dates from the game are snapshots: to update existing sources, use “Refresh
+import” for the source in the folder selection dialog and Apply; the ordinary
+library refresh reloads saved data without rereading osu!.
 The [database history contract](database.md#listening-history) defines retention
 across removal, reimport and restart.
 

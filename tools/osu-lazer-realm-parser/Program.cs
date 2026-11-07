@@ -116,6 +116,8 @@ static void ExportBeatmapSets(Realm realm, string lazerRoot)
             source = "Lazer",
             online_id = GetInteger(beatmapSet, "OnlineID"),
             hash = GetString(beatmapSet, "Hash"),
+            ranked_at_ms = GetUnixMilliseconds(beatmapSet, "DateRanked"),
+            submitted_at_ms = GetUnixMilliseconds(beatmapSet, "DateSubmitted"),
             files = GetNamedFileUsages(beatmapSet, lazerRoot).ToArray(),
             beatmaps = GetObjectList(beatmapSet, "Beatmaps").Select(ToBeatmap).ToArray(),
         });
@@ -159,6 +161,8 @@ static object ToBeatmap(IRealmObjectBase beatmap)
     {
         difficulty_name = GetString(beatmap, "DifficultyName"),
         bpm = GetDouble(beatmap, "BPM"),
+        stars = GetDouble(beatmap, "StarRating"),
+        status = GetInteger(beatmap, "Status"),
         hash = GetString(beatmap, "Hash"),
         md5_hash = GetString(beatmap, "MD5Hash") is { } md5 ? NormalizeMD5(md5) : null,
         osu_last_played_at_ms = GetUnixMilliseconds(beatmap, "LastPlayed"),

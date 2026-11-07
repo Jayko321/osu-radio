@@ -10,6 +10,8 @@ use crate::state::AppState;
 
 pub(crate) fn beatmap(difficulty_name: &str, audio_file: &str) -> ImportedBeatmap {
     ImportedBeatmap {
+        stars: None,
+        status: None,
         osu_last_played_at_ms: None,
         md5_hash: None,
         difficulty_name: Some(difficulty_name.to_owned()),
@@ -33,6 +35,8 @@ pub(crate) fn beatmap(difficulty_name: &str, audio_file: &str) -> ImportedBeatma
 
 pub(crate) fn beatmap_set(online_id: i32, audio_path: &str) -> ImportedBeatmapSet {
     ImportedBeatmapSet {
+        ranked_at_ms: None,
+        submitted_at_ms: None,
         source: OsuKind::Lazer,
         online_id: Some(online_id),
         hash: Some(format!("set-hash-{online_id}")),
