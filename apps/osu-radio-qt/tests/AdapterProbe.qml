@@ -338,7 +338,10 @@ QtObject {
         check(sortMenu.currentIndex === 1 && sorted.tracks[0].artist === "Creepy Nuts", "gallery artist sort uses shared mock action");
         check(sorted.tracks[sorted.selected].id === selectedId, "gallery sorting retains selection by ID");
         sortMenu.choose(2);
-        check(sortMenu.currentIndex === 2, "gallery recent mode");
+        check(sortMenu.currentIndex === 2, "gallery recently played mode");
+        sortMenu.choose(3);
+        sorted = JSON.parse(mock.stateJson);
+        check(sortMenu.currentIndex === 3 && sorted.tracks[0].id === 1, "gallery recently listened mode");
         sortMenu.choose(0);
         sorted = JSON.parse(mock.stateJson);
         check(sorted.tracks[0].title === "Alice" && sorted.tracks[sorted.selected].id === selectedId, "gallery default title sort restored");
@@ -1672,6 +1675,40 @@ QtObject {
             break;
         }
     }
+    function realSearchProbe(): void {
+        if (!bridge.connected || bridge.library.libraryLoading) return;
+        const search = findChild(window.contentItem, "songSearch");
+        const list = findChild(window.contentItem, "songList");
+        switch (stage) {
+        case 0:
+            if (bridge.library.tracks.trackCount !== 3) return;
+            bridge.library.selectTrack(1);
+            findChild(window.contentItem, "trackSortMenu").choose(1);
+            stage = 1;
+            break;
+        case 1:
+            if (bridge.library.trackSortIndex !== 1 || bridge.player.selectedAudioId !== 1 || !list.itemAtIndex(2)) return;
+            check(list.itemAtIndex(0).audioId === 2 && list.itemAtIndex(1).audioId === 1 && list.itemAtIndex(2).audioId === 3, "real backend artist order");
+            search.text = 'artist="xi" freedom';
+            stage = 2;
+            break;
+        case 2:
+            if (bridge.library.tracks.trackCount !== 1 || !list.itemAtIndex(0) || list.itemAtIndex(0).audioId !== 1) return;
+            check(bridge.player.selectedAudioId === 1 && bridge.library.trackSortIndex === 1, "filtered selection and sort retained");
+            check(list.itemAtIndex(0).subtitle.includes("Easy") && list.itemAtIndex(0).subtitle.includes("Hard"), "all difficulties returned");
+            check(bridge.player.currentAudioId === -1 && bridge.player.loadingAudioId === -1, "search starts no playback");
+            findChild(search, "clearSearchButton").clicked();
+            stage = 3;
+            break;
+        case 3:
+            if (bridge.library.tracks.trackCount !== 3 || !list.itemAtIndex(2)) return;
+            check(search.text === "" && bridge.library.trackSortIndex === 1 && bridge.player.selectedAudioId === 1, "clear retains sort and selection");
+            check(list.itemAtIndex(0).audioId === 2 && list.itemAtIndex(1).audioId === 1 && list.itemAtIndex(2).audioId === 3, "clear restores artist order");
+            check(bridge.player.currentAudioId === -1 && bridge.player.loadingAudioId === -1, "clear starts no playback");
+            finish();
+            break;
+        }
+    }
     property var menuRow: null
     function playbackProbe(): void {
         if (!bridge.connected || bridge.library.libraryLoading || !bridge.settings.audioSettingsLoaded) return;
@@ -2835,7 +2872,7 @@ QtObject {
         const list = findChild(window.contentItem, "songList");
         switch (stage) {
         case 0:
-            check(menu.currentIndex === 0 && menu.entries.length === 3, "default title sort and three modes");
+            check(menu.currentIndex === 0 && menu.entries.length === 4, "default title sort and four modes");
             bridge.library.selectTrack(42);
             stage = 1;
             break;
@@ -2871,13 +2908,15 @@ QtObject {
             break;
         case 4:
             if (!menu.popup.opened) return;
-            input.keyClick(Qt.Key_End, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_Down, Qt.NoModifier, 0);
             input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
             stage = 5;
             break;
         case 5:
             if (bridge.library.trackSortIndex !== 2 || menu.popup.visible || !sortedRowsMatch([7, 42, 103])) return;
             check(menu.activeFocus, "recent selection restores trigger focus");
+            check(menu.displayText === "Recently played" && !menu.contentItem.truncated,
+                "recently played label is visible in the menu");
             menu.popup.open();
             stage = 6;
             break;
@@ -2894,11 +2933,24 @@ QtObject {
             break;
         case 8:
             if (!menu.popup.opened) return;
-            input.keyClick(Qt.Key_Home, Qt.NoModifier, 0);
-            input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_End, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_Space, Qt.NoModifier, 0);
             stage = 9;
             break;
         case 9:
+            if (bridge.library.trackSortIndex !== 3 || menu.popup.visible || !sortedRowsMatch([103, 42, 7])) return;
+            check(menu.displayText === "Recently listened" && !menu.contentItem.truncated,
+                "recently listened label is visible in the menu");
+            menu.popup.open();
+            stage = 10;
+            break;
+        case 10:
+            if (!menu.popup.opened) return;
+            input.keyClick(Qt.Key_Home, Qt.NoModifier, 0);
+            input.keyClick(Qt.Key_Return, Qt.NoModifier, 0);
+            stage = 11;
+            break;
+        case 11:
             if (bridge.library.trackSortIndex !== 0 || menu.popup.visible || !sortedRowsMatch([103, 42, 7])) return;
             finish();
             break;
@@ -3538,6 +3590,7 @@ QtObject {
         if (testCase.startsWith("names-")) { trackNamePreferencesProbe(); return; }
         if (testCase === "folders") { folderProbe(); return; }
         if (testCase === "search") { searchProbe(); return; }
+        if (testCase === "search-real") { realSearchProbe(); return; }
         if (testCase === "settings-search") { settingsSearchProbe(); return; }
         if (testCase === "playback") { playbackProbe(); return; }
         if (testCase === "queue") { queueProbe(); return; }

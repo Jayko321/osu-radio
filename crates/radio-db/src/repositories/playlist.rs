@@ -129,6 +129,7 @@ impl PlaylistRepository<'_> {
                     beatmap_hash: item.beatmap_hash.clone(),
                 });
                 PlaylistItem {
+                    osu_last_played_at_ms: map.and_then(|map| map.osu_last_played_at_ms),
                     last_played_at_ms: None,
                     volume_percent: None,
                     mods: None,
@@ -502,7 +503,7 @@ impl PlaylistRepository<'_> {
             let statement = sea_orm::Statement::from_sql_and_values(
                 self.connection.get_database_backend(),
                 format!(
-                    "SELECT b.id AS beatmap_id, b.beatmap_set_id, i.kind AS source_kind, b.hash AS beatmap_hash, b.md5_hash, \
+                    "SELECT b.id AS beatmap_id, b.osu_last_played_at_ms, b.beatmap_set_id, i.kind AS source_kind, b.hash AS beatmap_hash, b.md5_hash, \
                     m.title, m.title_unicode, \
                     m.artist, m.artist_unicode, b.difficulty_name, \
                     CASE WHEN a.kind IN ('local', 'copied') THEN a.id ELSE NULL END AS audio_source_id, \
@@ -517,6 +518,7 @@ impl PlaylistRepository<'_> {
             );
             for row in self.connection.query_all_raw(statement).await? {
                 rows.push(PlaylistBeatmap {
+                    osu_last_played_at_ms: row.try_get("", "osu_last_played_at_ms")?,
                     beatmap_id: row.try_get("", "beatmap_id")?,
                     beatmap_set_id: row.try_get("", "beatmap_set_id")?,
                     source_kind: row.try_get("", "source_kind")?,

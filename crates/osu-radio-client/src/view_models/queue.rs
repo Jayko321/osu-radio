@@ -36,6 +36,7 @@ impl From<QueueEntry> for QueueRow {
                 .zip(entry.beatmap_set_id)
                 .map(
                     |(beatmap_id, beatmap_set_id)| crate::models::TrackDifficulty {
+                        osu_last_played_at_ms: None,
                         beatmap_id,
                         beatmap_set_id,
                         beatmap_set_online_id: None,

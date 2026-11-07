@@ -249,10 +249,15 @@ async fn assignment_frame(body: &mut Body) -> Value {
 
 #[tokio::test]
 async fn started_publishes_date_without_relaunching_and_updates_library_and_playlist() {
-    let state = state_with(&[beatmap_set(1, "/history.mp3")]).await;
+    let mut set = beatmap_set(1, "/history.mp3");
+    set.beatmaps[0].osu_last_played_at_ms = Some(100);
+    set.beatmaps[1].osu_last_played_at_ms = Some(200);
+    let state = state_with(&[set]).await;
     let (_, tracks) = request(&state, "GET", "/api/tracks", Value::Null).await;
     let audio = tracks[0]["audio_source_id"].as_i64().unwrap();
     assert_eq!(tracks[0]["last_played_at_ms"], Value::Null);
+    assert_eq!(tracks[0]["difficulties"][0]["osu_last_played_at_ms"], 100);
+    assert_eq!(tracks[0]["difficulties"][1]["osu_last_played_at_ms"], 200);
     let beatmap = tracks[0]["difficulties"][0]["beatmap_id"].as_i64().unwrap();
     let (_, playlist) = request(&state, "POST", "/api/playlists", json!({"name":"Listened"})).await;
     let playlist_id = playlist["id"].as_i64().unwrap();
@@ -286,8 +291,10 @@ async fn started_publishes_date_without_relaunching_and_updates_library_and_play
     let (_, tracks) = request(&state, "GET", "/api/tracks?q=song", Value::Null).await;
     assert_eq!(tracks[0]["audio_source_id"], audio);
     assert_eq!(&tracks[0]["last_played_at_ms"], date);
+    assert_eq!(tracks[0]["difficulties"][0]["osu_last_played_at_ms"], 100);
     let (_, playlist) = request(&state, "GET", &path, Value::Null).await;
     assert_eq!(&playlist["items"][0]["last_played_at_ms"], date);
+    assert_eq!(playlist["items"][0]["osu_last_played_at_ms"], 100);
     let stopped = command_request(&state, json!({"command":"stop"})).await;
     assert_eq!(
         command_request(

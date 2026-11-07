@@ -33,6 +33,7 @@ impl From<PlaylistSummary> for PlaylistSummaryResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
 pub(crate) struct PlaylistItemResponse {
+    osu_last_played_at_ms: Option<i64>,
     last_played_at_ms: Option<i64>,
     volume_percent: Option<u8>,
     #[cfg_attr(feature = "docs", schema(required = true))]
@@ -55,6 +56,7 @@ impl From<PlaylistItem> for PlaylistItemResponse {
     fn from(item: PlaylistItem) -> Self {
         Self {
             id: item.id,
+            osu_last_played_at_ms: item.osu_last_played_at_ms,
             last_played_at_ms: item.last_played_at_ms,
             volume_percent: item.volume_percent,
             mods: item.mods.map(Into::into),

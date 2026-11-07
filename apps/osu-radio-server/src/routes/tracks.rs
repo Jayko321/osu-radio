@@ -25,6 +25,7 @@ pub(crate) struct TrackResponse {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "docs", derive(utoipa::ToSchema))]
 pub(crate) struct TrackDifficulty {
+    pub osu_last_played_at_ms: Option<i64>,
     pub beatmap_id: i32,
     pub beatmap_set_id: i32,
     pub beatmap_set_online_id: Option<i32>,
@@ -48,6 +49,7 @@ impl From<radio_services::LibraryTrack> for TrackResponse {
                 .difficulties
                 .into_iter()
                 .map(|map| TrackDifficulty {
+                    osu_last_played_at_ms: map.osu_last_played_at_ms,
                     beatmap_id: map.beatmap_id,
                     beatmap_set_id: map.beatmap_set_id,
                     beatmap_set_online_id: map.beatmap_set_online_id,
@@ -62,7 +64,7 @@ impl From<radio_services::LibraryTrack> for TrackResponse {
 #[cfg_attr(feature = "docs", utoipa::path(
     get, path = "/api/tracks", tag = "tracks",
     description = "One row per global audio source, in library order, with every related difficulty. Metadata comes from the lowest beatmap ID; cover from the lowest ID with a stored reference.",
-    params(("q" = Option<String>, Query, description = "Literal case-insensitive words matched across tags, metadata and difficulties of the same audio; blank returns all.")),
+    params(("q" = Option<String>, Query, description = "Case-insensitive text search: words, artist/title/creator/author/mapper/diff/source/tag conditions with =, :, != or !:, quoted phrases and quoted exact values ending in !; bpm/star/stars/sr/length accept numeric comparisons; length accepts seconds, m:ss, h:mm:ss, ms/s/m/h. status accepts =, :, !=, !: and ranked/approved/qualified/loved/pending/wip/graveyard/locallymodified/none (comma means OR; negative excludes any matching difficulty); ranked/submitted/created and lastplayed accept =, !=, <, <=, >, >= and : aliases. Dates use UTC year, year-month or year-month-day with -, / or .; equality covers the period. played accepts true/false, yes/no, 1/0 with =, :, !=, !:. lastplayed compares age in s/m/h/d/w (default days), using latest imported osu! play date; unknown dates never match numeric comparisons. Conditions combine with AND; invalid fragments remain literal. A single positive free number also matches online set ID. Blank returns all.")),
     responses((status = OK, body = Vec<TrackResponse>), (status = INTERNAL_SERVER_ERROR, body = crate::error::ApiErrorBody))
 ))]
 pub(crate) async fn list_tracks(
@@ -101,6 +103,7 @@ mod tests {
             cover_beatmap_id: Some(71),
             difficulties: vec![
                 radio_services::TrackDifficulty {
+                    osu_last_played_at_ms: Some(100),
                     beatmap_id: 71,
                     beatmap_set_id: 31,
                     beatmap_set_online_id: Some(3100),
@@ -108,6 +111,7 @@ mod tests {
                     set_has_multiple_audio_sources: true,
                 },
                 radio_services::TrackDifficulty {
+                    osu_last_played_at_ms: None,
                     beatmap_id: 72,
                     beatmap_set_id: 32,
                     beatmap_set_online_id: None,
@@ -123,13 +127,15 @@ mod tests {
                 "audio_source_id": 17, "last_played_at_ms": 1_700_000_000_123_i64, "volume_percent": 0, "mods": null,
                 "title": "Title", "title_unicode": "題", "artist": "Artist", "artist_unicode": "演奏者", "cover_beatmap_id": 71,
                 "difficulties": [
-                    {"beatmap_id": 71, "beatmap_set_id": 31, "beatmap_set_online_id": 3100, "difficulty_name": "Hard", "set_has_multiple_audio_sources": true},
-                    {"beatmap_id": 72, "beatmap_set_id": 32, "beatmap_set_online_id": null, "difficulty_name": null, "set_has_multiple_audio_sources": false},
+                    {"osu_last_played_at_ms": 100, "beatmap_id": 71, "beatmap_set_id": 31, "beatmap_set_online_id": 3100, "difficulty_name": "Hard", "set_has_multiple_audio_sources": true},
+                    {"osu_last_played_at_ms": null, "beatmap_id": 72, "beatmap_set_id": 32, "beatmap_set_online_id": null, "difficulty_name": null, "set_has_multiple_audio_sources": false},
                 ]
             })
         );
         let wire: osu_radio_client::models::LibraryTrack = serde_json::from_value(actual).unwrap();
         assert_eq!(wire.volume_percent, Some(0));
+        assert_eq!(wire.difficulties[0].osu_last_played_at_ms, Some(100));
+        assert_eq!(wire.difficulties[1].osu_last_played_at_ms, None);
         let empty = radio_services::LibraryTrack {
             audio_source_id: 18,
             last_played_at_ms: None,
@@ -180,11 +186,22 @@ mod tests {
                 .await
                 .unwrap();
         });
-        for query in ["", "rock", "曲", "a+b%_&?# hard", "missing"] {
+        for query in [
+            "",
+            "rock",
+            "曲",
+            "a+b%_&?# hard",
+            "missing",
+            r#"title="曲" artist!=no tag:a+b%_&?# bpm>=180 bpm<181"#,
+        ] {
             let old = api.search_beatmap_sets(query).await.unwrap();
             let new = api.search_tracks(query).await.unwrap();
             let tracks: Vec<_> = new.into_iter().map(Track::from).collect();
             assert_eq!(tracks, library_tracks(&old), "{query}");
+            if query.starts_with("title=") {
+                assert_eq!(tracks.len(), 1);
+                assert_eq!(tracks[0].difficulties.len(), 4);
+            }
             if query.is_empty() {
                 assert_eq!(tracks.len(), 2);
                 assert_eq!(tracks[0].difficulties.len(), 4);

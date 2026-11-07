@@ -8,11 +8,7 @@ pub(super) async fn migration_contracts(database: &Database, url: &str) {
         .await
         .unwrap();
     let source = SourceType::Local("{\"Unix\":[255,47,97]}".into());
-    let audio = database
-        .audio_sources()
-        .get_or_insert(&source)
-        .await
-        .unwrap();
+    let audio = insert_legacy_audio(database, &source).await;
     database
         .listening_history()
         .record_started(&source, 8, 1234)

@@ -7,6 +7,8 @@ pub struct Model {
     pub id: i32,
     pub online_id: Option<i32>,
     pub hash: Option<String>,
+    pub ranked_at_ms: Option<i64>,
+    pub submitted_at_ms: Option<i64>,
     pub installation_id: i32,
 }
 

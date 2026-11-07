@@ -25,6 +25,11 @@ struct Entry {
     duration: i32,
     timings: Vec<(f64, f64, bool)>,
     star_tags: [u8; 4],
+    mode: u8,
+    status: u8,
+    no_mod: bool,
+    last_played_ticks: i64,
+    unplayed: bool,
 }
 
 impl Default for Entry {
@@ -41,6 +46,11 @@ impl Default for Entry {
             duration: 20_000,
             timings: vec![(500.0, 0.0, true)],
             star_tags: [0x0d; 4],
+            mode: 0,
+            status: 4,
+            no_mod: true,
+            last_played_ticks: 0,
+            unplayed: true,
         }
     }
 }
@@ -82,7 +92,7 @@ fn entry_bytes(version: i32, entry: &Entry) -> Vec<u8> {
     ] {
         string(&mut bytes, value);
     }
-    bytes.push(4); // Ranked.
+    bytes.push(entry.status);
     bytes.extend([0; 6 + 8]); // Counts and modified date.
     if version < 2014_06_09 {
         bytes.extend([5; 4]);
@@ -93,20 +103,20 @@ fn entry_bytes(version: i32, entry: &Entry) -> Vec<u8> {
     }
     bytes.extend(1.4_f64.to_le_bytes());
     if version >= 2014_06_09 {
-        for tag in entry.star_tags {
+        for (mode, tag) in entry.star_tags.into_iter().enumerate() {
             if tag == 0 {
                 integer(&mut bytes, 0);
                 continue;
             }
-            integer(&mut bytes, 2);
-            for mods in [0, 64] {
+            integer(&mut bytes, if entry.no_mod { 2 } else { 1 });
+            for mods in [64, 0].into_iter().take(if entry.no_mod { 2 } else { 1 }) {
                 bytes.push(0x08);
                 integer(&mut bytes, mods);
                 bytes.push(tag);
                 if tag == 0x0c {
-                    bytes.extend(4.5_f32.to_le_bytes());
+                    bytes.extend((mode as f32 + if mods == 0 { 1.5 } else { 10.0 }).to_le_bytes());
                 } else {
-                    bytes.extend(4.5_f64.to_le_bytes());
+                    bytes.extend((mode as f64 + if mods == 0 { 1.5 } else { 10.0 }).to_le_bytes());
                 }
             }
         }
@@ -125,13 +135,13 @@ fn entry_bytes(version: i32, entry: &Entry) -> Vec<u8> {
     integer(&mut bytes, -1);
     bytes.extend([0; 4 + 2]);
     bytes.extend(0.7_f32.to_le_bytes());
-    bytes.push(0);
+    bytes.push(entry.mode);
     string(&mut bytes, "Game");
     string(&mut bytes, "TAG two");
     bytes.extend([0; 2]);
     string(&mut bytes, "");
-    bytes.push(1);
-    bytes.extend([0; 8]);
+    bytes.push(u8::from(entry.unplayed));
+    bytes.extend(entry.last_played_ticks.to_le_bytes());
     bytes.push(0);
     string(&mut bytes, &entry.folder);
     bytes.extend([0; 8 + 5]);
@@ -183,6 +193,40 @@ fn write_osu(root: &Path, directory: &str, entry: &Entry, contents: &str) {
         .join(entry.osu_file.replace('\\', "/"));
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, contents).unwrap();
+}
+
+#[test]
+fn imports_last_played_ticks_and_ignores_unplayed_maps() {
+    let entry = Entry {
+        unplayed: false,
+        last_played_ticks: 638_355_968_001_230_000,
+        ..Entry::default()
+    };
+    let unplayed = Entry {
+        unplayed: true,
+        ..entry.clone()
+    };
+    let zero = Entry {
+        last_played_ticks: 0,
+        ..entry.clone()
+    };
+    let invalid = Entry {
+        last_played_ticks: -1,
+        ..entry.clone()
+    };
+    let records = decode(&database(
+        2025_01_07,
+        false,
+        &[entry, unplayed, zero, invalid],
+    ))
+    .unwrap();
+    assert_eq!(
+        records[0].beatmap.osu_last_played_at_ms,
+        Some(1_700_000_000_123)
+    );
+    assert_eq!(records[1].beatmap.osu_last_played_at_ms, None);
+    assert_eq!(records[2].beatmap.osu_last_played_at_ms, None);
+    assert_eq!(records[3].beatmap.osu_last_played_at_ms, None);
 }
 
 #[test]
@@ -332,7 +376,7 @@ fn rejects_bad_lengths_counts_tags_utf8_and_booleans() {
     }
     let star = original
         .windows(14)
-        .position(|w| w[0] == 8 && w[5] == 13 && w[6..14] == 4.5_f64.to_le_bytes())
+        .position(|w| w[0] == 8 && w[5] == 13 && w[6..14] == 10.0_f64.to_le_bytes())
         .unwrap();
     for (offset, replacement) in [(star, 9), (star + 5, 14), (8, 2)] {
         let mut bytes = original.clone();
@@ -971,4 +1015,80 @@ fn rejects_corrupt_collection_databases_without_partial_results() {
     let mut malformed_name = valid;
     malformed_name[8] = 0xff;
     assert!(reader::decode_collections(&malformed_name, path).is_err());
+}
+
+#[test]
+fn maps_stars_and_status_from_stable() {
+    use radio_core::import_types::BeatmapStatus;
+    for mode in 0..4 {
+        let entry = Entry {
+            mode,
+            star_tags: [0x0c, 0x0d, 0x0c, 0x0d],
+            ..Entry::default()
+        };
+        for (version, sizes) in [(2014_06_08, true), (2019_11_06, true), (2019_11_06, false)] {
+            let records = decode(&database(version, sizes, &[entry.clone()])).unwrap();
+            assert_eq!(
+                records[0].beatmap.stars,
+                if version < 2014_06_09 {
+                    None
+                } else {
+                    Some(f64::from(mode) + 1.5)
+                }
+            );
+        }
+        let missing = Entry {
+            no_mod: false,
+            ..entry
+        };
+        assert_eq!(
+            decode(&database(2025_01_08, false, &[missing])).unwrap()[0]
+                .beatmap
+                .stars,
+            None
+        );
+    }
+    for (status, expected) in [
+        (0, None),
+        (1, None),
+        (2, Some(BeatmapStatus::Pending)),
+        (3, None),
+        (4, Some(BeatmapStatus::Ranked)),
+        (5, Some(BeatmapStatus::Approved)),
+        (6, Some(BeatmapStatus::Qualified)),
+        (7, Some(BeatmapStatus::Loved)),
+        (255, None),
+    ] {
+        let entry = Entry {
+            status,
+            ..Entry::default()
+        };
+        assert_eq!(
+            decode(&database(2025_01_08, false, &[entry])).unwrap()[0]
+                .beatmap
+                .status,
+            expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn imports_stars_without_changing_source_or_inventing_dates() {
+    let entry = Entry {
+        mode: 2,
+        status: 5,
+        ..Entry::default()
+    };
+    let temp = install(&[entry]);
+    let path = temp.path().join("osu!.db");
+    let before = fs::read(&path).unwrap();
+    let snapshot = super::import_snapshot_from_stable_db(&path).await.unwrap();
+    let set = &snapshot.beatmap_sets[0];
+    assert_eq!(set.beatmaps[0].stars, Some(3.5));
+    assert_eq!(
+        set.beatmaps[0].status,
+        Some(radio_core::import_types::BeatmapStatus::Approved)
+    );
+    assert_eq!((set.ranked_at_ms, set.submitted_at_ms), (None, None));
+    assert_eq!(fs::read(path).unwrap(), before);
 }

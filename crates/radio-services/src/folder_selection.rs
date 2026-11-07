@@ -108,6 +108,7 @@ impl OsuInstallationService<'_> {
         marker: &OsuMarker,
         imported: &ImportedSnapshot,
     ) -> anyhow::Result<RegisteredInstallation> {
+        let durations = crate::osu_installation::prepare_durations(&imported.beatmap_sets).await?;
         let transaction = self.database.begin().await?;
         UserDataService::lock(transaction.user_data()).await?;
         // Repeat identity matching under the writer lock for concurrent imports and legacy aliases.
@@ -132,6 +133,7 @@ impl OsuInstallationService<'_> {
                 &transaction,
                 registered.installation().id,
                 imported,
+                &durations,
             )
             .await?;
         }
@@ -171,6 +173,7 @@ impl OsuInstallationService<'_> {
         marker: &OsuMarker,
         imported: &ImportedSnapshot,
     ) -> anyhow::Result<Option<crate::model::OsuInstallation>> {
+        let durations = crate::osu_installation::prepare_durations(&imported.beatmap_sets).await?;
         let transaction = self.database.begin().await?;
         UserDataService::lock(transaction.user_data()).await?;
         let Some(folder) = transaction.osu_installations().get(id).await? else {
@@ -180,7 +183,7 @@ impl OsuInstallationService<'_> {
             folder.kind == marker.kind && resolved_path(&folder.marker_path) == marker.marker_path,
             "Registered source changed during import"
         );
-        Self::replace_imported_snapshot_in(&transaction, id, imported).await?;
+        Self::replace_imported_snapshot_in(&transaction, id, imported, &durations).await?;
         let folder = transaction.osu_installations().get(id).await?;
         transaction.commit().await?;
         Ok(folder)

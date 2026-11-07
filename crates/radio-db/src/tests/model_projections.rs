@@ -55,6 +55,8 @@ pub(super) async fn contracts(database: &Database) {
         .insert(
             installation.id,
             &ImportedBeatmapSet {
+                ranked_at_ms: None,
+                submitted_at_ms: None,
                 source: OsuKind::Lazer,
                 online_id: None,
                 hash: None,
@@ -65,6 +67,8 @@ pub(super) async fn contracts(database: &Database) {
         .await
         .unwrap();
     let expected_empty_set = BeatmapSet {
+        ranked_at_ms: None,
+        submitted_at_ms: None,
         id: empty_set.id,
         installation_id: installation.id,
         online_id: None,
@@ -77,6 +81,8 @@ pub(super) async fn contracts(database: &Database) {
         .await
         .unwrap();
     let expected_set = BeatmapSet {
+        ranked_at_ms: None,
+        submitted_at_ms: None,
         id: set.id,
         online_id: Some(23),
         hash: Some("set-Projection title".into()),
@@ -108,6 +114,9 @@ pub(super) async fn contracts(database: &Database) {
         .await
         .unwrap();
     let expected_map = Beatmap {
+        stars: None,
+        status: None,
+        osu_last_played_at_ms: None,
         id: map.id,
         beatmap_set_id: set.id,
         difficulty_name: Some("Easy".into()),
@@ -124,6 +133,9 @@ pub(super) async fn contracts(database: &Database) {
         Some(expected_map.clone())
     );
     let empty = ImportedBeatmap {
+        stars: None,
+        status: None,
+        osu_last_played_at_ms: None,
         difficulty_name: None,
         bpm: None,
         hash: None,
@@ -141,6 +153,9 @@ pub(super) async fn contracts(database: &Database) {
         .await
         .unwrap();
     let expected_empty = Beatmap {
+        stars: None,
+        status: None,
+        osu_last_played_at_ms: None,
         id: silent.id,
         beatmap_set_id: set.id,
         difficulty_name: None,
@@ -168,6 +183,7 @@ pub(super) async fn contracts(database: &Database) {
         ]
     );
     let expected_detail = BeatmapDetails {
+        osu_last_played_at_ms: None,
         id: map.id,
         audio_source_id: Some(audio.id),
         difficulty_name: Some("Easy".into()),
@@ -178,6 +194,7 @@ pub(super) async fn contracts(database: &Database) {
         has_cover: true,
     };
     let empty_detail = BeatmapDetails {
+        osu_last_played_at_ms: None,
         id: silent.id,
         audio_source_id: None,
         difficulty_name: None,
@@ -420,6 +437,7 @@ async fn playlist_projections(
     );
     let item_id = saved.items[0].id;
     let expected_item = PlaylistItem {
+        osu_last_played_at_ms: None,
         id: item_id,
         playlist_id: playlist.id,
         source_kind: "lazer".into(),

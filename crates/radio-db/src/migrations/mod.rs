@@ -22,6 +22,8 @@ mod m20261020_000015_audio_mods;
 
 mod m20261024_000016_queue_modes;
 mod m20261027_000017_search_text;
+mod m20261105_000018_osu_last_played;
+mod m20261106_000019_library_search;
 
 pub(crate) struct Migrator;
 
@@ -46,6 +48,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20261020_000015_audio_mods::Migration),
             Box::new(m20261024_000016_queue_modes::Migration),
             Box::new(m20261027_000017_search_text::Migration),
+            Box::new(m20261105_000018_osu_last_played::Migration),
+            Box::new(m20261106_000019_library_search::Migration),
         ]
     }
 }
