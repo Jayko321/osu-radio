@@ -24,12 +24,12 @@ migration for subsequent changes.
 | --- | --- |
 | `user_data` | Singleton settings anchor, primary key constrained to `1`; independent individual volume/mods modes, global volume percentage and global mods profile. |
 | `osu_installations` | Generated `i32` ID; required settings owner; unique marker path; kind, root/marker paths, label, enabled flag and last-scanned timestamp. |
-| `beatmap_sets` | Generated `i32` ID; required installation; optional online ID, source hash and ranked/submitted UTC Unix milliseconds. |
-| `beatmaps` | Generated `i32` ID; required set; difficulty, BPM, nullable stars and normalized status, native source hash, nullable indexed MD5 and nullable imported osu! play date; optional independent metadata and audio references. Source kind is derived from the installation. |
+| `beatmap_sets` | Generated `i32` ID; required installation; optional online ID and source hash. |
+| `beatmaps` | Generated `i32` ID; required set; difficulty, BPM, native source hash and nullable indexed MD5; optional independent metadata and audio references. Source kind is derived from the installation. |
 | `beatmap_metadata` | SHA-256 text primary key; immutable shared imported content. |
 | `tags` | Generated `i32` ID; globally unique normalized name, SQLite `BINARY` / PostgreSQL `C` collation. |
 | `beatmap_set_tags` | Composite primary key `(beatmap_set_id, tag_id)`; set cascade, restrictive tag reference, index on `tag_id`. |
-| `audio_sources` | Generated `i32` ID; globally unique `(kind, location)`; `local`, `copied`, or `online`; nullable full duration in milliseconds. |
+| `audio_sources` | Generated `i32` ID; globally unique `(kind, location)`; `local`, `copied`, or `online`. |
 | `audio_volume` | Composite primary key `(audio_kind, source_location)` and absolute integer `volume_percent` in 0–100. No library foreign key. |
 | `audio_mods` | Composite primary key `(audio_kind, source_location)` and checked mode/speed/pitch profile. No library foreign key. |
 | `listening_history` | Composite primary key `(audio_kind, source_location)` using the audio source's existing identity; UTC millisecond timestamp and last acknowledged playback token. No library foreign key. |
@@ -147,26 +147,16 @@ transactions. Applications cannot obtain those handles through `Services`.
 
 `Database::begin_read` exposes an opaque transaction for consistent multi-query
 reads: a regular SQLite read transaction or PostgreSQL `REPEATABLE READ READ ONLY`.
-`BeatmapSetService` parses free text and text conditions, then combines global
-audio IDs inside that transaction. [`matching_text`](../../crates/radio-db/src/repositories/beatmap_set.rs)
-binds each literal value to SQLite `instr` / PostgreSQL `strpos` or equality on
-normalized fields and tags. SQL streams candidate field values for quoted phrases;
-the service checks .NET word boundaries without combining separate fields or tags.
-Negative conditions exclude an audio ID when any reference matches. A single
-positive free number also matches online set ID. See the [backend search syntax](backend.md#library-search).
-Numeric criteria are grouped by field and evaluated against one non-null value in
-SQL; BPM and floored stars use beatmap values and length uses the stored full
-`audio_sources.duration_ms`. Fractional-millisecond length thresholds retain their
-exact ordering against integer stored durations. Different fields are intersected
-by global audio ID; numeric filtering does not open source files or use audio-mod settings.
-Status predicates select audio from matching beatmaps, with `none` representing
-NULL and negative conditions excluding any matching reference. Ranked and submitted
-conditions for each field are evaluated on one set date using UTC period boundaries.
-Played and age predicates use `MAX(beatmaps.osu_last_played_at_ms)` per audio ID;
-the query captures current time once and never reads `listening_history` for them.
-No wildcard interpretation, locale-dependent SQL lowercase or full-library text
-projection is used on this path. Substring matching scans text in the database;
-this is not a full-text index or a promise of constant-time search.
+`BeatmapSetService` lowercases and deduplicates whitespace-separated words, then
+intersects matching global audio IDs across words inside that transaction.
+[`matching_audio_sources`](../../crates/radio-db/src/repositories/beatmap_set.rs)
+binds one literal word at a time to SQLite `instr` / PostgreSQL `strpos` over
+normalized metadata, difficulty names and tags. A word can match any reference
+of an audio source; different words may match different difficulties or sets.
+There is no 64-word or combined SQL parameter limit. No wildcard interpretation,
+locale-dependent SQL lowercase, server-side text cache or full-library text
+projection is used on this path. Substring matching still scans text in the
+database; this is not a full-text index or a promise of constant-time search.
 
 [`m20261027_000017_search_text`](../../crates/radio-db/src/migrations/m20261027_000017_search_text.rs)
 adds `search_title`, `search_title_unicode`, `search_artist` and
@@ -179,32 +169,6 @@ under the schema-change transaction/lock; a failure leaves the previous schema
 and original library intact. Downgrade drops only these derived columns.
 Metadata and beatmap repositories fill them on insertion, including reimport.
 Direct SQL test fixtures must supply corresponding normalized text themselves.
-
-The additive [v19 migration](../../crates/radio-db/src/migrations/m20261106_000019_library_search.rs)
-adds nullable `stars` and `status` on difficulties, `ranked_at_ms` and
-`submitted_at_ms` on sets, and `duration_ms` on audio sources. `status` stores the
-lowercase names of `BeatmapStatus`; SQL NULL represents unknown. The timestamp
-fields are UTC Unix milliseconds. Snapshot replacement stores the imported
-difficulty and set values in its existing transaction. The audio repository can
-update duration on an existing `(kind, location)` identity, including clearing it
-to NULL and rolling the update back in a transaction.
-
-The same migration backfills `search_mapper` from the JSON author `username` and
-`search_source` from source in keyset pages of at most 128, using Rust lowercase
-and mapping absent values to empty search text. Original metadata and its hash are
-unchanged. Old stars, status, dates and duration remain NULL; startup does not
-read source files. Downgrade to v18 removes these new fields, leaving the previous
-schema and data. Stable/lazer extraction is described in the scanner guide; search
-using these new fields remains a later task.
-
-[Snapshot replacement](../../crates/radio-services/src/osu_installation.rs) prepares
-one duration per unique resolved local audio path sequentially outside the writer
-transaction. Registration and Refresh recheck identity after preparation. The
-transaction writes the current value, including NULL for unavailable or invalid
-media, to the shared audio row together with the snapshot and timestamp; rollback
-restores them together. CLI store uses the same service path. Existing rows remain
-unknown until import or Refresh; files are not modified. SQLite and PostgreSQL
-service contracts and the CLI fixture exercise this boundary.
 
 After matching, the same transaction loads full data only for matching audio IDs
 in disjoint, sorted chunks of at most 500 parameters. Multiplicity is computed
@@ -235,13 +199,10 @@ tasks. RSS may retain allocator arenas after results are freed.
 symbols, Unicode expansion/context, cross-reference matches, 70 unique words,
 three ID chunks, and a committed
 replacement from a second pool between projections and full result loading.
-Both backends must retain the old snapshot. The [CLI import/search tests](../../apps/osu-radio-cli/tests/commands.rs)
-also store synthetic stable and real-helper Realm fixtures in a private SQLite database;
-the stable fixture checks that refreshing a missing audio file clears its duration.
-The
+Both backends must retain the old snapshot. The
 [migration lifecycle](../../crates/radio-db/src/tests/migration_lifecycle.rs)
 checks NULL/Unicode backfill across multiple pages, unchanged identities,
-reversible upgrades and rollback after an injected update failure.
+reversible upgrades and SQLite rollback after an injected update failure.
 The existing tag migration and metadata hash encoding are unchanged.
 
 ## Playback queue
@@ -531,8 +492,6 @@ distinguish the old launch profile from the rebound entry profile. These checks
 use disposable databases and do not establish HTTP, DSP or native user acceptance.
 
 ## Listening history
-
-The [osu! play-date migration](../../crates/radio-db/src/migrations/m20261105_000018_osu_last_played.rs) adds a nullable Unix-millisecond date per beatmap. Existing rows remain unknown until the source is explicitly refreshed. Snapshot replacement replaces these dates with the values from that import; no startup scan or live monitoring occurs. The date is separate from the osu!radio history below and from immutable metadata identity. Library tracks expose each difficulty's date and playlists expose the matched difficulty's date; an item without a matching map has no date.
 
 The additive [listening-history migration](../../crates/radio-db/src/migrations/m20261001_000007_listening_history.rs) preserves the library, playlists and
 queue. Existing queue positions do not prove successful playback and are not

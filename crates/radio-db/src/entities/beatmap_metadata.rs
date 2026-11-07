@@ -13,8 +13,6 @@ pub struct Model {
     pub search_title_unicode: String,
     pub search_artist: String,
     pub search_artist_unicode: String,
-    pub search_mapper: String,
-    pub search_source: String,
     pub author: Option<serde_json::Value>,
     pub source: Option<String>,
     pub preview_time: Option<i32>,

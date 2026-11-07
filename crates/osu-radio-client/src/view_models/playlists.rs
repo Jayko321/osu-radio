@@ -133,7 +133,6 @@ impl PlaylistItem {
                 .beatmap_id
                 .zip(self.beatmap_set_id)
                 .map(|(beatmap_id, beatmap_set_id)| TrackDifficulty {
-                    osu_last_played_at_ms: self.osu_last_played_at_ms,
                     beatmap_id,
                     beatmap_set_id,
                     beatmap_set_online_id: None,

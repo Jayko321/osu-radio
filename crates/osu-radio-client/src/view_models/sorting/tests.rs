@@ -9,14 +9,6 @@ fn track(id: i32, title: &str, artist: &str, date: Option<i64>) -> Track {
     track.artist = artist.into();
     track.artist_original = Some(artist.into());
     track.last_played_at_ms = date;
-    track.difficulties = vec![crate::models::TrackDifficulty {
-        osu_last_played_at_ms: date,
-        beatmap_id: id,
-        beatmap_set_id: 1,
-        beatmap_set_online_id: None,
-        difficulty_name: None,
-        set_has_multiple_audio_sources: false,
-    }];
     track
 }
 
@@ -37,7 +29,6 @@ fn every_sort_uses_unicode_case_secondary_text_dates_and_stable_ids() {
         (TrackSort::TitleAsc, vec![5, 2, 4, 3, 1]),
         (TrackSort::ArtistAsc, vec![5, 3, 2, 4, 1]),
         (TrackSort::RecentlyPlayed, vec![2, 4, 1, 3, 5]),
-        (TrackSort::RecentlyListened, vec![2, 4, 1, 3, 5]),
     ] {
         let mut tracks = source.clone();
         sort.sort_tracks(&mut tracks);
@@ -45,38 +36,13 @@ fn every_sort_uses_unicode_case_secondary_text_dates_and_stable_ids() {
         sort.sort_tracks(&mut []);
     }
     let row: crate::models::LibraryTrack = serde_json::from_value(serde_json::json!({
-        "audio_source_id": 9, "title":" ", "title_unicode":"曲", "artist":"", "artist_unicode":"А", "cover_beatmap_id":null, "difficulties":[{"beatmap_id": 9, "beatmap_set_id": 1, "difficulty_name": null, "set_has_multiple_audio_sources": false}]
+        "audio_source_id": 9, "title":" ", "title_unicode":"曲", "artist":"", "artist_unicode":"А", "cover_beatmap_id":null, "difficulties":[]
     })).unwrap();
-    assert_eq!(
-        row.difficulties.first().unwrap().osu_last_played_at_ms,
-        None
-    );
     let row = Track::from(row);
     assert_eq!(
         (&*row.title, &*row.artist, row.last_played_at_ms),
         ("曲", "А", None)
     );
-}
-
-#[test]
-fn osu_dates_use_latest_difficulty_and_sort_unplayed_after_played_independently_of_radio_history() {
-    let mut first = track(1, "A", "A", Some(10));
-    let mut second = track(2, "B", "B", Some(20));
-    first.last_played_at_ms = Some(999);
-    second.last_played_at_ms = None;
-    let mut latest = first.difficulties.first().unwrap().clone();
-    latest.beatmap_id = 3;
-    latest.osu_last_played_at_ms = Some(30);
-    first.difficulties.push(latest);
-    let mut unplayed = track(3, "Unplayed", "A", None);
-    unplayed.last_played_at_ms = Some(1_000);
-    let mut no_difficulties = track(4, "Empty", "A", None);
-    no_difficulties.difficulties.clear();
-    let mut tracks = vec![unplayed, second, no_difficulties, first];
-    TrackSort::RecentlyPlayed.sort_tracks(&mut tracks);
-    assert_eq!(ids(&tracks), [1, 2, 4, 3]);
-    TrackSort::RecentlyListened.sort_tracks(&mut tracks);
-    assert_eq!(ids(&tracks), [3, 1, 2, 4]);
 }
 
 #[test]
@@ -110,7 +76,6 @@ fn reordering_preserves_selection_durations_artwork_jobs_and_media_generation() 
     for sort in [
         TrackSort::ArtistAsc,
         TrackSort::RecentlyPlayed,
-        TrackSort::RecentlyListened,
         TrackSort::TitleAsc,
     ] {
         state.command(AppCommand::SetTrackSort(sort));
@@ -165,9 +130,9 @@ fn incoming_search_results_keep_sort_and_newer_known_dates() {
         invalidate_artwork: true,
         result: Ok(vec![track(2, "B", "B", None), track(1, "A", "A", Some(1))]),
     });
-    assert_eq!(ids(&state.library.tracks), [1, 2]);
+    assert_eq!(ids(&state.library.tracks), [2, 1]);
     assert_eq!(
-        state.library.tracks.get(1).unwrap().last_played_at_ms,
+        state.library.tracks.first().unwrap().last_played_at_ms,
         Some(40)
     );
     state.replace_tracks(Vec::new(), true);
@@ -175,7 +140,7 @@ fn incoming_search_results_keep_sort_and_newer_known_dates() {
         vec![track(1, "A", "A", None), track(2, "B", "B", None)],
         true,
     );
-    assert_eq!(ids(&state.library.tracks), [1, 2]);
+    assert_eq!(ids(&state.library.tracks), [2, 1]);
     state.command(AppCommand::Playlist(PlaylistAction::Select(None)));
     assert_eq!(state.settings.sort, TrackSort::RecentlyPlayed);
 }

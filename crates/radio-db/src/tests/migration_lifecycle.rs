@@ -15,285 +15,6 @@ pub(super) async fn contracts(database: &Database) {
     reversible_migrations_preserve_the_library(database).await;
     background_downgrade_and_native_path_guard(database).await;
     search_text_upgrade(database).await;
-    library_search_upgrade(database).await;
-}
-
-#[allow(clippy::too_many_lines)] // One populated v18 fixture exercises migration and rollback on both backends.
-async fn library_search_upgrade(database: &Database) {
-    use sea_orm::sea_query::{Alias, Query};
-    Migrator::up(&database.connection, Some(18)).await.unwrap();
-    sql(database, "INSERT INTO osu_installations (id,user_data_id,kind,root_path,marker_path) VALUES (1,1,'stable','\"/v18\"','\"/v18/osu!.db\"')").await;
-    sql(
-        database,
-        "INSERT INTO beatmap_sets (id,installation_id,online_id,hash) VALUES (1,1,42,'set-hash')",
-    )
-    .await;
-    sql(
-        database,
-        "INSERT INTO audio_sources (id,kind,location) VALUES (1,'local','/v18/audio')",
-    )
-    .await;
-    sql(
-        database,
-        "INSERT INTO playlists (id,name) VALUES (1,'Preserved playlist')",
-    )
-    .await;
-    sql(database, "INSERT INTO playlist_items (id,playlist_id,source_kind,beatmap_hash,title) VALUES (1,1,'stable','map-hash','Saved')").await;
-    sql(database, "INSERT INTO listening_history (audio_kind,source_location,last_played_at_ms,playback_token) VALUES ('local','/v18/audio',123456,7)").await;
-    sql(
-        database,
-        "UPDATE user_data SET global_volume_percent=37 WHERE id=1",
-    )
-    .await;
-    for id in 1..=257 {
-        let (author, source) = legacy_search_values(id);
-        database
-            .connection
-            .execute(
-                Query::insert()
-                    .into_table(Alias::new("beatmap_metadata"))
-                    .columns(["hash", "title", "author", "source"].map(Alias::new))
-                    .values_panic([
-                        format!("legacy-{id:03}").into(),
-                        "Original title".into(),
-                        author.into(),
-                        source.into(),
-                    ]),
-            )
-            .await
-            .unwrap();
-        database
-            .connection
-            .execute(
-                Query::insert()
-                    .into_table(Alias::new("beatmaps"))
-                    .columns(
-                        [
-                            "id",
-                            "beatmap_set_id",
-                            "audio_source_id",
-                            "metadata_hash",
-                            "hash",
-                        ]
-                        .map(Alias::new),
-                    )
-                    .values_panic([
-                        id.into(),
-                        1.into(),
-                        1.into(),
-                        format!("legacy-{id:03}").into(),
-                        format!("map-{id}").into(),
-                    ]),
-            )
-            .await
-            .unwrap();
-    }
-    let identity = metadata("Migrated identity");
-    let identity_hash = crate::metadata_hash(&identity).unwrap();
-    database
-        .connection
-        .execute(
-            Query::insert()
-                .into_table(Alias::new("beatmap_metadata"))
-                .columns(
-                    [
-                        "hash",
-                        "title",
-                        "title_unicode",
-                        "artist",
-                        "artist_unicode",
-                        "search_title",
-                        "search_title_unicode",
-                        "search_artist",
-                        "search_artist_unicode",
-                        "author",
-                        "source",
-                        "preview_time",
-                        "audio_file",
-                        "background_file",
-                    ]
-                    .map(Alias::new),
-                )
-                .values_panic([
-                    identity_hash.clone().into(),
-                    identity.title.clone().into(),
-                    identity.title_unicode.clone().into(),
-                    identity.artist.clone().into(),
-                    identity.artist_unicode.clone().into(),
-                    identity
-                        .title
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_lowercase()
-                        .into(),
-                    identity
-                        .title_unicode
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_lowercase()
-                        .into(),
-                    identity
-                        .artist
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_lowercase()
-                        .into(),
-                    identity
-                        .artist_unicode
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_lowercase()
-                        .into(),
-                    serde_json::json!({"online_id": 7, "username": "Mapper", "country_code": "JP"})
-                        .into(),
-                    identity.source.clone().into(),
-                    identity.preview_time.into(),
-                    identity.audio_file.clone().into(),
-                    identity.background_file.clone().into(),
-                ]),
-        )
-        .await
-        .unwrap();
-    assert_legacy_search_data(database).await;
-    #[cfg(feature = "sqlite")]
-    sql(database, "CREATE TRIGGER fail_library_search BEFORE UPDATE ON beatmap_metadata WHEN NEW.hash = 'legacy-200' BEGIN SELECT RAISE(ABORT, 'forced backfill failure'); END").await;
-    #[cfg(feature = "postgres")]
-    {
-        sql(database, "CREATE FUNCTION fail_library_search() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.hash = 'legacy-200' THEN RAISE EXCEPTION 'forced backfill failure'; END IF; RETURN NEW; END $$").await;
-        sql(database, "CREATE TRIGGER fail_library_search BEFORE UPDATE ON beatmap_metadata FOR EACH ROW EXECUTE FUNCTION fail_library_search()").await;
-    }
-    assert!(database.migrate().await.is_err());
-    assert_schema(database, 18).await;
-    assert_legacy_search_data(database).await;
-    #[cfg(feature = "sqlite")]
-    sql(database, "DROP TRIGGER fail_library_search").await;
-    #[cfg(feature = "postgres")]
-    {
-        sql(
-            database,
-            "DROP TRIGGER fail_library_search ON beatmap_metadata",
-        )
-        .await;
-        sql(database, "DROP FUNCTION fail_library_search()").await;
-    }
-    for _ in 0..2 {
-        database.migrate().await.unwrap();
-        assert_schema(database, 19).await;
-        assert_legacy_search_data(database).await;
-        assert_eq!(
-            database
-                .beatmap_metadata()
-                .get_or_insert(&identity)
-                .await
-                .unwrap()
-                .hash,
-            identity_hash
-        );
-        let rows = database.connection.query_all_raw(Statement::from_string(
-            database.connection.get_database_backend(),
-            "SELECT m.hash,m.search_mapper,m.search_source,b.id,b.stars,b.status,s.ranked_at_ms,s.submitted_at_ms,a.duration_ms \
-             FROM beatmap_metadata m JOIN beatmaps b ON b.metadata_hash=m.hash \
-             JOIN beatmap_sets s ON s.id=b.beatmap_set_id JOIN audio_sources a ON a.id=b.audio_source_id ORDER BY b.id",
-        )).await.unwrap();
-        assert_eq!(rows.len(), 257);
-        for row in rows {
-            let id = row.try_get::<i32>("", "id").unwrap();
-            let (author, source) = legacy_search_values(id);
-            let expected = author
-                .as_ref()
-                .and_then(|a| a.get("username"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_lowercase();
-            assert_eq!(
-                row.try_get::<String>("", "search_mapper").unwrap(),
-                expected
-            );
-            assert_eq!(
-                row.try_get::<String>("", "search_source").unwrap(),
-                source.unwrap_or_default().to_lowercase()
-            );
-            assert_eq!(row.try_get::<Option<f64>>("", "stars").unwrap(), None);
-            assert_eq!(row.try_get::<Option<String>>("", "status").unwrap(), None);
-            for column in ["ranked_at_ms", "submitted_at_ms", "duration_ms"] {
-                assert_eq!(row.try_get::<Option<i64>>("", column).unwrap(), None);
-            }
-        }
-    }
-    Migrator::down(&database.connection, Some(1)).await.unwrap();
-    assert_schema(database, 18).await;
-    assert_legacy_search_data(database).await;
-    database.migrate().await.unwrap();
-    assert_schema(database, 19).await;
-    assert_legacy_search_data(database).await;
-    drop_application_tables(database).await;
-}
-
-fn legacy_search_values(id: i32) -> (Option<serde_json::Value>, Option<String>) {
-    match id % 4 {
-        0 => (None, None),
-        1 => (
-            Some(serde_json::json!({"username": null, "online_id": 7})),
-            Some(String::new()),
-        ),
-        2 => (Some(serde_json::json!({"username": ""})), None),
-        _ => (
-            Some(serde_json::json!({"username": "İSTANBUL ЁЖ ΟΣ", "online_id": 7})),
-            Some("İSTANBUL ЁЖ ΟΣ".into()),
-        ),
-    }
-}
-
-async fn assert_legacy_search_data(database: &Database) {
-    let rows = database.connection.query_all_raw(Statement::from_string(database.connection.get_database_backend(),
-        "SELECT m.hash,m.title,m.author,m.source,b.id,b.hash AS map_hash,b.beatmap_set_id,b.audio_source_id FROM beatmap_metadata m JOIN beatmaps b ON b.metadata_hash=m.hash ORDER BY b.id")).await.unwrap();
-    assert_eq!(rows.len(), 257);
-    for row in rows {
-        let id = row.try_get::<i32>("", "id").unwrap();
-        let (author, source) = legacy_search_values(id);
-        assert_eq!(
-            row.try_get::<String>("", "hash").unwrap(),
-            format!("legacy-{id:03}")
-        );
-        assert_eq!(
-            row.try_get::<String>("", "title").unwrap(),
-            "Original title"
-        );
-        assert_eq!(
-            row.try_get::<Option<serde_json::Value>>("", "author")
-                .unwrap(),
-            author
-        );
-        assert_eq!(row.try_get::<Option<String>>("", "source").unwrap(), source);
-        assert_eq!(
-            row.try_get::<String>("", "map_hash").unwrap(),
-            format!("map-{id}")
-        );
-        assert_eq!(row.try_get::<i32>("", "beatmap_set_id").unwrap(), 1);
-        assert_eq!(row.try_get::<i32>("", "audio_source_id").unwrap(), 1);
-    }
-    let row = database.connection.query_one_raw(Statement::from_string(database.connection.get_database_backend(),
-        "SELECT s.id AS set_id,s.online_id,s.hash AS set_hash,a.id AS audio_id,a.location,p.id AS playlist_id,p.name,i.id AS item_id,i.beatmap_hash,h.last_played_at_ms,h.playback_token,u.global_volume_percent FROM beatmap_sets s JOIN audio_sources a ON a.id=1 JOIN playlists p ON p.id=1 JOIN playlist_items i ON i.playlist_id=p.id JOIN listening_history h ON h.source_location=a.location JOIN user_data u ON u.id=1 WHERE s.id=1")).await.unwrap().unwrap();
-    for column in ["set_id", "audio_id", "playlist_id", "item_id"] {
-        assert_eq!(row.try_get::<i32>("", column).unwrap(), 1);
-    }
-    assert_eq!(row.try_get::<i32>("", "online_id").unwrap(), 42);
-    assert_eq!(row.try_get::<String>("", "set_hash").unwrap(), "set-hash");
-    assert_eq!(row.try_get::<String>("", "location").unwrap(), "/v18/audio");
-    assert_eq!(
-        row.try_get::<String>("", "name").unwrap(),
-        "Preserved playlist"
-    );
-    assert_eq!(
-        row.try_get::<String>("", "beatmap_hash").unwrap(),
-        "map-hash"
-    );
-    assert_eq!(
-        row.try_get::<i64>("", "last_played_at_ms").unwrap(),
-        123_456
-    );
-    assert_eq!(row.try_get::<i64>("", "playback_token").unwrap(), 7);
-    assert_eq!(row.try_get::<i32>("", "global_volume_percent").unwrap(), 37);
 }
 
 #[allow(clippy::too_many_lines)] // Keep the complete frozen v1 ownership fixture together.
@@ -435,7 +156,11 @@ async fn reversible_migrations_preserve_the_library(database: &Database) {
         .unwrap()
         .into_installation();
     let imported = snapshot("Keep library", "/migration/audio");
-    let set = insert_legacy_set(database, installation.id, &imported[0]).await;
+    let set = database
+        .beatmap_sets()
+        .insert(installation.id, &imported[0])
+        .await
+        .unwrap();
     let map = insert_legacy_beatmap(
         database,
         set.id,
@@ -447,12 +172,12 @@ async fn reversible_migrations_preserve_the_library(database: &Database) {
     .await
     .unwrap();
     assert_schema(database, 4).await;
-    for version in 5..=19 {
+    for version in 5..=17 {
         Migrator::up(&database.connection, Some(1)).await.unwrap();
         assert_schema(database, version).await;
         assert_library(database, &installation, set.id, map.id).await;
     }
-    for version in (4..=18).rev() {
+    for version in (4..=16).rev() {
         Migrator::down(&database.connection, Some(1)).await.unwrap();
         assert_schema(database, version).await;
         assert_library(database, &installation, set.id, map.id).await;
@@ -468,7 +193,7 @@ async fn reversible_migrations_preserve_the_library(database: &Database) {
     assert_schema(database, 4).await;
     assert_library(database, &installation, set.id, map.id).await;
     database.migrate().await.unwrap();
-    assert_schema(database, 19).await;
+    assert_schema(database, 17).await;
     assert_library(database, &installation, set.id, map.id).await;
     assert_eq!(
         database.queue().get().await.unwrap(),
@@ -509,14 +234,6 @@ async fn assert_schema(database: &Database, version: usize) {
     for (table, column, since) in [
         ("beatmaps", "background_path", 2),
         ("beatmaps", "search_difficulty_name", 17),
-        ("beatmaps", "osu_last_played_at_ms", 18),
-        ("beatmaps", "stars", 19),
-        ("beatmaps", "status", 19),
-        ("beatmap_sets", "ranked_at_ms", 19),
-        ("beatmap_sets", "submitted_at_ms", 19),
-        ("audio_sources", "duration_ms", 19),
-        ("beatmap_metadata", "search_mapper", 19),
-        ("beatmap_metadata", "search_source", 19),
         ("beatmap_metadata", "search_title", 17),
         ("beatmap_metadata", "search_title_unicode", 17),
         ("beatmap_metadata", "search_artist", 17),
@@ -682,7 +399,7 @@ async fn search_text_upgrade(database: &Database) {
     }
     for _ in 0..2 {
         database.migrate().await.unwrap();
-        assert_schema(database, 19).await;
+        assert_schema(database, 17).await;
         let rows = database.connection.query_all_raw(Statement::from_string(
             database.connection.get_database_backend(),
             "SELECT m.*, b.id, b.difficulty_name, b.search_difficulty_name FROM beatmap_metadata m \
@@ -729,7 +446,7 @@ async fn search_text_upgrade(database: &Database) {
                 .unwrap()
                 .is_empty()
         );
-        Migrator::down(&database.connection, Some(3)).await.unwrap();
+        Migrator::down(&database.connection, Some(1)).await.unwrap();
         assert_schema(database, 16).await;
     }
     drop_application_tables(database).await;

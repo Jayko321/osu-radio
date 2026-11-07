@@ -11,29 +11,9 @@ use radio_core::{
 use radio_db::Database;
 use radio_scanner::discovery::{DiscoveryDepth, DiscoveryOptions, discover};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     path::{Path, PathBuf},
 };
-
-pub(super) async fn prepare_durations(
-    imported: &[ImportedBeatmapSet],
-) -> Result<HashMap<String, Option<i64>>> {
-    let mut durations = HashMap::new();
-    for set in imported {
-        for beatmap in &set.beatmaps {
-            if let Some(path) = set.resolved_audio_path(beatmap) {
-                let path = path.to_string_lossy().into_owned();
-                if let std::collections::hash_map::Entry::Vacant(entry) = durations.entry(path) {
-                    let duration =
-                        crate::probe_source_duration(SourceType::Local(entry.key().clone()))
-                            .await?;
-                    entry.insert(duration.and_then(|value| i64::try_from(value).ok()));
-                }
-            }
-        }
-    }
-    Ok(durations)
-}
 
 #[derive(Debug)]
 pub enum RegisterFolderError {
@@ -142,9 +122,8 @@ impl OsuInstallationService<'_> {
         id: i32,
         imported: &[ImportedBeatmapSet],
     ) -> Result<ImportSummary> {
-        let durations = prepare_durations(imported).await?;
         let transaction = self.database.begin().await?;
-        let summary = Self::replace_snapshot_in(&transaction, id, imported, &durations).await?;
+        let summary = Self::replace_snapshot_in(&transaction, id, imported).await?;
         transaction.commit().await?;
         Ok(summary)
     }
@@ -154,10 +133,8 @@ impl OsuInstallationService<'_> {
         id: i32,
         imported: &ImportedSnapshot,
     ) -> Result<ImportSummary> {
-        let durations = prepare_durations(&imported.beatmap_sets).await?;
         let transaction = self.database.begin().await?;
-        let summary =
-            Self::replace_imported_snapshot_in(&transaction, id, imported, &durations).await?;
+        let summary = Self::replace_imported_snapshot_in(&transaction, id, imported).await?;
         transaction.commit().await?;
         Ok(summary)
     }
@@ -166,14 +143,12 @@ impl OsuInstallationService<'_> {
         transaction: &radio_db::Transaction,
         id: i32,
         imported: &ImportedSnapshot,
-        durations: &HashMap<String, Option<i64>>,
     ) -> Result<ImportSummary> {
         Self::replace_snapshot_parts_in(
             transaction,
             id,
             &imported.beatmap_sets,
             &imported.collections,
-            durations,
         )
         .await
     }
@@ -182,9 +157,8 @@ impl OsuInstallationService<'_> {
         transaction: &radio_db::Transaction,
         id: i32,
         imported: &[ImportedBeatmapSet],
-        durations: &HashMap<String, Option<i64>>,
     ) -> Result<ImportSummary> {
-        Self::replace_snapshot_parts_in(transaction, id, imported, &[], durations).await
+        Self::replace_snapshot_parts_in(transaction, id, imported, &[]).await
     }
 
     async fn replace_snapshot_parts_in(
@@ -192,7 +166,6 @@ impl OsuInstallationService<'_> {
         id: i32,
         imported: &[ImportedBeatmapSet],
         collections: &[ImportedCollection],
-        durations: &HashMap<String, Option<i64>>,
     ) -> Result<ImportSummary> {
         UserDataService::lock(transaction.user_data()).await?;
         let installations = transaction.osu_installations();
@@ -232,19 +205,9 @@ impl OsuInstallationService<'_> {
                 };
                 let audio_id = match imported_set.resolved_audio_path(imported_beatmap) {
                     Some(path) => {
-                        let path = path.to_string_lossy().into_owned();
-                        let source = SourceType::Local(path.clone());
+                        let source = SourceType::Local(path.to_string_lossy().into_owned());
                         let id = audio.get_or_insert(&source).await?.id;
-                        if audio_ids.insert(id) {
-                            audio
-                                .set_duration(
-                                    id,
-                                    *durations
-                                        .get(&path)
-                                        .context("Missing prepared audio duration")?,
-                                )
-                                .await?;
-                        }
+                        audio_ids.insert(id);
                         Some(id)
                     }
                     None => None,

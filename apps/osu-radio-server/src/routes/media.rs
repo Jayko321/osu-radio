@@ -1,4 +1,8 @@
-use std::{fs::File, io::Read, path::Path};
+use std::{
+    fs::File,
+    io::{BufReader, Read},
+    path::Path,
+};
 
 use axum::{
     Json,
@@ -7,6 +11,7 @@ use axum::{
     http::header,
     response::{IntoResponse, Response},
 };
+use lofty::{config::ParseOptions, file::AudioFile, probe::Probe};
 use serde::Serialize;
 use tokio::io::AsyncReadExt;
 use tokio_util::io::ReaderStream;
@@ -107,8 +112,20 @@ pub(crate) async fn duration(
         .get(id)
         .await?
         .ok_or_else(|| ApiError::not_found("Audio source not found"))?;
-    let duration_ms = radio_services::probe_source_duration(audio.s_type).await?;
+    let duration_ms = probe_source_duration(audio.s_type).await?;
     Ok(Json(DurationResponse { duration_ms }))
+}
+
+pub(super) async fn probe_source_duration(
+    source: radio_services::model::SourceType,
+) -> Result<Option<u64>, ApiError> {
+    Ok(match source {
+        radio_services::model::SourceType::Local(path)
+        | radio_services::model::SourceType::Copied(path) => {
+            tokio::task::spawn_blocking(move || probe_duration(Path::new(&path))).await?
+        }
+        radio_services::model::SourceType::Online(_) => None,
+    })
 }
 
 fn read_cover(path: &Path) -> Option<Vec<u8>> {
@@ -126,6 +143,27 @@ fn read_cover(path: &Path) -> Option<Vec<u8>> {
     (u64::try_from(bytes.len()).ok()? <= MAX_COVER_BYTES).then_some(bytes)
 }
 
+fn probe_duration(path: &Path) -> Option<u64> {
+    if !std::fs::metadata(path).ok()?.is_file() {
+        return None;
+    }
+    let file = File::open(path).ok()?;
+    if !file.metadata().ok()?.is_file() {
+        return None;
+    }
+    let audio = Probe::new(BufReader::new(file))
+        .guess_file_type()
+        .ok()?
+        .options(ParseOptions::new().read_tags(false))
+        .read()
+        .ok()?;
+    let duration = audio.properties().duration();
+    if duration.is_zero() {
+        return None;
+    }
+    u64::try_from(duration.as_millis()).ok()
+}
+
 #[cfg(all(test, feature = "sqlite"))]
 mod tests {
     use super::*;
@@ -136,6 +174,32 @@ mod tests {
     use radio_core::import_types::{RealmFile, RealmNamedFileUsage};
     use radio_services::model::SourceType;
     use tower::ServiceExt;
+
+    #[cfg(unix)]
+    #[test]
+    fn duration_rejects_fifo_before_a_blocking_open() {
+        let directory = tempfile::tempdir().unwrap();
+        let fifo = directory.path().join("audio-fifo");
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(&fifo)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let probe_path = fifo.clone();
+        let probe = std::thread::spawn(move || {
+            sender.send(probe_duration(&probe_path)).unwrap();
+        });
+        let result = receiver.recv_timeout(std::time::Duration::from_secs(2));
+        if result.is_err() {
+            // Unblock a regressed read-only open so the failed test still joins its thread.
+            drop(File::options().write(true).open(&fifo).unwrap());
+        }
+        probe.join().unwrap();
+        assert_eq!(result.unwrap(), None);
+    }
 
     async fn audio_request(state: AppState, id: i32) -> Response {
         crate::routes::router(state)
@@ -364,6 +428,27 @@ mod tests {
         );
         server.abort();
         let _ = server.await;
+    }
+
+    #[test]
+    fn probes_extensionless_wav_mp3_and_ogg_and_rejects_missing_or_corrupt_media() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("hash-without-extension");
+        for bytes in [
+            include_bytes!("../../tests/fixtures/tone.wav").as_slice(),
+            include_bytes!("../../tests/fixtures/tone.mp3").as_slice(),
+            include_bytes!("../../tests/fixtures/tone.ogg").as_slice(),
+        ] {
+            std::fs::write(&path, bytes).unwrap();
+            let duration = probe_duration(&path).unwrap();
+            assert!((200..=350).contains(&duration), "duration: {duration}");
+        }
+        std::fs::write(&path, b"broken media").unwrap();
+        assert_eq!(probe_duration(&path), None);
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(probe_duration(&path), None);
+        assert_eq!(read_cover(&path), None);
+        assert_eq!(probe_duration(directory.path()), None);
     }
 
     #[tokio::test]

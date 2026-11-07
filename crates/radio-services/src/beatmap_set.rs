@@ -2,10 +2,7 @@ use crate::model::BeatmapSet;
 pub use crate::model::BeatmapSetWithAudio;
 use anyhow::{Context, Result};
 use radio_core::import_types::ImportedBeatmapSet;
-use radio_db::{
-    Database, Transaction,
-    repositories::{BeatmapSetRepository, beatmap_set::DateField},
-};
+use radio_db::{Database, Transaction, repositories::BeatmapSetRepository};
 #[cfg(test)]
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -53,75 +50,20 @@ impl BeatmapSetService<'_> {
     }
 
     async fn matching_audio_ids(transaction: &Transaction, query: &str) -> Result<Vec<i32>> {
-        Self::matching_audio_ids_at(transaction, query, chrono::Utc::now().timestamp_millis()).await
-    }
-
-    #[allow(clippy::too_many_lines)]
-    pub(crate) async fn matching_audio_ids_at(
-        transaction: &Transaction,
-        query: &str,
-        now: i64,
-    ) -> Result<Vec<i32>> {
-        let search = crate::search::parse(query);
-        let mut ids: Option<HashSet<i32>> = None;
-        for (index, condition) in search.conditions.iter().enumerate() {
-            let mut matching: HashSet<_> = transaction
-                .beatmap_sets()
-                .matching_text(&condition.criterion, condition.phrase, |text| {
-                    !condition.phrase
-                        || crate::search::phrase_matches(text, &condition.criterion.value)
-                })
-                .await?
-                .into_iter()
-                .collect();
-            if search.numeric_condition == Some(index)
-                && let Some(online_id) = search.online_id
-            {
-                matching.extend(
-                    transaction
-                        .beatmap_sets()
-                        .matching_online_set_id(online_id)
-                        .await?,
-                );
-            }
-            let current = match &mut ids {
-                Some(ids) => ids,
-                None if condition.negative => ids.insert(
-                    transaction
-                        .beatmap_sets()
-                        .audio_source_ids()
-                        .await?
-                        .into_iter()
-                        .collect(),
-                ),
-                None => ids.insert(matching.clone()),
-            };
-            if condition.negative {
-                current.retain(|id| !matching.contains(id));
-            } else {
-                current.retain(|id| matching.contains(id));
-            }
-            if current.is_empty() {
-                return Ok(Vec::new());
-            }
+        let mut seen = HashSet::new();
+        let words: Vec<_> = query
+            .split_whitespace()
+            .map(str::to_lowercase)
+            .filter(|word| seen.insert(word.clone()))
+            .collect();
+        if words.is_empty() {
+            return transaction.beatmap_sets().audio_source_ids().await;
         }
-        for field in [
-            radio_db::repositories::beatmap_set::NumericField::Bpm,
-            radio_db::repositories::beatmap_set::NumericField::Stars,
-            radio_db::repositories::beatmap_set::NumericField::Length,
-        ] {
-            let criteria: Vec<_> = search
-                .numeric
-                .iter()
-                .copied()
-                .filter(|c| c.field == field)
-                .collect();
-            if criteria.is_empty() {
-                continue;
-            }
+        let mut ids: Option<HashSet<i32>> = None;
+        for word in &words {
             let matching: HashSet<_> = transaction
                 .beatmap_sets()
-                .matching_numeric(field, &criteria)
+                .matching_audio_sources(word)
                 .await?
                 .into_iter()
                 .collect();
@@ -134,65 +76,7 @@ impl BeatmapSetService<'_> {
                 return Ok(Vec::new());
             }
         }
-        for (statuses, negative) in &search.statuses {
-            let matching: HashSet<_> = transaction
-                .beatmap_sets()
-                .matching_status(statuses)
-                .await?
-                .into_iter()
-                .collect();
-            let current = match &mut ids {
-                Some(ids) => ids,
-                None if *negative => ids.insert(
-                    transaction
-                        .beatmap_sets()
-                        .audio_source_ids()
-                        .await?
-                        .into_iter()
-                        .collect(),
-                ),
-                None => ids.insert(matching.clone()),
-            };
-            current.retain(|id| matching.contains(id) != *negative);
-        }
-        for field in [DateField::Ranked, DateField::Submitted] {
-            let criteria: Vec<_> = search
-                .dates
-                .iter()
-                .copied()
-                .filter(|c| c.field == field)
-                .collect();
-            if !criteria.is_empty() {
-                let matching: HashSet<_> = transaction
-                    .beatmap_sets()
-                    .matching_dates(field, &criteria)
-                    .await?
-                    .into_iter()
-                    .collect();
-                if let Some(ids) = &mut ids {
-                    ids.retain(|id| matching.contains(id));
-                } else {
-                    ids = Some(matching);
-                }
-            }
-        }
-        if !search.played.is_empty() || !search.ages.is_empty() {
-            let matching: HashSet<_> = transaction
-                .beatmap_sets()
-                .matching_played(&search.played, &search.ages, now)
-                .await?
-                .into_iter()
-                .collect();
-            if let Some(ids) = &mut ids {
-                ids.retain(|id| matching.contains(id));
-            } else {
-                ids = Some(matching);
-            }
-        }
-        let mut ids: Vec<_> = match ids {
-            Some(ids) => ids.into_iter().collect(),
-            None => transaction.beatmap_sets().audio_source_ids().await?,
-        };
+        let mut ids: Vec<_> = ids.unwrap_or_default().into_iter().collect();
         ids.sort_unstable();
         Ok(ids)
     }

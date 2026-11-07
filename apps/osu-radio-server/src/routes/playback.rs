@@ -10,9 +10,8 @@ use axum::{
 use radio_services::{PlaybackAssignment, PlaybackCommand, QueueError, QueueSnapshot};
 use serde::{Deserialize, Serialize};
 
-use super::tracks::TrackResponse;
+use super::{media::probe_source_duration, tracks::TrackResponse};
 use crate::{error::ApiError, state::AppState};
-use radio_services::probe_source_duration;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 

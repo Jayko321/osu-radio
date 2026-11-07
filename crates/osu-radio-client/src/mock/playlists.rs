@@ -19,7 +19,6 @@ pub struct MockPlaylists {
 
 fn item(id: i32, playlist_id: i32, name: &str, available: bool) -> PlaylistItem {
     PlaylistItem {
-        osu_last_played_at_ms: None,
         id,
         playlist_id,
         last_played_at_ms: None,
@@ -477,10 +476,10 @@ mod tests {
         let mut demo = MockPlaylists::default();
         let playlist = demo.storage.first_mut().unwrap();
         playlist.items[0].title = Some("Zulu".into());
-        playlist.items[0].osu_last_played_at_ms = Some(20);
+        playlist.items[0].last_played_at_ms = Some(20);
         playlist.items[1].title = Some("Alpha".into());
-        playlist.items[1].osu_last_played_at_ms = Some(30);
         playlist.items[2].title = Some("Middle".into());
+        playlist.items[2].last_played_at_ms = Some(30);
         let original = demo.storage.clone();
         assert!(demo.apply(PlaylistAction::Select(Some(1))));
         assert_eq!(
@@ -507,7 +506,7 @@ mod tests {
                 .iter()
                 .map(|item| item.id)
                 .collect::<Vec<_>>(),
-            [2, 1, 3]
+            [3, 1, 2]
         );
         assert_eq!(demo.view.selected_item_id, Some(3));
         assert_eq!(demo.storage, original);
@@ -530,11 +529,11 @@ mod tests {
         assert!(!demo.apply(PlaylistAction::SelectItem(1)));
         assert_eq!(demo.view.selected_item_id, Some(3));
         demo.apply(PlaylistAction::Select(Some(1)));
-        assert_eq!(demo.view.selected_item_id, Some(2));
+        assert_eq!(demo.view.selected_item_id, Some(3));
         demo.apply(PlaylistAction::SelectItem(2));
         assert_eq!(demo.view.selected_item_id, Some(2));
         demo.apply(PlaylistAction::RemoveItem(2));
-        assert_eq!(demo.view.selected_item_id, Some(1));
+        assert_eq!(demo.view.selected_item_id, Some(3));
         demo.apply(PlaylistAction::Create("  ".into()));
         assert_eq!(demo.view.message, "Playlist name cannot be empty.");
         demo.apply(PlaylistAction::Rename {

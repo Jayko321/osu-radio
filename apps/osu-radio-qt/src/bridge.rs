@@ -312,7 +312,7 @@ mod tests {
             ("search", "unused"),
             ("selectTab", "abc"),
             ("galleryDisabled", "1"),
-            ("trackSort", "4"),
+            ("trackSort", "3"),
             ("trackSort", "invalid"),
         ] {
             assert!(action_from_qml(action, value.to_owned()).is_none());
