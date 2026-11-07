@@ -87,11 +87,21 @@ impl AudioSourceRepository<'_> {
             .await?
             .context("audio source missing after insertion")
     }
+
+    pub async fn set_duration(&self, id: i32, duration_ms: Option<i64>) -> Result<()> {
+        audio_source::Entity::update_many()
+            .col_expr(audio_source::Column::DurationMs, Expr::value(duration_ms))
+            .filter(audio_source::Column::Id.eq(id))
+            .exec(&self.connection)
+            .await?;
+        Ok(())
+    }
 }
 
 pub(crate) fn into_model(value: audio_source::Model) -> Result<AudioSource> {
     Ok(AudioSource {
         id: value.id,
         s_type: SourceType::from_parts(&value.kind, value.location)?,
+        duration_ms: value.duration_ms,
     })
 }

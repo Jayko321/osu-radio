@@ -108,12 +108,15 @@ mod tests {
     fn merges_global_audio_with_first_seen_order_lowest_id_labels_and_independent_cover() {
         assert!(from_sets(vec![]).is_empty());
         let audio = |id| AudioSource {
+            duration_ms: None,
             id,
             s_type: SourceType::Local(format!("/audio/{id}")),
         };
         let sets = vec![
             BeatmapSetWithAudio {
                 beatmap_set: BeatmapSet {
+                    ranked_at_ms: None,
+                    submitted_at_ms: None,
                     id: 100,
                     installation_id: 7,
                     online_id: Some(1000),
@@ -129,6 +132,8 @@ mod tests {
             },
             BeatmapSetWithAudio {
                 beatmap_set: BeatmapSet {
+                    ranked_at_ms: None,
+                    submitted_at_ms: None,
                     id: 200,
                     installation_id: 8,
                     online_id: None,

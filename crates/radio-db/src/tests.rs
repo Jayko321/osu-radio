@@ -153,6 +153,59 @@ async fn missing_settings_do_not_recreate_the_singleton(database: &Database) {
 }
 
 /// Historical fixtures insert only the original columns, independently of current entities.
+async fn insert_legacy_set(
+    database: &Database,
+    installation_id: i32,
+    imported: &ImportedBeatmapSet,
+) -> crate::model::BeatmapSet {
+    use sea_orm::Statement;
+    #[cfg(feature = "postgres")]
+    let placeholders = "$1,$2,$3";
+    #[cfg(feature = "sqlite")]
+    let placeholders = "?,?,?";
+    let row = database.connection.query_one_raw(Statement::from_sql_and_values(
+        database.connection.get_database_backend(),
+        format!("INSERT INTO beatmap_sets (installation_id,online_id,hash) VALUES ({placeholders}) RETURNING id"),
+        [installation_id.into(), imported.online_id.into(), imported.hash.clone().into()],
+    )).await.unwrap().unwrap();
+    crate::model::BeatmapSet {
+        id: row.try_get("", "id").unwrap(),
+        installation_id,
+        online_id: imported.online_id,
+        hash: imported.hash.clone(),
+        ranked_at_ms: None,
+        submitted_at_ms: None,
+    }
+}
+
+async fn insert_legacy_audio(
+    database: &Database,
+    source: &SourceType,
+) -> crate::model::AudioSource {
+    use sea_orm::Statement;
+    #[cfg(feature = "postgres")]
+    let placeholders = "$1,$2";
+    #[cfg(feature = "sqlite")]
+    let placeholders = "?,?";
+    let row = database
+        .connection
+        .query_one_raw(Statement::from_sql_and_values(
+            database.connection.get_database_backend(),
+            format!(
+                "INSERT INTO audio_sources (kind,location) VALUES ({placeholders}) RETURNING id"
+            ),
+            [source.kind().into(), source.location().into()],
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    crate::model::AudioSource {
+        id: row.try_get("", "id").unwrap(),
+        s_type: source.clone(),
+        duration_ms: None,
+    }
+}
+
 async fn insert_legacy_beatmap(
     database: &Database,
     set_id: i32,
@@ -178,6 +231,8 @@ async fn insert_legacy_beatmap(
     let row = database.connection.query_one_raw(Statement::from_sql_and_values(database.connection.get_database_backend(),
         format!("INSERT INTO beatmaps (beatmap_set_id,difficulty_name,bpm,hash,metadata_hash,audio_source_id,background_path) VALUES ({placeholders}) RETURNING id"), values)).await?.unwrap();
     Ok(crate::model::Beatmap {
+        stars: None,
+        status: None,
         osu_last_played_at_ms: None,
         id: row.try_get("", "id")?,
         beatmap_set_id: set_id,
@@ -211,6 +266,8 @@ async fn read_v11_beatmap(database: &Database, id: i32) -> Option<crate::model::
         format!("SELECT id,beatmap_set_id,difficulty_name,bpm,hash,md5_hash,metadata_hash,audio_source_id,background_path FROM beatmaps WHERE id={id}"),
     )).await.unwrap()?;
     Some(crate::model::Beatmap {
+        stars: None,
+        status: None,
         osu_last_played_at_ms: None,
         id: row.try_get("", "id").unwrap(),
         beatmap_set_id: row.try_get("", "beatmap_set_id").unwrap(),
@@ -254,6 +311,8 @@ fn metadata(title: &str) -> ImportedMetadata {
 
 fn snapshot(title: &str, path: &str) -> Vec<ImportedBeatmapSet> {
     vec![ImportedBeatmapSet {
+        ranked_at_ms: None,
+        submitted_at_ms: None,
         source: OsuKind::Lazer,
         online_id: Some(23),
         hash: Some(format!("set-{title}")),
@@ -267,6 +326,8 @@ fn snapshot(title: &str, path: &str) -> Vec<ImportedBeatmapSet> {
         beatmaps: ["Easy", "Hard"]
             .into_iter()
             .map(|difficulty| ImportedBeatmap {
+                stars: None,
+                status: None,
                 osu_last_played_at_ms: None,
                 md5_hash: None,
                 difficulty_name: Some(difficulty.to_owned()),
@@ -380,6 +441,7 @@ async fn repository_transaction_contracts(database: &Database) {
         .await
         .unwrap();
     transaction.commit().await.unwrap();
+    audio_duration_contract(database, &audio, set.id).await;
     assert!(
         beatmap_metadata::Entity::delete_by_id(metadata.hash)
             .exec(&database.connection)
@@ -430,6 +492,62 @@ async fn repository_transaction_contracts(database: &Database) {
     database.beatmap_metadata().cleanup().await.unwrap();
     database.audio_sources().cleanup().await.unwrap();
     assert_counts(database, [0, 0, 0, 0]).await;
+}
+
+async fn audio_duration_contract(
+    database: &Database,
+    audio: &crate::model::AudioSource,
+    set_id: i32,
+) {
+    database
+        .audio_sources()
+        .set_duration(audio.id, Some(123_456))
+        .await
+        .unwrap();
+    let reused = database
+        .audio_sources()
+        .get_or_insert(&audio.s_type)
+        .await
+        .unwrap();
+    assert_eq!(reused.id, audio.id);
+    assert_eq!(reused.duration_ms, Some(123_456));
+    let listed = database
+        .beatmap_sets()
+        .all_with_audio_sources()
+        .await
+        .unwrap();
+    let listed_set = listed
+        .iter()
+        .find(|listed| listed.beatmap_set.id == set_id)
+        .unwrap();
+    assert_eq!(listed_set.audio_sources[0], reused);
+    let transaction = database.begin().await.unwrap();
+    transaction
+        .audio_sources()
+        .set_duration(audio.id, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        transaction
+            .audio_sources()
+            .get(audio.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .duration_ms,
+        None
+    );
+    transaction.rollback().await.unwrap();
+    assert_eq!(
+        database
+            .audio_sources()
+            .get(audio.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .duration_ms,
+        Some(123_456)
+    );
 }
 
 #[cfg(feature = "sqlite")]
@@ -501,7 +619,7 @@ async fn concurrent_schema_changes(database: &Database, url: &str) {
                 .await
                 .unwrap()
                 .len(),
-            18
+            19
         );
         let (reset, migrate) = tokio::join!(database.reset(), other.migrate());
         reset.unwrap();

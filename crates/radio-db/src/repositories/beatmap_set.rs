@@ -12,32 +12,410 @@ use crate::{
     model::{AudioSource, BeatmapDetails, BeatmapSet, BeatmapSetWithAudio, SourceType},
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextField {
+    Any,
+    Artist,
+    Title,
+    Mapper,
+    Difficulty,
+    Source,
+    Tag,
+}
+
+#[derive(Debug)]
+pub struct TextCriterion {
+    pub field: TextField,
+    pub value: String,
+    pub exact: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumericField {
+    Bpm,
+    Stars,
+    Length,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Comparison {
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum NumericValue {
+    Number(f64),
+    Milliseconds { whole: i64, fractional: bool },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct NumericCriterion {
+    pub field: NumericField,
+    pub comparison: Comparison,
+    pub value: NumericValue,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DateField {
+    Ranked,
+    Submitted,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DateCriterion {
+    pub field: DateField,
+    pub comparison: Comparison,
+    pub start: i64,
+    pub end: i64,
+}
+
+#[derive(FromQueryResult)]
+struct TextRow {
+    id: i32,
+    value: String,
+}
+
+const fn comparison_sql(comparison: Comparison) -> &'static str {
+    match comparison {
+        Comparison::Equal => "=",
+        Comparison::NotEqual => "<>",
+        Comparison::Less => "<",
+        Comparison::LessEqual => "<=",
+        Comparison::Greater => ">",
+        Comparison::GreaterEqual => ">=",
+    }
+}
+
 pub struct BeatmapSetRepository<'a> {
     pub(crate) connection: sea_orm::DatabaseExecutor<'a>,
 }
 
 impl BeatmapSetRepository<'_> {
-    /// Literal matches on Rust-normalized text; return IDs rather than library text.
-    pub async fn matching_audio_sources(&self, word: &str) -> Result<Vec<i32>> {
+    /// Streams only SQL-matched values for phrase verification; IDs are global audio IDs.
+    pub async fn matching_text<F>(
+        &self,
+        criterion: &TextCriterion,
+        verify_values: bool,
+        mut verify: F,
+    ) -> Result<Vec<i32>>
+    where
+        F: FnMut(&str) -> bool + Send,
+    {
         #[cfg(feature = "sqlite")]
         let (parameter, contains) = ("?", "instr");
         #[cfg(feature = "postgres")]
         let (parameter, contains) = ("$1", "strpos");
+        let fields: &[&str] = match criterion.field {
+            TextField::Any => &[
+                "m.search_artist",
+                "m.search_artist_unicode",
+                "m.search_title",
+                "m.search_title_unicode",
+                "m.search_mapper",
+                "m.search_source",
+                "b.search_difficulty_name",
+                "t.name",
+            ],
+            TextField::Artist => &["m.search_artist", "m.search_artist_unicode"],
+            TextField::Title => &["m.search_title", "m.search_title_unicode"],
+            TextField::Mapper => &["m.search_mapper"],
+            TextField::Source => &["m.search_source"],
+            TextField::Difficulty => &["b.search_difficulty_name"],
+            TextField::Tag => &["t.name"],
+        };
+        let predicate = |field: &str| {
+            if criterion.exact {
+                format!("{field} = needle.word")
+            } else {
+                format!("{contains}({field}, needle.word) > 0")
+            }
+        };
+        let branches = fields.iter().map(|field| {
+            let joins = if *field == "t.name" {
+                "JOIN beatmap_set_tags st ON st.beatmap_set_id = b.beatmap_set_id JOIN tags t ON t.id = st.tag_id"
+            } else if field.starts_with("m.") {
+                "JOIN beatmap_metadata m ON m.hash = b.metadata_hash"
+            } else { "" };
+            let value = if verify_values { format!(", {field} AS value") } else { String::new() };
+            format!("SELECT b.audio_source_id AS id{value} FROM beatmaps b {joins}, needle WHERE b.audio_source_id IS NOT NULL AND {}", predicate(field))
+        }).collect::<Vec<_>>().join(" UNION ALL ");
         let statement = sea_orm::Statement::from_sql_and_values(
             self.connection.get_database_backend(),
             format!(
-                "WITH needle(word) AS (VALUES (CAST({parameter} AS TEXT))) \
-                 SELECT DISTINCT audio_source_id AS id FROM beatmaps \
-                 WHERE audio_source_id IS NOT NULL AND (\
-                   id IN (SELECT id FROM beatmaps, needle WHERE {contains}(search_difficulty_name, word) > 0) \
-                   OR metadata_hash IN (SELECT hash FROM beatmap_metadata, needle WHERE \
-                     {contains}(search_title, word) > 0 OR {contains}(search_title_unicode, word) > 0 \
-                     OR {contains}(search_artist, word) > 0 OR {contains}(search_artist_unicode, word) > 0) \
-                   OR beatmap_set_id IN (SELECT beatmap_set_id FROM beatmap_set_tags WHERE tag_id IN \
-                     (SELECT id FROM tags, needle WHERE {contains}(name, word) > 0))) \
-                 ORDER BY audio_source_id"
+                "WITH needle(word) AS (VALUES (CAST({parameter} AS TEXT))) SELECT DISTINCT * FROM ({branches}) AS matches"
             ),
-            [word.into()],
+            [criterion.value.clone().into()],
+        );
+        let mut ids = HashSet::new();
+        if verify_values {
+            super::query_each::<TextRow>(&self.connection, statement, |row| {
+                if verify(&row.value) {
+                    ids.insert(row.id);
+                }
+                Ok(())
+            })
+            .await?;
+        } else {
+            super::query_each::<IdRow>(&self.connection, statement, |row| {
+                ids.insert(row.id);
+                Ok(())
+            })
+            .await?;
+        }
+        let mut ids: Vec<_> = ids.into_iter().collect();
+        ids.sort_unstable();
+        Ok(ids)
+    }
+
+    /// Backwards-compatible literal free-text search.
+    pub async fn matching_audio_sources(&self, word: &str) -> Result<Vec<i32>> {
+        self.matching_text(
+            &TextCriterion {
+                field: TextField::Any,
+                value: word.to_owned(),
+                exact: false,
+            },
+            false,
+            |_| true,
+        )
+        .await
+    }
+
+    pub async fn matching_online_set_id(&self, online_id: i32) -> Result<Vec<i32>> {
+        #[cfg(feature = "sqlite")]
+        let parameter = "?";
+        #[cfg(feature = "postgres")]
+        let parameter = "$1";
+        let statement = sea_orm::Statement::from_sql_and_values(
+            self.connection.get_database_backend(),
+            format!(
+                "SELECT DISTINCT b.audio_source_id AS id FROM beatmaps b JOIN beatmap_sets s ON s.id = b.beatmap_set_id WHERE b.audio_source_id IS NOT NULL AND s.online_id = {parameter}"
+            ),
+            [online_id.into()],
+        );
+        let mut ids = Vec::new();
+        super::query_each::<IdRow>(&self.connection, statement, |row| {
+            ids.push(row.id);
+            Ok(())
+        })
+        .await?;
+        Ok(ids)
+    }
+
+    /// Conditions for one field apply to the same known source value.
+    pub async fn matching_numeric(
+        &self,
+        field: NumericField,
+        criteria: &[NumericCriterion],
+    ) -> Result<Vec<i32>> {
+        // A float already equal to a hundredth must not fall one cent below it after multiplication.
+        #[cfg(feature = "sqlite")]
+        let stars = "CASE WHEN ABS(b.stars) >= 90071992547409.92 THEN b.stars WHEN b.stars = ROUND(b.stars * 100.0) / 100.0 THEN b.stars ELSE (CAST(b.stars * 100 AS INTEGER) - CASE WHEN b.stars * 100 < CAST(b.stars * 100 AS INTEGER) THEN 1 ELSE 0 END) / 100.0 END";
+        #[cfg(feature = "postgres")]
+        let stars = "CASE WHEN ABS(b.stars) >= 90071992547409.92 THEN b.stars WHEN b.stars = ROUND(b.stars * 100.0) / 100.0 THEN b.stars ELSE FLOOR(b.stars * 100.0) / 100.0 END";
+        let (column, source) = match field {
+            NumericField::Bpm => ("b.bpm", "beatmaps b"),
+            NumericField::Stars => (stars, "beatmaps b"),
+            NumericField::Length => (
+                "a.duration_ms",
+                "beatmaps b JOIN audio_sources a ON a.id = b.audio_source_id",
+            ),
+        };
+        let known = match field {
+            NumericField::Bpm => "b.bpm",
+            NumericField::Stars => "b.stars",
+            NumericField::Length => "a.duration_ms",
+        };
+        let mut values: Vec<sea_orm::Value> = Vec::new();
+        let mut predicates = vec![format!("{known} IS NOT NULL")];
+        for criterion in criteria {
+            let mut bind = |value: sea_orm::Value| {
+                values.push(value);
+                #[cfg(feature = "sqlite")]
+                {
+                    "?".to_owned()
+                }
+                #[cfg(feature = "postgres")]
+                {
+                    format!("${}", values.len())
+                }
+            };
+            let op = criterion.comparison;
+            let predicate = match criterion.value {
+                NumericValue::Number(n)
+                    if field == NumericField::Bpm
+                        && matches!(op, Comparison::Equal | Comparison::NotEqual) =>
+                {
+                    let lower = bind((n - 0.5).into());
+                    let upper = bind((n + 0.5).into());
+                    if op == Comparison::Equal {
+                        format!("{column} BETWEEN {lower} AND {upper}")
+                    } else {
+                        format!("({column} < {lower} OR {column} > {upper})")
+                    }
+                }
+                NumericValue::Number(n) => {
+                    format!("{column} {} {}", comparison_sql(op), bind(n.into()))
+                }
+                NumericValue::Milliseconds { whole, fractional } => match (op, fractional) {
+                    (Comparison::Equal, true) => "1 = 0".into(),
+                    (Comparison::NotEqual, true) => "1 = 1".into(),
+                    (Comparison::Less, true) => format!("{column} <= {}", bind(whole.into())),
+                    (Comparison::GreaterEqual, true) => {
+                        format!("{column} > {}", bind(whole.into()))
+                    }
+                    _ => format!("{column} {} {}", comparison_sql(op), bind(whole.into())),
+                },
+            };
+            predicates.push(predicate);
+        }
+        let sql = format!(
+            "SELECT DISTINCT b.audio_source_id AS id FROM {source} WHERE b.audio_source_id IS NOT NULL AND {}",
+            predicates.join(" AND ")
+        );
+        let statement = sea_orm::Statement::from_sql_and_values(
+            self.connection.get_database_backend(),
+            sql,
+            values,
+        );
+        let mut ids = Vec::new();
+        super::query_each::<IdRow>(&self.connection, statement, |row| {
+            ids.push(row.id);
+            Ok(())
+        })
+        .await?;
+        Ok(ids)
+    }
+
+    pub async fn matching_status(&self, statuses: &[String]) -> Result<Vec<i32>> {
+        let mut values = Vec::new();
+        let mut predicates = Vec::new();
+        for status in statuses {
+            if status == "none" {
+                predicates.push("b.status IS NULL".to_owned());
+            } else {
+                values.push(status.clone().into());
+                #[cfg(feature = "sqlite")]
+                let placeholder = "?".to_owned();
+                #[cfg(feature = "postgres")]
+                let placeholder = format!("${}", values.len());
+                predicates.push(format!("b.status = {placeholder}"));
+            }
+        }
+        self.search_ids(format!("SELECT DISTINCT b.audio_source_id AS id FROM beatmaps b WHERE b.audio_source_id IS NOT NULL AND ({})", predicates.join(" OR ")), values).await
+    }
+
+    pub async fn matching_dates(
+        &self,
+        field: DateField,
+        criteria: &[DateCriterion],
+    ) -> Result<Vec<i32>> {
+        let column = match field {
+            DateField::Ranked => "s.ranked_at_ms",
+            DateField::Submitted => "s.submitted_at_ms",
+        };
+        let mut values = Vec::new();
+        let mut predicates = vec![format!("{column} IS NOT NULL")];
+        for criterion in criteria {
+            let mut bind = |v: i64| {
+                values.push(v.into());
+                #[cfg(feature = "sqlite")]
+                {
+                    "?".to_owned()
+                }
+                #[cfg(feature = "postgres")]
+                {
+                    format!("${}", values.len())
+                }
+            };
+            let predicate = match criterion.comparison {
+                Comparison::Equal => format!(
+                    "({column} >= {} AND {column} < {})",
+                    bind(criterion.start),
+                    bind(criterion.end)
+                ),
+                Comparison::NotEqual => format!(
+                    "({column} < {} OR {column} >= {})",
+                    bind(criterion.start),
+                    bind(criterion.end)
+                ),
+                Comparison::Less => format!("{column} < {}", bind(criterion.start)),
+                Comparison::LessEqual => format!("{column} < {}", bind(criterion.end)),
+                Comparison::Greater => format!("{column} >= {}", bind(criterion.end)),
+                Comparison::GreaterEqual => format!("{column} >= {}", bind(criterion.start)),
+            };
+            predicates.push(predicate);
+        }
+        self.search_ids(format!("SELECT DISTINCT b.audio_source_id AS id FROM beatmaps b JOIN beatmap_sets s ON s.id = b.beatmap_set_id WHERE b.audio_source_id IS NOT NULL AND {}", predicates.join(" AND ")), values).await
+    }
+
+    pub async fn matching_played(
+        &self,
+        played: &[bool],
+        ages: &[(Comparison, i64, bool)],
+        now: i64,
+    ) -> Result<Vec<i32>> {
+        let mut values: Vec<sea_orm::Value> = Vec::new();
+        let mut predicates = Vec::new();
+        for value in played {
+            predicates.push(
+                if *value {
+                    "MAX(b.osu_last_played_at_ms) IS NOT NULL"
+                } else {
+                    "MAX(b.osu_last_played_at_ms) IS NULL"
+                }
+                .to_owned(),
+            );
+        }
+        for &(op, whole, fractional) in ages {
+            predicates.push("MAX(b.osu_last_played_at_ms) IS NOT NULL".to_owned());
+            // Compare the timestamp against now minus the age, reversing the comparison.
+            let Some(threshold) = now.checked_sub(whole) else {
+                if matches!(
+                    op,
+                    Comparison::Equal | Comparison::Greater | Comparison::GreaterEqual
+                ) {
+                    predicates.push("1 = 0".into());
+                }
+                continue;
+            };
+            let relation = match (op, fractional) {
+                (Comparison::Equal, true) => {
+                    predicates.push("1 = 0".into());
+                    continue;
+                }
+                (Comparison::NotEqual, true) => {
+                    continue;
+                }
+                (Comparison::Equal, false) => "=",
+                (Comparison::NotEqual, false) => "<>",
+                (Comparison::Less, true) | (Comparison::LessEqual, _) => ">=",
+                (Comparison::Less, false) => ">",
+                (Comparison::Greater, _) | (Comparison::GreaterEqual, true) => "<",
+                (Comparison::GreaterEqual, false) => "<=",
+            };
+            values.push(threshold.into());
+            #[cfg(feature = "sqlite")]
+            let placeholder = "?".to_owned();
+            #[cfg(feature = "postgres")]
+            let placeholder = format!("${}", values.len());
+            predicates.push(format!(
+                "MAX(b.osu_last_played_at_ms) {relation} {placeholder}"
+            ));
+        }
+        self.search_ids(format!("SELECT b.audio_source_id AS id FROM beatmaps b WHERE b.audio_source_id IS NOT NULL GROUP BY b.audio_source_id HAVING {}", predicates.join(" AND ")), values).await
+    }
+
+    async fn search_ids(&self, sql: String, values: Vec<sea_orm::Value>) -> Result<Vec<i32>> {
+        let statement = sea_orm::Statement::from_sql_and_values(
+            self.connection.get_database_backend(),
+            sql,
+            values,
         );
         let mut ids = Vec::new();
         super::query_each::<IdRow>(&self.connection, statement, |row| {
@@ -86,6 +464,8 @@ impl BeatmapSetRepository<'_> {
             beatmap_set::ActiveModel {
                 online_id: Set(imported.online_id),
                 hash: Set(imported.hash.clone()),
+                ranked_at_ms: Set(imported.ranked_at_ms),
+                submitted_at_ms: Set(imported.submitted_at_ms),
                 installation_id: Set(installation_id),
                 ..Default::default()
             }
@@ -190,6 +570,8 @@ impl BeatmapSetRepository<'_> {
                 (beatmap_set::Entity, SetColumn::Id),
                 (beatmap_set::Entity, SetColumn::OnlineId),
                 (beatmap_set::Entity, SetColumn::Hash),
+                (beatmap_set::Entity, SetColumn::RankedAtMs),
+                (beatmap_set::Entity, SetColumn::SubmittedAtMs),
                 (beatmap_set::Entity, SetColumn::InstallationId),
             ])
             .expr_as(
@@ -203,6 +585,10 @@ impl BeatmapSetRepository<'_> {
             .expr_as(
                 Expr::col((audio_source::Entity, Audio::Location)),
                 Alias::new("audio_location"),
+            )
+            .expr_as(
+                Expr::col((audio_source::Entity, Audio::DurationMs)),
+                Alias::new("audio_duration_ms"),
             )
             .expr_as(
                 Expr::col((beatmap::Entity, Map::OsuLastPlayedAtMs)),
@@ -250,6 +636,8 @@ impl BeatmapSetRepository<'_> {
                     id: row.id,
                     online_id: row.online_id,
                     hash: row.hash,
+                    ranked_at_ms: row.ranked_at_ms,
+                    submitted_at_ms: row.submitted_at_ms,
                     installation_id: row.installation_id,
                 },
                 has_multiple_audio_sources: false,
@@ -266,6 +654,7 @@ impl BeatmapSetRepository<'_> {
                         row.audio_location
                             .context("joined audio source has no location")?,
                     )?,
+                    duration_ms: row.audio_duration_ms,
                 });
             }
             if let Some(id) = row.map_id {
@@ -312,10 +701,13 @@ struct SetWithAudio {
     id: i32,
     online_id: Option<i32>,
     hash: Option<String>,
+    ranked_at_ms: Option<i64>,
+    submitted_at_ms: Option<i64>,
     installation_id: i32,
     audio_id: Option<i32>,
     audio_kind: Option<String>,
     audio_location: Option<String>,
+    audio_duration_ms: Option<i64>,
     map_id: Option<i32>,
     osu_last_played_at_ms: Option<i64>,
     difficulty_name: Option<String>,
@@ -331,6 +723,8 @@ fn into_model(value: beatmap_set::Model) -> BeatmapSet {
         id: value.id,
         online_id: value.online_id,
         hash: value.hash,
+        ranked_at_ms: value.ranked_at_ms,
+        submitted_at_ms: value.submitted_at_ms,
         installation_id: value.installation_id,
     }
 }

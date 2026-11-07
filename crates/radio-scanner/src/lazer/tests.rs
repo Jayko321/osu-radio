@@ -707,9 +707,17 @@ async fn imports_real_realm_fixtures_with_the_production_helper() {
     .await
     .unwrap();
     assert!(without.collections.is_empty());
+    assert_eq!(
+        (
+            without.beatmap_sets[0].ranked_at_ms,
+            without.beatmap_sets[0].submitted_at_ms
+        ),
+        (None, None)
+    );
     assert!(without.beatmap_sets[0].files.is_empty());
     for map in &without.beatmap_sets[0].beatmaps {
         assert_eq!(map.bpm, None);
+        assert_eq!((map.stars, map.status), (None, None));
         assert!(map.metadata.is_none());
     }
     for filename in ["invalid-md5.realm", "missing-name.realm"] {
@@ -742,11 +750,23 @@ async fn real_realm_metadata_and_file_references_round_trip_without_modifying_th
     assert_eq!(set.online_id, None, "overflowing Realm long must not wrap");
     assert_eq!(set.hash.as_deref(), Some("rich-set"));
     assert_eq!(set.beatmaps.len(), 4);
-    assert!(
-        set.beatmaps
-            .iter()
-            .all(|map| map.osu_last_played_at_ms.is_none())
+    use radio_core::import_types::BeatmapStatus;
+    assert_eq!(set.ranked_at_ms, Some(1_600_000_000_456));
+    assert_eq!(set.submitted_at_ms, Some(1_500_000_000_123));
+    assert_eq!(
+        set.beatmaps[0].osu_last_played_at_ms,
+        Some(1_700_000_000_123)
     );
+    assert_eq!(
+        (set.beatmaps[0].stars, set.beatmaps[0].status),
+        (Some(5.25), Some(BeatmapStatus::Loved))
+    );
+    for map in &set.beatmaps[1..] {
+        assert_eq!(
+            (map.stars, map.status, map.osu_last_played_at_ms),
+            (None, None, None)
+        );
+    }
     let map = &set.beatmaps[0];
     assert_eq!(map.difficulty_name.as_deref(), Some("Hard"));
     assert_eq!(map.bpm, Some(180.5));
@@ -1000,4 +1020,28 @@ fn helper_selection_order_is_override_then_installed_then_built() {
             .to_string()
             .contains("empty")
     );
+}
+
+#[test]
+fn maps_lazer_status_codes_and_unknown_stars() {
+    use radio_core::import_types::BeatmapStatus;
+    for (code, expected) in [
+        (-4, Some(BeatmapStatus::LocallyModified)),
+        (-3, None),
+        (-2, Some(BeatmapStatus::Graveyard)),
+        (-1, Some(BeatmapStatus::Wip)),
+        (0, Some(BeatmapStatus::Pending)),
+        (1, Some(BeatmapStatus::Ranked)),
+        (2, Some(BeatmapStatus::Approved)),
+        (3, Some(BeatmapStatus::Qualified)),
+        (4, Some(BeatmapStatus::Loved)),
+        (5, None),
+    ] {
+        let line = format!(r#"{{"source":"Lazer","beatmaps":[{{"stars":-1,"status":{code}}}]}}"#);
+        let set = parse_lazer_beatmap_set_line(&line).unwrap();
+        assert_eq!(
+            (set.beatmaps[0].stars, set.beatmaps[0].status),
+            (None, expected)
+        );
+    }
 }

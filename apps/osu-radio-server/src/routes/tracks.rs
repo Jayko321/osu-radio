@@ -64,7 +64,7 @@ impl From<radio_services::LibraryTrack> for TrackResponse {
 #[cfg_attr(feature = "docs", utoipa::path(
     get, path = "/api/tracks", tag = "tracks",
     description = "One row per global audio source, in library order, with every related difficulty. Metadata comes from the lowest beatmap ID; cover from the lowest ID with a stored reference.",
-    params(("q" = Option<String>, Query, description = "Literal case-insensitive words matched across tags, metadata and difficulties of the same audio; blank returns all.")),
+    params(("q" = Option<String>, Query, description = "Case-insensitive text search: words, artist/title/creator/author/mapper/diff/source/tag conditions with =, :, != or !:, quoted phrases and quoted exact values ending in !; bpm/star/stars/sr/length accept numeric comparisons; length accepts seconds, m:ss, h:mm:ss, ms/s/m/h. status accepts =, :, !=, !: and ranked/approved/qualified/loved/pending/wip/graveyard/locallymodified/none (comma means OR; negative excludes any matching difficulty); ranked/submitted/created and lastplayed accept =, !=, <, <=, >, >= and : aliases. Dates use UTC year, year-month or year-month-day with -, / or .; equality covers the period. played accepts true/false, yes/no, 1/0 with =, :, !=, !:. lastplayed compares age in s/m/h/d/w (default days), using latest imported osu! play date; unknown dates never match numeric comparisons. Conditions combine with AND; invalid fragments remain literal. A single positive free number also matches online set ID. Blank returns all.")),
     responses((status = OK, body = Vec<TrackResponse>), (status = INTERNAL_SERVER_ERROR, body = crate::error::ApiErrorBody))
 ))]
 pub(crate) async fn list_tracks(
@@ -186,11 +186,22 @@ mod tests {
                 .await
                 .unwrap();
         });
-        for query in ["", "rock", "曲", "a+b%_&?# hard", "missing"] {
+        for query in [
+            "",
+            "rock",
+            "曲",
+            "a+b%_&?# hard",
+            "missing",
+            r#"title="曲" artist!=no tag:a+b%_&?# bpm>=180 bpm<181"#,
+        ] {
             let old = api.search_beatmap_sets(query).await.unwrap();
             let new = api.search_tracks(query).await.unwrap();
             let tracks: Vec<_> = new.into_iter().map(Track::from).collect();
             assert_eq!(tracks, library_tracks(&old), "{query}");
+            if query.starts_with("title=") {
+                assert_eq!(tracks.len(), 1);
+                assert_eq!(tracks[0].difficulties.len(), 4);
+            }
             if query.is_empty() {
                 assert_eq!(tracks.len(), 2);
                 assert_eq!(tracks[0].difficulties.len(), 4);

@@ -1675,6 +1675,40 @@ QtObject {
             break;
         }
     }
+    function realSearchProbe(): void {
+        if (!bridge.connected || bridge.library.libraryLoading) return;
+        const search = findChild(window.contentItem, "songSearch");
+        const list = findChild(window.contentItem, "songList");
+        switch (stage) {
+        case 0:
+            if (bridge.library.tracks.trackCount !== 3) return;
+            bridge.library.selectTrack(1);
+            findChild(window.contentItem, "trackSortMenu").choose(1);
+            stage = 1;
+            break;
+        case 1:
+            if (bridge.library.trackSortIndex !== 1 || bridge.player.selectedAudioId !== 1 || !list.itemAtIndex(2)) return;
+            check(list.itemAtIndex(0).audioId === 2 && list.itemAtIndex(1).audioId === 1 && list.itemAtIndex(2).audioId === 3, "real backend artist order");
+            search.text = 'artist="xi" freedom';
+            stage = 2;
+            break;
+        case 2:
+            if (bridge.library.tracks.trackCount !== 1 || !list.itemAtIndex(0) || list.itemAtIndex(0).audioId !== 1) return;
+            check(bridge.player.selectedAudioId === 1 && bridge.library.trackSortIndex === 1, "filtered selection and sort retained");
+            check(list.itemAtIndex(0).subtitle.includes("Easy") && list.itemAtIndex(0).subtitle.includes("Hard"), "all difficulties returned");
+            check(bridge.player.currentAudioId === -1 && bridge.player.loadingAudioId === -1, "search starts no playback");
+            findChild(search, "clearSearchButton").clicked();
+            stage = 3;
+            break;
+        case 3:
+            if (bridge.library.tracks.trackCount !== 3 || !list.itemAtIndex(2)) return;
+            check(search.text === "" && bridge.library.trackSortIndex === 1 && bridge.player.selectedAudioId === 1, "clear retains sort and selection");
+            check(list.itemAtIndex(0).audioId === 2 && list.itemAtIndex(1).audioId === 1 && list.itemAtIndex(2).audioId === 3, "clear restores artist order");
+            check(bridge.player.currentAudioId === -1 && bridge.player.loadingAudioId === -1, "clear starts no playback");
+            finish();
+            break;
+        }
+    }
     property var menuRow: null
     function playbackProbe(): void {
         if (!bridge.connected || bridge.library.libraryLoading || !bridge.settings.audioSettingsLoaded) return;
@@ -3556,6 +3590,7 @@ QtObject {
         if (testCase.startsWith("names-")) { trackNamePreferencesProbe(); return; }
         if (testCase === "folders") { folderProbe(); return; }
         if (testCase === "search") { searchProbe(); return; }
+        if (testCase === "search-real") { realSearchProbe(); return; }
         if (testCase === "settings-search") { settingsSearchProbe(); return; }
         if (testCase === "playback") { playbackProbe(); return; }
         if (testCase === "queue") { queueProbe(); return; }

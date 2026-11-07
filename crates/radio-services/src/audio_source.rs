@@ -17,6 +17,10 @@ impl AudioSourceService<'_> {
         self.repository.get_or_insert(source).await
     }
 
+    pub(crate) async fn set_duration(&self, id: i32, duration_ms: Option<i64>) -> Result<()> {
+        self.repository.set_duration(id, duration_ms).await
+    }
+
     pub(crate) async fn cleanup(&self) -> Result<()> {
         self.repository.cleanup().await
     }

@@ -1003,6 +1003,45 @@ fn real_backend_uses_a_disposable_database() {
 #[cfg(unix)]
 #[test]
 #[ignore = "needs cargo build -p osu-radio-server --locked (SQLite)"]
+fn real_backend_songs_search_preserves_sort_and_selection() {
+    let directory = tempfile::tempdir().expect("isolated search backend directory");
+    let server = Path::new(env!("CARGO_BIN_EXE_osu-radio-qt")).with_file_name("osu-radio-server");
+    assert!(
+        server.is_file(),
+        "build the server before running this test"
+    );
+    assert_probe(&run(&[], "offscreen", directory.path(), &server, "empty"));
+    let seeded = Command::new("python3").args(["-c", r"
+import json, sqlite3
+with sqlite3.connect('library.sqlite') as db:
+    db.execute('PRAGMA foreign_keys=ON')
+    db.execute('INSERT INTO osu_installations (id,user_data_id,kind,root_path,marker_path) VALUES (1,1,?,?,?)', ('stable',json.dumps('/test/osu'),json.dumps('/test/osu/osu!.db')))
+    for identifier, title, artist in [(1,'Z freedom','xi'),(2,'A freedom','alpha'),(3,'M other','zeta')]:
+        db.execute('INSERT INTO beatmap_sets (id,installation_id) VALUES (?,1)',(identifier,))
+        db.execute('INSERT INTO beatmap_metadata (hash,title,artist,audio_file,search_title,search_artist,search_title_unicode,search_artist_unicode,search_mapper,search_source) VALUES (?,?,?,?,?,?,?,?,?,?)',(str(identifier),title,artist,'audio.mp3',title.lower(),artist.lower(),'','','',''))
+        db.execute('INSERT INTO audio_sources (id,kind,location) VALUES (?, ?, ?)',(identifier,'local','/test/audio-'+str(identifier)))
+        for n, difficulty in enumerate(['Easy','Hard'] if identifier == 1 else ['Normal']):
+            db.execute('INSERT INTO beatmaps (id,beatmap_set_id,hash,difficulty_name,search_difficulty_name,metadata_hash,audio_source_id) VALUES (?,?,?,?,?,?,?)',(identifier*10+n,1 if identifier == 3 else identifier,'test-'+str(identifier)+'-'+difficulty,difficulty,difficulty.lower(),str(identifier),identifier))
+    db.execute('INSERT INTO tags (id,name) VALUES (1,?)',('xi',))
+    db.execute('INSERT INTO beatmap_set_tags (beatmap_set_id,tag_id) VALUES (2,1)')
+"]).current_dir(directory.path()).output().expect("seed disposable search fixture");
+    assert!(
+        seeded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&seeded.stderr)
+    );
+    assert_probe(&run(
+        &[],
+        "offscreen",
+        directory.path(),
+        &server,
+        "search-real",
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs cargo build -p osu-radio-server --locked (SQLite)"]
 fn real_backend_playlists_use_a_disposable_database() {
     let directory = tempfile::tempdir().expect("isolated playlist backend directory");
     let server = Path::new(env!("CARGO_BIN_EXE_osu-radio-qt")).with_file_name("osu-radio-server");

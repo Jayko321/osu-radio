@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use radio_core::{
     OsuKind,
     import_types::{
-        BeatmapMetadata, ImportedBeatmap, ImportedBeatmapSet, ImportedCollection, RealmFile,
-        RealmNamedFileUsage, RealmUser,
+        BeatmapMetadata, BeatmapStatus, ImportedBeatmap, ImportedBeatmapSet, ImportedCollection,
+        RealmFile, RealmNamedFileUsage, RealmUser,
     },
 };
 use serde::Deserialize;
@@ -21,6 +21,8 @@ struct LazerBeatmapSetRecord {
     source: LazerSource,
     online_id: Option<i32>,
     hash: Option<String>,
+    ranked_at_ms: Option<i64>,
+    submitted_at_ms: Option<i64>,
     #[serde(default)]
     files: Vec<LazerRealmNamedFileUsage>,
     beatmaps: Vec<LazerBeatmapRecord>,
@@ -29,6 +31,8 @@ struct LazerBeatmapSetRecord {
 #[derive(Debug, Deserialize)]
 struct LazerBeatmapRecord {
     osu_last_played_at_ms: Option<i64>,
+    stars: Option<f64>,
+    status: Option<i32>,
     md5_hash: Option<String>,
     difficulty_name: Option<String>,
     bpm: Option<f64>,
@@ -138,6 +142,8 @@ impl From<LazerBeatmapSetRecord> for ImportedBeatmapSet {
             source,
             online_id,
             hash,
+            ranked_at_ms,
+            submitted_at_ms,
             files,
             beatmaps,
         } = record;
@@ -148,16 +154,31 @@ impl From<LazerBeatmapSetRecord> for ImportedBeatmapSet {
             },
             online_id,
             hash,
+            ranked_at_ms,
+            submitted_at_ms,
             files: files.into_iter().map(Into::into).collect(),
             beatmaps: beatmaps.into_iter().map(Into::into).collect(),
         }
     }
 }
 
+#[allow(clippy::float_cmp)] // -1 is the exact source sentinel.
 impl From<LazerBeatmapRecord> for ImportedBeatmap {
     fn from(record: LazerBeatmapRecord) -> Self {
         Self {
             osu_last_played_at_ms: record.osu_last_played_at_ms,
+            stars: record.stars.filter(|&stars| stars != -1.0),
+            status: match record.status {
+                Some(-4) => Some(BeatmapStatus::LocallyModified),
+                Some(-2) => Some(BeatmapStatus::Graveyard),
+                Some(-1) => Some(BeatmapStatus::Wip),
+                Some(0) => Some(BeatmapStatus::Pending),
+                Some(1) => Some(BeatmapStatus::Ranked),
+                Some(2) => Some(BeatmapStatus::Approved),
+                Some(3) => Some(BeatmapStatus::Qualified),
+                Some(4) => Some(BeatmapStatus::Loved),
+                _ => None,
+            },
             difficulty_name: record.difficulty_name,
             md5_hash: record.md5_hash,
             bpm: record.bpm,

@@ -431,3 +431,212 @@ fn database_uses_isolated_dotenv_and_reports_configuration_failures() {
     fs::write(fixture.root.join(".env"), [0xff]).unwrap();
     failure(&fixture.run(&["database"]), "Failed to load .env");
 }
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn store_persists_audio_duration_without_changing_sources() {
+    let fixture = Fixture::new();
+    let root = fixture.install("osu", &[("set-a", "Easy"), ("set-a", "Hard")]);
+    let marker = root.join("osu!.db");
+    let before = fs::read(&marker).unwrap();
+    let path = root.join("Songs/set-a/audio.mp3");
+    let audio = include_bytes!("../../osu-radio-server/tests/fixtures/tone.wav");
+    fs::write(&path, audio).unwrap();
+    json(&fixture.run(&["store", "--marker", "osu/osu!.db", "--json"]));
+    let services =
+        radio_services::Services::connect(fixture.root.join("library.sqlite").to_str().unwrap())
+            .await
+            .unwrap();
+    let sets = services
+        .beatmap_sets()
+        .all_with_audio_sources()
+        .await
+        .unwrap();
+    assert_eq!(sets[0].audio_sources.len(), 1);
+    assert!((200..=350).contains(&sets[0].audio_sources[0].duration_ms.unwrap()));
+    assert_eq!(fs::read(marker).unwrap(), before);
+    assert_eq!(fs::read(path).unwrap(), audio);
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+async fn search_length_uses_full_audio_instead_of_stable_map_duration() {
+    let fixture = Fixture::new();
+    let root = fixture.install_search_fixture("osu");
+    let path = root.join("Songs/set-a/audio.mp3");
+    let mut wav = Vec::new();
+    wav.extend(b"RIFF");
+    wav.extend(64_036_u32.to_le_bytes());
+    wav.extend(b"WAVEfmt ");
+    wav.extend(16_u32.to_le_bytes());
+    wav.extend(1_u16.to_le_bytes());
+    wav.extend(1_u16.to_le_bytes());
+    wav.extend(8_000_u32.to_le_bytes());
+    wav.extend(16_000_u32.to_le_bytes());
+    wav.extend(2_u16.to_le_bytes());
+    wav.extend(16_u16.to_le_bytes());
+    wav.extend(b"data");
+    wav.extend(64_000_u32.to_le_bytes());
+    wav.extend(vec![0; 64_000]);
+    fs::write(&path, &wav).unwrap();
+    let marker = root.join("osu!.db");
+    let imported = json(&fixture.run(&["store", "--marker", marker.to_str().unwrap(), "--json"]));
+    let services =
+        radio_services::Services::connect(fixture.root.join("library.sqlite").to_str().unwrap())
+            .await
+            .unwrap();
+    assert_eq!(
+        services
+            .beatmap_sets()
+            .search_tracks("length>3s")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        services
+            .beatmap_sets()
+            .search_tracks("length<3s")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        services
+            .beatmap_sets()
+            .search_tracks("stars=5.25 status=ranked length>3s")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        services
+            .beatmap_sets()
+            .search_tracks("stars=9")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        services
+            .beatmap_sets()
+            .search_tracks("ranked!=2024")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(fs::read(&path).unwrap(), wav);
+    fs::remove_file(&path).unwrap();
+    let folder_id = i32::try_from(imported["installation_id"].as_i64().unwrap()).unwrap();
+    services
+        .osu_installations()
+        .reimport_folder(folder_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        services
+            .beatmap_sets()
+            .search_tracks("length>3s")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        services
+            .beatmap_sets()
+            .search_tracks("stars=5.25 status=ranked")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[cfg(feature = "sqlite")]
+#[tokio::test]
+#[ignore = "requires dotnet and OSU_LAZER_REALM_PARSER_PATH pointing to the real helper"]
+async fn real_lazer_imported_fields_reach_search() {
+    let fixture = Fixture::new();
+    let project_source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tools/osu-lazer-realm-parser/fixture-generator");
+    let project = fixture.root.join("generator-project");
+    fs::create_dir(&project).unwrap();
+    for name in ["fixture-generator.csproj", "Program.cs"] {
+        fs::copy(project_source.join(name), project.join(name)).unwrap();
+    }
+    let output = fixture.root.join("generator");
+    let build = std::process::Command::new("dotnet")
+        .args([
+            "build",
+            "--configuration",
+            "Release",
+            "--nologo",
+            "--output",
+        ])
+        .arg(&output)
+        .arg(project.join("fixture-generator.csproj"))
+        .arg("--property:NuGetAudit=false")
+        .output()
+        .unwrap();
+    assert!(
+        build.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let root = fixture.root.join("lazer");
+    let generate = std::process::Command::new("dotnet")
+        .arg(output.join("fixture-generator.dll"))
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        generate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generate.stderr)
+    );
+    fs::copy(root.join("metadata.realm"), root.join("client.realm")).unwrap();
+    let marker_before = fs::read(root.join("client.realm")).unwrap();
+    let path = root.join("files/a/ab/abcdef1234");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, b"unavailable duration fixture").unwrap();
+    let helper = std::env::var_os("OSU_LAZER_REALM_PARSER_PATH").expect("real helper path");
+    let result = fixture
+        .command()
+        .args(["store", "--marker", "lazer/client.realm", "--json"])
+        .env("OSU_LAZER_REALM_PARSER_PATH", helper)
+        .output()
+        .unwrap();
+    json(&result);
+    let services =
+        radio_services::Services::connect(fixture.root.join("library.sqlite").to_str().unwrap())
+            .await
+            .unwrap();
+    for query in [
+        "stars=5.25 status=loved ranked=2020 submitted=2017",
+        "played=true lastplayed>1d",
+    ] {
+        assert_eq!(
+            services
+                .beatmap_sets()
+                .search_tracks(query)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "{query}"
+        );
+    }
+    assert!(
+        services
+            .beatmap_sets()
+            .search_tracks("status=ranked")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(fs::read(root.join("client.realm")).unwrap(), marker_before);
+}

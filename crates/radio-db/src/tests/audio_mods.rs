@@ -199,7 +199,7 @@ pub(super) async fn contracts(database: &Database, url: &str) {
     );
     constraints(database, &source).await;
     // Downgrading past v15 removes only mods (and the newer queue modes) and re-upgrades without losing models.
-    Migrator::down(&database.connection, Some(4)).await.unwrap();
+    Migrator::down(&database.connection, Some(5)).await.unwrap();
     database.migrate().await.unwrap();
     assert_eq!(database.beatmaps().get(91).await.unwrap(), map);
     assert_eq!(database.playlists().get(91).await.unwrap(), playlist);

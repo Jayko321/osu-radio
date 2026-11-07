@@ -425,3 +425,93 @@ async fn reimport_read_boundary_preserves_parallel_settings_and_never_recreates_
         }
     }
 }
+
+#[test]
+fn reimport_waiting_for_probe_preserves_edits_and_deletion() {
+    use radio_core::import_types::ImportedSnapshot;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        for delete in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let marker_path = dir.path().join("client.realm");
+            std::fs::write(&marker_path, b"source").unwrap();
+            let audio = dir.path().join("audio");
+            std::fs::write(
+                &audio,
+                include_bytes!("../../../../apps/osu-radio-server/tests/fixtures/tone.wav"),
+            )
+            .unwrap();
+            let marker = OsuMarker {
+                kind: OsuKind::Lazer,
+                root_path: dir.path().to_path_buf(),
+                marker_path,
+            };
+            let services = Services::connect(":memory:").await.unwrap();
+            services.migrate().await.unwrap();
+            let folder = services
+                .osu_installations()
+                .register_imported_snapshot(&marker, &ImportedSnapshot::default())
+                .await
+                .unwrap()
+                .into_installation();
+            let imported = ImportedSnapshot {
+                beatmap_sets: snapshot("Probe", audio.to_str().unwrap()),
+                collections: vec![],
+            };
+            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let blocker = tokio::task::spawn_blocking(move || {
+                ready_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            });
+            ready_rx.await.unwrap();
+            let other = services.clone();
+            let task = tokio::spawn(async move {
+                other
+                    .osu_installations()
+                    .reimport_snapshot(folder.id, &marker, &imported)
+                    .await
+                    .unwrap()
+            });
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            assert!(!task.is_finished());
+            if delete {
+                assert!(
+                    services
+                        .osu_installations()
+                        .delete(folder.id)
+                        .await
+                        .unwrap()
+                );
+            } else {
+                services
+                    .osu_installations()
+                    .update(
+                        folder.id,
+                        FolderChanges {
+                            label: Some(Some("edited".into())),
+                            enabled: Some(false),
+                        },
+                    )
+                    .await
+                    .unwrap();
+            }
+            release_tx.send(()).unwrap();
+            blocker.await.unwrap();
+            let result = task.await.unwrap();
+            if delete {
+                assert!(result.is_none());
+            } else {
+                let folder = result.unwrap();
+                assert_eq!(folder.label.as_deref(), Some("edited"));
+                assert!(!folder.enabled);
+                assert!(folder.last_scanned_at.is_some());
+            }
+        }
+    });
+}
