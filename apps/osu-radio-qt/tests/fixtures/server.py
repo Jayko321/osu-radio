@@ -116,8 +116,7 @@ def library(ids):
         for track in tracks:
             identifier = track["audio_source_id"]
             track["artist"] = {7: "Zulu", 42: "Alpha", 103: "Beta"}[identifier]
-            track["last_played_at_ms"] = {7: None, 42: 4000, 103: 9000}[identifier]
-            track["difficulties"][0]["osu_last_played_at_ms"] = {7: 3000, 42: 1000, 103: None}[identifier]
+            track["last_played_at_ms"] = {7: 3000, 42: 1000, 103: None}[identifier]
     if case == "visual-queue":
         titles = {7: "Miku", 42: "Guitar to Kodoku to Aoi Hoshi", 103: "Bling-Bang-Bang-Born (TV Size)"}
         artists = {7: "Anamanaguchi", 42: "kessoku band", 103: "Creepy Nuts"}

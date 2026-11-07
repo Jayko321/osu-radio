@@ -219,7 +219,7 @@ continues to use its own [API DTOs](../../crates/osu-radio-client/src/api.rs).
 | `POST /api/playback/commands` | Tagged `{command:...}`: `play` with optional `audio_source_id`, `pause`, `stop`, `next`, `previous`, `started`, `finished` or `failed`. Start/completion/error commands require `playback_token`; internal device pauses include it too. Stale callbacks return the current assignment without transitioning. |
 | `GET /api/playlists` | ID-ordered summaries `{id, name, item_count, cover_beatmap_id, custom_cover_revision}`. Counts include unavailable entries; automatic artwork comes only from the first inserted item. |
 | `POST /api/playlists` | `{name}` creates a trimmed nonempty name; 201 with a complete summary, 400 for blank names. Equal names are allowed. |
-| `GET /api/playlists/{id}` | `{id, name, items}`; each item includes stable source key, saved ordinary/Unicode title and artist labels, item ID, nullable current library/audio/cover IDs, osu!radio `last_played_at_ms` and the matched difficulty's `osu_last_played_at_ms`. 404 for an absent playlist. |
+| `GET /api/playlists/{id}` | `{id, name, items}`; each item includes stable source key, saved ordinary/Unicode title and artist labels, item ID, nullable current library/audio/cover IDs and `last_played_at_ms`. 404 for an absent playlist. |
 | `PATCH /api/playlists/{id}` | `{name}` renames; 200 with a complete summary, 400 for blank names, 404 if absent. |
 | `DELETE /api/playlists/{id}` | 204 and membership cascade; 404 if absent. Does not change the queue. |
 | `POST /api/playlists/{id}/items` | `{beatmap_ids:[...]}` atomically adds current difficulties and returns the full playlist. Repeated source keys are idempotent. Missing beatmap/hash is 400 with no partial additions. |
@@ -439,11 +439,8 @@ all queue/playback endpoints. [Route tests](../../apps/osu-radio-server/src/rout
 cover wire transitions, atomic validation, metadata/duration, repeated callbacks,
 initial/reconnected snapshots, duplicate-ID tokens, notification ordering,
 heartbeat detection and subscriber cancellation. The
-[shared duration tests](../../crates/radio-services/src/duration.rs) additionally
-check extensionless audio formats and rejection of FIFO sources before opening them.
-HTTP duration and playback probe the current file via this same service function;
-import and Refresh separately store a prepared value for future search. Missing or
-invalid files yield unknown duration; unexpected blocking-task failures remain errors.
+[media tests](../../apps/osu-radio-server/src/routes/media.rs) additionally check
+that duration probing rejects FIFO sources before opening them.
 
 [T06 transport tests](../../apps/osu-radio-server/src/routes/queue_transport_tests.rs)
 exercise actual ApiClient/server roundtrips, atomic 404/extraction failures, exact
@@ -499,42 +496,23 @@ and [client folder workflow](frontend.md#qt-frontend).
 
 ### Library search
 
-The optional `q` searches case-insensitive literal words across artist/title
-(including Unicode variants), mapper, source, difficulty and individual tags.
-Words and conditions combine with AND across references of the same audio.
-`artist`, `title`, `creator`/`author`/`mapper`, `diff`, `source` and `tag`
-accept `=` or `:` for inclusion and `!=` or `!:` for exclusion. Unquoted
-values match substrings; quoted values match a phrase with .NET word boundaries,
-and a trailing `!` after the closing quote requires the complete field. A single
-positive free integer also matches online set ID. Unknown or incomplete syntax
-remains literal text. Query and stored text use Rust `to_lowercase()`; there is no
-transliteration, accent removal, wildcard or user-regex interpretation.
-
-Numeric `bpm`, `star`/`stars`/`sr` and `length` accept `=`, `!=`, `<`, `<=`,
-`>`, `>=` and their `:` aliases. Constraints on one field apply to one known
-value; different fields may match different difficulties of the same audio.
-BPM equality includes ±0.5, while ordered comparisons have no tolerance. Stars
-are floored to hundredths. Length is the imported full audio duration, accepts
-seconds, `m:ss`, `h:mm:ss`, or `ms`/`s`/`m`/`h`, and does not change with
-playback speed. Unknown values do not match, including for `!=`.
-
-`status` accepts ranked, approved, qualified, loved, pending, wip, graveyard,
-locallymodified and none, case-insensitively; comma-separated names are OR within
-one condition. Negative status excludes audio when any difficulty matches.
-`ranked` and `submitted`/`created` compare UTC year, month or day periods using
-`-`, `/` or `.`; equality covers the period and `>` starts at the next period.
-Repeated conditions for a date field apply to one known set date; unknown dates
-never match, including `!=`. `played` accepts true/false, yes/no and 1/0;
-`lastplayed` compares the age of the latest imported osu! play date among all
-difficulties, using s/m/h/d/w or days by default. Unknown play dates fail numeric
-age comparisons. osu!radio listening history does not affect these filters.
+The optional `q` parameter is split with Rust `split_whitespace()`. Every word must
+match a literal substring of a track's tags, artist, title or difficulty; words
+may match different fields or different difficulties sharing that audio ID.
+Artist/title Unicode variants are included. Query and metadata use Unicode
+`to_lowercase()`, matching the stored normalized tags; this is not full Unicode
+case folding or accent normalization. Special characters have no SQL wildcard or
+regular-expression meaning. Missing/whitespace-only queries preserve the complete
+library response, including empty sets, and existing order is retained without ranking.
 
 Both endpoints use the same service search and read snapshot (SQLite transaction,
-PostgreSQL repeatable-read/read-only). SQL selects literal candidates; phrase
-boundaries are checked on streamed candidate fields in Rust. The service combines
-matching audio IDs and loads complete results inside the same transaction. No
-matches skip full loading; blank queries keep the streamed aggregate path. See
-[database](database.md#search-reads) for normalization and migration.
+PostgreSQL repeatable-read/read-only). SQL matches each word against derived
+Rust-normalized text columns and normalized tags, returning only audio IDs.
+The service intersects those IDs across words, then loads complete results for
+matched audio in sorted, disjoint batches of at most 500 parameters inside the
+same transaction. It does not load the entire library's text into Rust for each
+search. No matches skip full loading; blank queries keep the streamed aggregate
+path. See [database](database.md#search-reads) for normalization and migration.
 All audio references participate globally by ID. Tags apply to all audio in their
 set; matching a difficulty does not include unrelated audio from the same set.
 The response retains only matched audio and all their metadata references, keeping
@@ -547,15 +525,13 @@ The compact [tracks route](../../apps/osu-radio-server/src/routes/tracks.rs) ret
 difficulties}`. Text and cover ID are nullable. Representative text comes from the
 lowest beatmap ID, even if null; cover uses the lowest ID with a stored reference.
 Each difficulty is `{beatmap_id, beatmap_set_id, beatmap_set_online_id,
-difficulty_name, set_has_multiple_audio_sources, osu_last_played_at_ms}` (online ID and osu! play date nullable; online ID is used for the Discord cover), ordered by beatmap ID; duplicate names with
+difficulty_name, set_has_multiple_audio_sources}` (online ID nullable, used for the Discord cover), ordered by beatmap ID; duplicate names with
 different IDs remain. The client retains every difficulty in `Track`, choosing
 ordinary/Unicode/unknown text and unique subtitle names only for multi-audio sets.
 Server and client DTOs are independent. Both router variants register this route.
 [HTTP equivalence tests](../../apps/osu-radio-server/src/routes/tracks.rs) compare
 complete client tracks against the legacy endpoint, including null text, cover
-selection, split sets, shared audio, repeated names and an extended encoded query.
-[Client HTTP contracts](../../crates/osu-radio-client/src/api/contract_tests.rs)
-check the exact encoded query for both endpoints.
+selection, split sets, shared audio, repeated names and encoded query symbols.
 
 Matching takes O(K × S) for K query words and S searchable text/relationships.
 Database reads, sorting, response serialization and transport are separate costs;

@@ -14,7 +14,6 @@ pub use beatmap_set::{
     BeatmapDetails, BeatmapSet, BeatmapSetWithAudio, SearchDifficulty, SearchMetadata,
 };
 pub use osu_installation::{OsuInstallation, OsuInstallationChanges};
-pub use radio_core::import_types::BeatmapStatus;
 pub use user_data::{AudioSettings, USER_DATA_ID, UserData};
 mod tag;
 pub use tag::{SetTag, Tag};

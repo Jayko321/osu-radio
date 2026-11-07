@@ -20,7 +20,6 @@ pub struct MockTrack {
     pub subtitle: String,
     pub duration_seconds: u32,
     pub last_played_at_ms: Option<i64>,
-    pub osu_last_played_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -150,15 +149,9 @@ impl Default for MockState {
                     artist: artist.into(),
                     subtitle: subtitle.into(),
                     duration_seconds,
-                    osu_last_played_at_ms: match id {
+                    last_played_at_ms: match id {
                         1 | 4 => Some(2_000),
                         3 => Some(3_000),
-                        _ => None,
-                    },
-                    last_played_at_ms: match id {
-                        1 => Some(4_000),
-                        2 => Some(3_000),
-                        3 => Some(1_000),
                         _ => None,
                     },
                 },
@@ -279,11 +272,7 @@ impl MockState {
             self.track_sort.key(
                 &track.title,
                 &track.artist,
-                if self.track_sort == TrackSort::RecentlyPlayed {
-                    track.osu_last_played_at_ms
-                } else {
-                    track.last_played_at_ms
-                },
+                track.last_played_at_ms,
                 i64::from(track.id),
             )
         });
@@ -519,7 +508,6 @@ mod tests {
         for (sort, expected) in [
             (TrackSort::ArtistAsc, vec![4, 3, 2, 1]),
             (TrackSort::RecentlyPlayed, vec![3, 4, 1, 2]),
-            (TrackSort::RecentlyListened, vec![1, 2, 3, 4]),
             (TrackSort::TitleAsc, vec![2, 4, 1, 3]),
         ] {
             assert!(state.apply(Action::SetTrackSort(sort)));

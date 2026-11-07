@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use radio_core::import_types::ImportedBeatmap;
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 
@@ -17,11 +17,8 @@ impl BeatmapRepository<'_> {
         audio_source_id: Option<i32>,
         background_path: Option<String>,
     ) -> Result<Beatmap> {
-        into_model(
+        Ok(into_model(
             beatmap::ActiveModel {
-                osu_last_played_at_ms: Set(imported.osu_last_played_at_ms),
-                stars: Set(imported.stars),
-                status: Set(imported.status.map(|status| status.as_str().to_owned())),
                 difficulty_name: Set(imported.difficulty_name.clone()),
                 search_difficulty_name: Set(imported
                     .difficulty_name
@@ -39,42 +36,31 @@ impl BeatmapRepository<'_> {
             }
             .insert(&self.connection)
             .await?,
-        )
+        ))
     }
 
     pub async fn get(&self, id: i32) -> Result<Option<Beatmap>> {
-        beatmap::Entity::find_by_id(id)
+        Ok(beatmap::Entity::find_by_id(id)
             .one(&self.connection)
             .await?
-            .map(into_model)
-            .transpose()
+            .map(into_model))
     }
 
     pub async fn for_set(&self, set_id: i32) -> Result<Vec<Beatmap>> {
-        beatmap::Entity::find()
+        Ok(beatmap::Entity::find()
             .filter(beatmap::Column::BeatmapSetId.eq(set_id))
             .order_by_asc(beatmap::Column::Id)
             .all(&self.connection)
             .await?
             .into_iter()
             .map(into_model)
-            .collect()
+            .collect())
     }
 }
 
-fn into_model(value: beatmap::Model) -> Result<Beatmap> {
-    Ok(Beatmap {
+fn into_model(value: beatmap::Model) -> Beatmap {
+    Beatmap {
         id: value.id,
-        osu_last_played_at_ms: value.osu_last_played_at_ms,
-        stars: value.stars,
-        status: value
-            .status
-            .map(|status| {
-                status
-                    .parse()
-                    .map_err(|_| anyhow!("unknown beatmap status `{status}`"))
-            })
-            .transpose()?,
         difficulty_name: value.difficulty_name,
         bpm: value.bpm,
         hash: value.hash,
@@ -83,5 +69,5 @@ fn into_model(value: beatmap::Model) -> Result<Beatmap> {
         metadata_hash: value.metadata_hash,
         audio_source_id: value.audio_source_id,
         background_path: value.background_path,
-    })
+    }
 }

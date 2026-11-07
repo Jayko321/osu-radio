@@ -17,7 +17,6 @@ pub struct LibraryTrack {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackDifficulty {
-    pub osu_last_played_at_ms: Option<i64>,
     pub beatmap_id: i32,
     pub beatmap_set_id: i32,
     pub beatmap_set_online_id: Option<i32>,
@@ -65,7 +64,6 @@ pub(crate) fn from_sets(sets: Vec<BeatmapSetWithAudio>) -> Vec<LibraryTrack> {
                         Some(track.cover_beatmap_id.map_or(map.id, |id| id.min(map.id)));
                 }
                 track.difficulties.push(TrackDifficulty {
-                    osu_last_played_at_ms: map.osu_last_played_at_ms,
                     beatmap_id: map.id,
                     beatmap_set_id: set.beatmap_set.id,
                     beatmap_set_online_id: set.beatmap_set.online_id,
@@ -92,7 +90,6 @@ mod tests {
 
     fn detail(id: i32, audio: i32, title: &str, cover: bool) -> BeatmapDetails {
         BeatmapDetails {
-            osu_last_played_at_ms: None,
             id,
             audio_source_id: Some(audio),
             difficulty_name: Some(format!("Difficulty {id}")),
@@ -108,15 +105,12 @@ mod tests {
     fn merges_global_audio_with_first_seen_order_lowest_id_labels_and_independent_cover() {
         assert!(from_sets(vec![]).is_empty());
         let audio = |id| AudioSource {
-            duration_ms: None,
             id,
             s_type: SourceType::Local(format!("/audio/{id}")),
         };
         let sets = vec![
             BeatmapSetWithAudio {
                 beatmap_set: BeatmapSet {
-                    ranked_at_ms: None,
-                    submitted_at_ms: None,
                     id: 100,
                     installation_id: 7,
                     online_id: Some(1000),
@@ -132,8 +126,6 @@ mod tests {
             },
             BeatmapSetWithAudio {
                 beatmap_set: BeatmapSet {
-                    ranked_at_ms: None,
-                    submitted_at_ms: None,
                     id: 200,
                     installation_id: 8,
                     online_id: None,
@@ -159,7 +151,6 @@ mod tests {
                     cover_beatmap_id: Some(23),
                     difficulties: vec![
                         TrackDifficulty {
-                            osu_last_played_at_ms: None,
                             beatmap_id: 1,
                             beatmap_set_id: 200,
                             beatmap_set_online_id: None,
@@ -167,7 +158,6 @@ mod tests {
                             set_has_multiple_audio_sources: false
                         },
                         TrackDifficulty {
-                            osu_last_played_at_ms: None,
                             beatmap_id: 21,
                             beatmap_set_id: 100,
                             beatmap_set_online_id: Some(1000),
@@ -175,7 +165,6 @@ mod tests {
                             set_has_multiple_audio_sources: true
                         },
                         TrackDifficulty {
-                            osu_last_played_at_ms: None,
                             beatmap_id: 23,
                             beatmap_set_id: 100,
                             beatmap_set_online_id: Some(1000),
@@ -195,7 +184,6 @@ mod tests {
                     artist_unicode: Some("演奏者 Other".into()),
                     cover_beatmap_id: None,
                     difficulties: vec![TrackDifficulty {
-                        osu_last_played_at_ms: None,
                         beatmap_id: 31,
                         beatmap_set_id: 100,
                         beatmap_set_online_id: Some(1000),

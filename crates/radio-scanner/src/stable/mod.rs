@@ -121,8 +121,6 @@ fn import(db_path: &Path) -> Result<ImportedSnapshot> {
             let index = groups.len();
             groups.push(Group {
                 set: ImportedBeatmapSet {
-                    ranked_at_ms: None,
-                    submitted_at_ms: None,
                     source: OsuKind::Stable,
                     online_id: record.online_id,
                     hash: None,

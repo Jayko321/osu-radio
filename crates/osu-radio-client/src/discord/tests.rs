@@ -565,7 +565,6 @@ fn cover_comes_from_first_difficulty_with_a_public_set_id() {
     let presence = |track: &Track| Presence::from_playback(Some(track), &playback).unwrap();
     assert_eq!(presence(&track).cover_url(), None);
     let difficulty = |online| crate::models::TrackDifficulty {
-        osu_last_played_at_ms: None,
         beatmap_id: 1,
         beatmap_set_id: 9,
         beatmap_set_online_id: online,

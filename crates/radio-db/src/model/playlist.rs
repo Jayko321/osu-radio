@@ -9,7 +9,6 @@ pub struct PlaylistSummary {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlaylistItem {
-    pub osu_last_played_at_ms: Option<i64>,
     pub last_played_at_ms: Option<i64>,
     pub volume_percent: Option<u8>,
     pub mods: Option<crate::model::AudioModsProfile>,
@@ -39,7 +38,6 @@ pub struct Playlist {
 /// Library projection used for atomic additions and batched stable-key resolution.
 #[derive(Debug, Clone)]
 pub struct PlaylistBeatmap {
-    pub osu_last_played_at_ms: Option<i64>,
     pub beatmap_id: i32,
     pub beatmap_set_id: i32,
     pub source_kind: String,

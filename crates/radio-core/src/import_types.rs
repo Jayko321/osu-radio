@@ -20,8 +20,6 @@ pub struct ImportedBeatmapSet {
     pub source: OsuKind,
     pub online_id: Option<i32>,
     pub hash: Option<String>,
-    pub ranked_at_ms: Option<i64>,
-    pub submitted_at_ms: Option<i64>,
     pub files: Vec<RealmNamedFileUsage>,
     pub beatmaps: Vec<ImportedBeatmap>,
 }
@@ -48,60 +46,11 @@ impl ImportedBeatmapSet {
 
 #[derive(Debug, Clone)]
 pub struct ImportedBeatmap {
-    pub osu_last_played_at_ms: Option<i64>,
-    pub stars: Option<f64>,
-    pub status: Option<BeatmapStatus>,
     pub md5_hash: Option<String>,
     pub difficulty_name: Option<String>,
     pub bpm: Option<f64>,
     pub hash: Option<String>,
     pub metadata: Option<BeatmapMetadata>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BeatmapStatus {
-    Ranked,
-    Approved,
-    Qualified,
-    Loved,
-    Pending,
-    Wip,
-    Graveyard,
-    LocallyModified,
-}
-
-impl BeatmapStatus {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Ranked => "ranked",
-            Self::Approved => "approved",
-            Self::Qualified => "qualified",
-            Self::Loved => "loved",
-            Self::Pending => "pending",
-            Self::Wip => "wip",
-            Self::Graveyard => "graveyard",
-            Self::LocallyModified => "locallymodified",
-        }
-    }
-}
-
-impl std::str::FromStr for BeatmapStatus {
-    type Err = String;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value {
-            "ranked" => Ok(Self::Ranked),
-            "approved" => Ok(Self::Approved),
-            "qualified" => Ok(Self::Qualified),
-            "loved" => Ok(Self::Loved),
-            "pending" => Ok(Self::Pending),
-            "wip" => Ok(Self::Wip),
-            "graveyard" => Ok(Self::Graveyard),
-            "locallymodified" => Ok(Self::LocallyModified),
-            _ => Err(value.to_owned()),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -142,28 +91,8 @@ pub struct RealmUser {
 mod tests {
     use super::*;
 
-    #[test]
-    fn statuses_round_trip_as_normalized_names() {
-        for status in [
-            BeatmapStatus::Ranked,
-            BeatmapStatus::Approved,
-            BeatmapStatus::Qualified,
-            BeatmapStatus::Loved,
-            BeatmapStatus::Pending,
-            BeatmapStatus::Wip,
-            BeatmapStatus::Graveyard,
-            BeatmapStatus::LocallyModified,
-        ] {
-            assert_eq!(status.as_str().parse(), Ok(status));
-        }
-        assert!("none".parse::<BeatmapStatus>().is_err());
-    }
-
     fn beatmap() -> ImportedBeatmap {
         ImportedBeatmap {
-            stars: None,
-            status: None,
-            osu_last_played_at_ms: None,
             md5_hash: None,
             difficulty_name: None,
             bpm: None,
@@ -196,8 +125,6 @@ mod tests {
 
     fn set(files: Vec<RealmNamedFileUsage>) -> ImportedBeatmapSet {
         ImportedBeatmapSet {
-            ranked_at_ms: None,
-            submitted_at_ms: None,
             source: OsuKind::Lazer,
             online_id: None,
             hash: None,

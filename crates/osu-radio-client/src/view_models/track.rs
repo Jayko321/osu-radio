@@ -149,7 +149,6 @@ pub fn library_tracks(sets: &[BeatmapSet]) -> Vec<Track> {
                     .into_iter()
                     .map(
                         |(map, set_id, online_id, split)| crate::models::TrackDifficulty {
-                            osu_last_played_at_ms: None,
                             beatmap_id: map.id,
                             beatmap_set_id: set_id,
                             beatmap_set_online_id: online_id,

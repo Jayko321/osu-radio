@@ -43,37 +43,9 @@ impl Fixture {
     }
 
     pub fn install(&self, name: &str, entries: &[(&str, &str)]) -> PathBuf {
-        self.install_with_duration(name, entries, 20_000)
-    }
-
-    pub fn install_with_duration(
-        &self,
-        name: &str,
-        entries: &[(&str, &str)],
-        duration_ms: i32,
-    ) -> PathBuf {
-        self.install_stable(name, entries, duration_ms, false)
-    }
-
-    #[cfg(feature = "sqlite")]
-    pub fn install_search_fixture(&self, name: &str) -> PathBuf {
-        self.install_stable(name, &[("set-a", "Easy")], 2_000, true)
-    }
-
-    fn install_stable(
-        &self,
-        name: &str,
-        entries: &[(&str, &str)],
-        duration_ms: i32,
-        ratings: bool,
-    ) -> PathBuf {
         let root = self.root.join(name);
         fs::create_dir_all(&root).unwrap();
-        fs::write(
-            root.join("osu!.db"),
-            stable_database(entries, duration_ms, ratings),
-        )
-        .unwrap();
+        fs::write(root.join("osu!.db"), stable_database(entries)).unwrap();
         for (folder, _) in entries {
             let directory = root.join("Songs").join(folder);
             fs::create_dir_all(&directory).unwrap();
@@ -114,7 +86,7 @@ pub fn failure(output: &Output, message: &str) {
 }
 
 // The single current-layout fixture mirrors stable/tests.rs; this is not a general osu! writer.
-fn stable_database(entries: &[(&str, &str)], duration_ms: i32, ratings: bool) -> Vec<u8> {
+fn stable_database(entries: &[(&str, &str)]) -> Vec<u8> {
     fn integer(bytes: &mut Vec<u8>, value: i32) {
         bytes.extend(value.to_le_bytes());
     }
@@ -151,20 +123,9 @@ fn stable_database(entries: &[(&str, &str)], duration_ms: i32, ratings: bool) ->
             bytes.extend(5_f32.to_le_bytes());
         }
         bytes.extend(1.4_f64.to_le_bytes());
-        if ratings {
-            integer(&mut bytes, 2);
-            for (mods, stars) in [(64_i32, 9.0_f64), (0, 5.25)] {
-                bytes.push(0x08);
-                integer(&mut bytes, mods);
-                bytes.push(0x0d);
-                bytes.extend(stars.to_le_bytes());
-            }
-            bytes.extend([0; 12]);
-        } else {
-            bytes.extend([0; 16]); // Four empty star-rating arrays.
-        }
+        bytes.extend([0; 16]); // Four empty star-rating arrays.
         integer(&mut bytes, 15);
-        integer(&mut bytes, duration_ms);
+        integer(&mut bytes, 20_000);
         integer(&mut bytes, 1234);
         integer(&mut bytes, 1);
         bytes.extend(500_f64.to_le_bytes());

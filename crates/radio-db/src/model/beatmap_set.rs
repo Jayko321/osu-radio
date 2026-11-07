@@ -3,14 +3,11 @@ pub struct BeatmapSet {
     pub id: i32,
     pub online_id: Option<i32>,
     pub hash: Option<String>,
-    pub ranked_at_ms: Option<i64>,
-    pub submitted_at_ms: Option<i64>,
     pub installation_id: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BeatmapDetails {
-    pub osu_last_played_at_ms: Option<i64>,
     pub id: i32,
     pub audio_source_id: Option<i32>,
     pub difficulty_name: Option<String>,

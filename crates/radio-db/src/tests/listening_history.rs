@@ -13,9 +13,17 @@ pub(super) async fn migration_contracts(database: &Database, url: &str) {
         .unwrap()
         .into_installation();
     let imported = snapshot("History upgrade", "/history-upgrade/audio");
-    let set = insert_legacy_set(database, installation.id, &imported[0]).await;
+    let set = database
+        .beatmap_sets()
+        .insert(installation.id, &imported[0])
+        .await
+        .unwrap();
     let source = SourceType::Local("{\"Unix\":[255,47,97]}".into());
-    let audio = insert_legacy_audio(database, &source).await;
+    let audio = database
+        .audio_sources()
+        .get_or_insert(&source)
+        .await
+        .unwrap();
     let map = insert_legacy_beatmap(
         database,
         set.id,

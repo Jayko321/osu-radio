@@ -12,7 +12,11 @@ pub(super) async fn migration_contracts(database: &Database) {
         .unwrap()
         .into_installation();
     let imported = snapshot("Original", "/collections-upgrade/audio");
-    let set = insert_legacy_set(database, installation.id, &imported[0]).await;
+    let set = database
+        .beatmap_sets()
+        .insert(installation.id, &imported[0])
+        .await
+        .unwrap();
     let map = insert_legacy_beatmap(database, set.id, &imported[0].beatmaps[0], None, None, None)
         .await
         .unwrap();

@@ -306,26 +306,6 @@ async fn missing_mutation_and_legacy_search_success_contracts_preserve_payloads(
 }
 
 #[tokio::test]
-async fn both_search_endpoints_encode_extended_query_unchanged() {
-    let query = r#"title="曲" artist!=no tag:a+b%_&?# bpm>=180 bpm<181"#;
-    let encoded =
-        "q=title%3D%22%E6%9B%B2%22+artist%21%3Dno+tag%3Aa%2Bb%25_%26%3F%23+bpm%3E%3D180+bpm%3C181";
-    for endpoint in ["beatmap-sets", "tracks"] {
-        let (api, server) = respond(response("200 OK", b"[]")).await;
-        if endpoint == "tracks" {
-            api.search_tracks(query).await.unwrap();
-        } else {
-            api.search_beatmap_sets(query).await.unwrap();
-        }
-        let (request, _) = server.await.unwrap();
-        assert!(
-            request.starts_with(&format!("GET /api/{endpoint}?{encoded} HTTP/1.1\r\n")),
-            "{request}"
-        );
-    }
-}
-
-#[tokio::test]
 async fn status_body_fallback_decode_and_transport_errors_remain_distinct() {
     for (body, expected) in [
         (br#"{"message":"legacy error"}"#.as_slice(), "legacy error"),

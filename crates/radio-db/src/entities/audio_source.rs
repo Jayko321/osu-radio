@@ -7,7 +7,6 @@ pub struct Model {
     pub id: i32,
     pub kind: String,
     pub location: String,
-    pub duration_ms: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

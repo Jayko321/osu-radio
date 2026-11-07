@@ -43,8 +43,7 @@ Item {
             entries: [
                 {index: 0, label: "Title A–Z"},
                 {index: 1, label: "Artist A–Z"},
-                {index: 2, label: "Recently played"},
-                {index: 3, label: "Recently listened"}
+                {index: 2, label: "Recently played"}
             ]
             currentIndex: songsPane.bridge.library.trackSortIndex
             onChosen: index => songsPane.bridge.library.setTrackSort(index)

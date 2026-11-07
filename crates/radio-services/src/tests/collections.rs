@@ -19,9 +19,6 @@ fn imported(title: &str) -> ImportedSnapshot {
     sets[0].beatmaps[0].md5_hash = Some(A.into());
     sets[0].beatmaps[1].md5_hash = Some(B.into());
     sets[0].beatmaps.push(ImportedBeatmap {
-        stars: None,
-        status: None,
-        osu_last_played_at_ms: None,
         md5_hash: Some(C.into()),
         hash: Some(A.into()),
         difficulty_name: Some("Extra".into()),

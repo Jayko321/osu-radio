@@ -523,7 +523,6 @@ async fn first_paused_playlist_assignment_keeps_the_selected_item() {
         name: "Demo".into(),
         items: (1..=2)
             .map(|audio| PlaylistItem {
-                osu_last_played_at_ms: None,
                 id: audio,
                 playlist_id: 7,
                 source_kind: "stable".into(),

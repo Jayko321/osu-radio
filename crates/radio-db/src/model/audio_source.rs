@@ -53,7 +53,6 @@ impl Error for UnknownSourceKind {}
 pub struct AudioSource {
     pub id: i32,
     pub s_type: SourceType,
-    pub duration_ms: Option<i64>,
 }
 
 #[cfg(test)]
